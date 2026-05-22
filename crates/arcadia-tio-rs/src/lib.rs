@@ -414,6 +414,449 @@ pub struct AppendRange {
     pub end: u32,
 }
 
+/// 16-byte universe family/version identifier used by the C ABI.
+pub type UniverseUuid = [u8; 16];
+
+/// Axis identity mode used when creating universe-aware files.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AxisIdentityMode {
+    /// Axis identity is ordinary extent-only shape identity.
+    ExtentOnly,
+    /// Axis identity is universe-aware and can be targeted by explicit universe reads.
+    UniverseAware,
+}
+
+impl AxisIdentityMode {
+    fn to_raw(self) -> sys::ArcadiaTioAxisIdentityMode {
+        match self {
+            Self::ExtentOnly => sys::ARCADIA_TIO_AXIS_IDENTITY_EXTENT_ONLY,
+            Self::UniverseAware => sys::ARCADIA_TIO_AXIS_IDENTITY_UNIVERSE_AWARE,
+        }
+    }
+}
+
+/// Create-time axis identity descriptor.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct AxisIdentityInput {
+    /// Axis index.
+    pub axis: u32,
+    /// Axis identity mode.
+    pub mode: AxisIdentityMode,
+}
+
+impl AxisIdentityInput {
+    /// Creates an extent-only axis identity descriptor.
+    pub fn extent_only(axis: u32) -> Self {
+        Self {
+            axis,
+            mode: AxisIdentityMode::ExtentOnly,
+        }
+    }
+
+    /// Creates a universe-aware axis identity descriptor.
+    pub fn universe_aware(axis: u32) -> Self {
+        Self {
+            axis,
+            mode: AxisIdentityMode::UniverseAware,
+        }
+    }
+}
+
+/// Universe-aware create options.
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct CreateUniverseOptions {
+    /// Axis identity descriptors.
+    pub axis_identities: Vec<AxisIdentityInput>,
+}
+
+impl CreateUniverseOptions {
+    /// Creates universe options from axis identity descriptors.
+    pub fn new(axis_identities: Vec<AxisIdentityInput>) -> Self {
+        Self { axis_identities }
+    }
+}
+
+/// Per-axis universe binding for one appended slot.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct UniverseBinding {
+    /// Axis index.
+    pub axis: u32,
+    /// Universe family UUID.
+    pub family_uuid: UniverseUuid,
+    /// Universe version UUID.
+    pub version_uuid: UniverseUuid,
+    /// Source universe length.
+    pub length: u64,
+}
+
+impl UniverseBinding {
+    /// Creates a per-axis universe binding.
+    pub fn new(
+        axis: u32,
+        family_uuid: UniverseUuid,
+        version_uuid: UniverseUuid,
+        length: u64,
+    ) -> Self {
+        Self {
+            axis,
+            family_uuid,
+            version_uuid,
+            length,
+        }
+    }
+}
+
+/// Universe bindings for one appended slot.
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct SlotUniverseBindings {
+    /// Axis bindings for this appended slot.
+    pub axes: Vec<UniverseBinding>,
+}
+
+impl SlotUniverseBindings {
+    /// Creates slot bindings from per-axis universe bindings.
+    pub fn new(axes: Vec<UniverseBinding>) -> Self {
+        Self { axes }
+    }
+}
+
+/// Payload-driven universe remap for one axis in one appended slot.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct UniverseRemap {
+    /// Axis index.
+    pub axis: u32,
+    /// Target universe family UUID.
+    pub target_family_uuid: UniverseUuid,
+    /// Target universe version UUID.
+    pub target_version_uuid: UniverseUuid,
+    /// Target universe length.
+    pub target_length: u64,
+    /// Source index to target index mapping.
+    pub source_to_target: Vec<u64>,
+}
+
+impl UniverseRemap {
+    /// Creates a payload-driven universe remap.
+    pub fn new(
+        axis: u32,
+        target_family_uuid: UniverseUuid,
+        target_version_uuid: UniverseUuid,
+        target_length: u64,
+        source_to_target: Vec<u64>,
+    ) -> Self {
+        Self {
+            axis,
+            target_family_uuid,
+            target_version_uuid,
+            target_length,
+            source_to_target,
+        }
+    }
+}
+
+/// Universe remaps for one appended slot.
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct SlotUniverseRemaps {
+    /// Axis remaps for this appended slot.
+    pub axes: Vec<UniverseRemap>,
+}
+
+impl SlotUniverseRemaps {
+    /// Creates slot remaps from per-axis universe remaps.
+    pub fn new(axes: Vec<UniverseRemap>) -> Self {
+        Self { axes }
+    }
+}
+
+/// Universe-aware append options.
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct AppendWithUniverseOptions {
+    /// Per-appended-slot universe bindings.
+    pub slots: Vec<SlotUniverseBindings>,
+    /// Optional per-appended-slot universe remaps.
+    pub remap_slots: Vec<SlotUniverseRemaps>,
+}
+
+impl AppendWithUniverseOptions {
+    /// Creates append options from per-slot universe bindings.
+    pub fn new(slots: Vec<SlotUniverseBindings>) -> Self {
+        Self {
+            slots,
+            remap_slots: Vec::new(),
+        }
+    }
+}
+
+/// Explicit universe target for shape-policy reads.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ExplicitUniverseAxisTarget {
+    /// Axis index.
+    pub axis: u32,
+    /// Target universe family UUID.
+    pub family_uuid: UniverseUuid,
+    /// Target universe version UUID.
+    pub version_uuid: UniverseUuid,
+    /// Target universe length.
+    pub length: u64,
+}
+
+impl ExplicitUniverseAxisTarget {
+    /// Creates an explicit universe axis target.
+    pub fn new(
+        axis: u32,
+        family_uuid: UniverseUuid,
+        version_uuid: UniverseUuid,
+        length: u64,
+    ) -> Self {
+        Self {
+            axis,
+            family_uuid,
+            version_uuid,
+            length,
+        }
+    }
+}
+
+/// Explicit extent target for split-domain shape-policy reads.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ExplicitExtentAxisTarget {
+    /// Axis index.
+    pub axis: u32,
+    /// Target axis length.
+    pub length: u64,
+}
+
+impl ExplicitExtentAxisTarget {
+    /// Creates an explicit extent axis target.
+    pub fn new(axis: u32, length: u64) -> Self {
+        Self { axis, length }
+    }
+}
+
+/// Shape policy for current and historical reads.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ReadShapePolicy {
+    /// Use the file envelope shape. This matches bare/current `read_all` defaults.
+    FileEnvelope,
+    /// Use the current head shape.
+    CurrentHead,
+    /// Use the union of selected entry shapes.
+    Union,
+    /// Use the intersection of selected entry shapes.
+    Intersection,
+    /// Use the initially registered extents.
+    InitialRegistered,
+    /// Use explicit extents for all axes.
+    ExplicitExtents(Vec<u64>),
+    /// Use explicit universe targets for universe-aware axes.
+    ExplicitUniverse(Vec<ExplicitUniverseAxisTarget>),
+    /// Use explicit universe targets for universe-aware axes and explicit extents for extent-only axes.
+    ExplicitUniverseAndExtents {
+        /// Universe-aware axis targets.
+        universe_axes: Vec<ExplicitUniverseAxisTarget>,
+        /// Extent-only axis targets.
+        extent_axes: Vec<ExplicitExtentAxisTarget>,
+    },
+}
+
+impl ReadShapePolicy {
+    fn to_raw_tag(&self) -> sys::ArcadiaTioReadShapePolicyTag {
+        match self {
+            Self::FileEnvelope => sys::ARCADIA_TIO_READ_SHAPE_POLICY_FILE_ENVELOPE,
+            Self::CurrentHead => sys::ARCADIA_TIO_READ_SHAPE_POLICY_CURRENT_HEAD,
+            Self::Union => sys::ARCADIA_TIO_READ_SHAPE_POLICY_UNION,
+            Self::Intersection => sys::ARCADIA_TIO_READ_SHAPE_POLICY_INTERSECTION,
+            Self::InitialRegistered => sys::ARCADIA_TIO_READ_SHAPE_POLICY_INITIAL_REGISTERED,
+            Self::ExplicitExtents(_) => sys::ARCADIA_TIO_READ_SHAPE_POLICY_EXPLICIT_EXTENTS,
+            Self::ExplicitUniverse(_) => sys::ARCADIA_TIO_READ_SHAPE_POLICY_EXPLICIT_UNIVERSE,
+            Self::ExplicitUniverseAndExtents { .. } => {
+                sys::ARCADIA_TIO_READ_SHAPE_POLICY_EXPLICIT_UNIVERSE_AND_EXTENTS
+            }
+        }
+    }
+}
+
+/// Read execution mode for option-bearing reads.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ReadExecutionMode {
+    /// Serial execution.
+    Serial,
+    /// Native parallel thread execution with a maximum thread count.
+    ParallelThreads { max_threads: usize },
+}
+
+impl ReadExecutionMode {
+    /// Serial execution.
+    pub fn serial() -> Self {
+        Self::Serial
+    }
+
+    /// Native parallel thread execution with a maximum thread count.
+    pub fn parallel_threads(max_threads: usize) -> Self {
+        Self::ParallelThreads { max_threads }
+    }
+
+    fn to_raw(self) -> Result<(sys::ArcadiaTioReadExecutionMode, usize)> {
+        match self {
+            Self::Serial => Ok((sys::ARCADIA_TIO_READ_EXECUTION_SERIAL, 1)),
+            Self::ParallelThreads { max_threads } if max_threads > 0 => Ok((
+                sys::ARCADIA_TIO_READ_EXECUTION_PARALLEL_THREADS,
+                max_threads,
+            )),
+            Self::ParallelThreads { .. } => Err(TioError::invalid_argument(
+                "parallel read max_threads must be > 0",
+            )),
+        }
+    }
+
+    fn from_raw(value: sys::ArcadiaTioReadExecutionMode, threads: usize) -> Result<Self> {
+        match value {
+            sys::ARCADIA_TIO_READ_EXECUTION_SERIAL => Ok(Self::Serial),
+            sys::ARCADIA_TIO_READ_EXECUTION_PARALLEL_THREADS => Ok(Self::ParallelThreads {
+                max_threads: threads,
+            }),
+            other => Err(TioError::conversion(format!(
+                "unknown read execution mode value {other}"
+            ))),
+        }
+    }
+}
+
+/// Current read options with execution mode and shape policy.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ReadWithShapePolicyOptions {
+    /// Requested execution mode.
+    pub mode: ReadExecutionMode,
+    /// Shape policy.
+    pub shape_policy: ReadShapePolicy,
+}
+
+impl ReadWithShapePolicyOptions {
+    /// Serial read with the provided shape policy.
+    pub fn serial(shape_policy: ReadShapePolicy) -> Self {
+        Self {
+            mode: ReadExecutionMode::Serial,
+            shape_policy,
+        }
+    }
+
+    /// Parallel read with the provided maximum thread count and shape policy.
+    pub fn parallel_threads(max_threads: usize, shape_policy: ReadShapePolicy) -> Self {
+        Self {
+            mode: ReadExecutionMode::ParallelThreads { max_threads },
+            shape_policy,
+        }
+    }
+}
+
+/// Historical read options with execution mode and shape policy.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct HistoricalReadWithShapePolicyOptions {
+    /// Requested execution mode.
+    pub mode: ReadExecutionMode,
+    /// Shape policy evaluated against the selected historical snapshot.
+    pub shape_policy: ReadShapePolicy,
+}
+
+impl HistoricalReadWithShapePolicyOptions {
+    /// Serial historical read with the provided shape policy.
+    pub fn serial(shape_policy: ReadShapePolicy) -> Self {
+        Self {
+            mode: ReadExecutionMode::Serial,
+            shape_policy,
+        }
+    }
+
+    /// Parallel historical read with the provided maximum thread count and shape policy.
+    pub fn parallel_threads(max_threads: usize, shape_policy: ReadShapePolicy) -> Self {
+        Self {
+            mode: ReadExecutionMode::ParallelThreads { max_threads },
+            shape_policy,
+        }
+    }
+}
+
+/// Safe selector for current and historical read APIs.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum EntrySelector {
+    /// Select all indices along this axis.
+    All,
+    /// Select a half-open range along this axis.
+    Range { start: u32, end: u32 },
+    /// Select explicit indices along this axis.
+    Take(Vec<u32>),
+}
+
+/// Current read execution metadata copied from the native report.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ReadExecutionReport {
+    /// Requested execution mode.
+    pub requested_mode: ReadExecutionMode,
+    /// Requested maximum query threads.
+    pub query_max_threads: usize,
+    /// Effective execution mode.
+    pub query_effective_mode: ReadExecutionMode,
+    /// Effective query threads.
+    pub query_effective_threads: usize,
+    /// Query parallel runtime if reported.
+    pub query_parallel_runtime: Option<String>,
+    /// Query parallel fallback reason if reported.
+    pub query_parallel_fallback_reason: Option<String>,
+    /// Query parallel reason code if reported.
+    pub query_parallel_reason_code: Option<String>,
+    /// Query parallel reason-code taxonomy if reported.
+    pub query_parallel_reason_code_taxonomy: Option<String>,
+}
+
+/// Historical query source kind.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum HistoricalQuerySourceKind {
+    /// Query used a retained visible commit snapshot.
+    RetainedVisibleCommit,
+}
+
+impl HistoricalQuerySourceKind {
+    fn from_raw(value: sys::ArcadiaTioHistoricalQuerySourceKind) -> Result<Self> {
+        match value {
+            sys::ARCADIA_TIO_HISTORICAL_QUERY_SOURCE_RETAINED_VISIBLE_COMMIT => {
+                Ok(Self::RetainedVisibleCommit)
+            }
+            other => Err(TioError::conversion(format!(
+                "unknown historical query source kind value {other}"
+            ))),
+        }
+    }
+}
+
+/// Historical read execution metadata copied from the native report.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct HistoricalReadExecutionReport {
+    /// Current-read execution fields.
+    pub execution: ReadExecutionReport,
+    /// Historical query source kind.
+    pub query_source_kind: HistoricalQuerySourceKind,
+    /// Commit sequence used for the historical query.
+    pub query_commit_seq: u64,
+}
+
+/// Current read value with execution metadata.
+#[derive(Debug, Clone, PartialEq)]
+pub struct ReadResult<T> {
+    /// Read value.
+    pub value: T,
+    /// Execution metadata.
+    pub execution: ReadExecutionReport,
+}
+
+/// Historical read value with execution metadata.
+#[derive(Debug, Clone, PartialEq)]
+pub struct HistoricalReadResult<T> {
+    /// Read value.
+    pub value: T,
+    /// Historical execution metadata.
+    pub execution: HistoricalReadExecutionReport,
+}
+
 /// Create-time storage/layout profile.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum CreateLayout {
@@ -1045,6 +1488,76 @@ impl TensorFile {
         Ok(file)
     }
 
+    /// Creates a TensorFile with universe-aware axis identity options.
+    ///
+    /// Coordinate descriptors cannot be combined with universe create options in this wrapper slice
+    /// because the current C ABI exposes separate coordinate and universe create families.
+    pub fn create_with_universe(
+        path: impl AsRef<Path>,
+        options: CreateOptions,
+        universe_options: CreateUniverseOptions,
+    ) -> Result<Self> {
+        if !options.coordinates.is_empty() {
+            return Err(TioError::invalid_argument(
+                "coordinate descriptors cannot be combined with universe create options yet",
+            ));
+        }
+        let prepared = PreparedCreate::new(path, &options)?;
+        let prepared_universe = PreparedCreateUniverseOptions::new(&universe_options);
+        let compression = options
+            .compression
+            .map(CompressionConfig::validate)
+            .transpose()?;
+        let raw_options = prepared_universe.raw_options();
+        // SAFETY: PreparedCreate and PreparedCreateUniverseOptions own all borrowed C data for the
+        // duration of this call. Pointers and lengths match the owned Rust slices.
+        let raw = unsafe {
+            match options.layout {
+                CreateLayout::Streaming => sys::arcadia_tio_create_streaming_with_universe(
+                    prepared.path.as_ptr(),
+                    options.dtype.to_raw(),
+                    prepared.dim_kinds.as_ptr(),
+                    prepared.dim_lens.as_ptr(),
+                    prepared.dim_lens.len(),
+                    options.append_dim,
+                    prepared.dim_name_ptr(),
+                    prepared.dim_name_len(),
+                    prepared.symbol_ptr(),
+                    prepared.symbol_len(),
+                    prepared.channel_ptr(),
+                    prepared.channel_len(),
+                    prepared.user_key_ptr(),
+                    prepared.user_value_ptr(),
+                    prepared.user_kv_len(),
+                    &raw_options,
+                ),
+                CreateLayout::RandomAccess => sys::arcadia_tio_create_random_access_with_universe(
+                    prepared.path.as_ptr(),
+                    options.dtype.to_raw(),
+                    prepared.dim_kinds.as_ptr(),
+                    prepared.dim_lens.as_ptr(),
+                    prepared.dim_lens.len(),
+                    options.append_dim,
+                    prepared.dim_name_ptr(),
+                    prepared.dim_name_len(),
+                    prepared.symbol_ptr(),
+                    prepared.symbol_len(),
+                    prepared.channel_ptr(),
+                    prepared.channel_len(),
+                    prepared.user_key_ptr(),
+                    prepared.user_value_ptr(),
+                    prepared.user_kv_len(),
+                    &raw_options,
+                ),
+            }
+        };
+        let file = Self::from_raw_handle(raw, "failed to create universe-aware TensorFile")?;
+        if let Some(compression) = compression {
+            file.set_compression(compression)?;
+        }
+        Ok(file)
+    }
+
     /// Set write-time compression for future appends on this handle.
     pub fn set_compression(&self, compression: CompressionConfig) -> Result<()> {
         let raw = compression.validate()?.to_raw();
@@ -1221,6 +1734,98 @@ impl TensorFile {
         })
     }
 
+    /// Appends a bulk f32 slice with universe bindings and returns the assigned entry range.
+    pub fn append_f32_with_universe(
+        &mut self,
+        data: &[f32],
+        shape: &[u64],
+        options: &AppendWithUniverseOptions,
+    ) -> Result<AppendRange> {
+        self.validate_append(DType::F32, data.len(), shape)?;
+        let prepared = PreparedAppendUniverseOptions::new(options);
+        let raw_options = prepared.raw_options();
+        self.append_with_range(shape, |handle, start, end| unsafe {
+            sys::arcadia_tio_append_f32_with_universe(
+                handle,
+                data.as_ptr(),
+                shape.as_ptr(),
+                shape.len(),
+                &raw_options,
+                start,
+                end,
+            )
+        })
+    }
+
+    /// Appends a bulk f64 slice with universe bindings and returns the assigned entry range.
+    pub fn append_f64_with_universe(
+        &mut self,
+        data: &[f64],
+        shape: &[u64],
+        options: &AppendWithUniverseOptions,
+    ) -> Result<AppendRange> {
+        self.validate_append(DType::F64, data.len(), shape)?;
+        let prepared = PreparedAppendUniverseOptions::new(options);
+        let raw_options = prepared.raw_options();
+        self.append_with_range(shape, |handle, start, end| unsafe {
+            sys::arcadia_tio_append_f64_with_universe(
+                handle,
+                data.as_ptr(),
+                shape.as_ptr(),
+                shape.len(),
+                &raw_options,
+                start,
+                end,
+            )
+        })
+    }
+
+    /// Appends a bulk i32 slice with universe bindings and returns the assigned entry range.
+    pub fn append_i32_with_universe(
+        &mut self,
+        data: &[i32],
+        shape: &[u64],
+        options: &AppendWithUniverseOptions,
+    ) -> Result<AppendRange> {
+        self.validate_append(DType::I32, data.len(), shape)?;
+        let prepared = PreparedAppendUniverseOptions::new(options);
+        let raw_options = prepared.raw_options();
+        self.append_with_range(shape, |handle, start, end| unsafe {
+            sys::arcadia_tio_append_i32_with_universe(
+                handle,
+                data.as_ptr(),
+                shape.as_ptr(),
+                shape.len(),
+                &raw_options,
+                start,
+                end,
+            )
+        })
+    }
+
+    /// Appends a bulk i64 slice with universe bindings and returns the assigned entry range.
+    pub fn append_i64_with_universe(
+        &mut self,
+        data: &[i64],
+        shape: &[u64],
+        options: &AppendWithUniverseOptions,
+    ) -> Result<AppendRange> {
+        self.validate_append(DType::I64, data.len(), shape)?;
+        let prepared = PreparedAppendUniverseOptions::new(options);
+        let raw_options = prepared.raw_options();
+        self.append_with_range(shape, |handle, start, end| unsafe {
+            sys::arcadia_tio_append_i64_with_universe(
+                handle,
+                data.as_ptr(),
+                shape.as_ptr(),
+                shape.len(),
+                &raw_options,
+                start,
+                end,
+            )
+        })
+    }
+
     /// Reads the full tensor into Rust-owned buffers.
     pub fn read_all(&self) -> Result<Tensor> {
         self.read_tensor(|handle, out| unsafe { sys::arcadia_tio_read_all(handle, out) })
@@ -1303,6 +1908,260 @@ impl TensorFile {
         })
     }
 
+    /// Reads current selector data with a shape policy and execution metadata.
+    pub fn read_with_shape_policy(
+        &self,
+        selectors: &[EntrySelector],
+        options: ReadWithShapePolicyOptions,
+    ) -> Result<ReadResult<Tensor>> {
+        let prepared_selectors = self.prepare_selectors(selectors)?;
+        let prepared_options = PreparedReadWithShapePolicyOptions::new(&options)?;
+        let mut raw_tensor = sys::ArcadiaTioTensor::default();
+        let mut report = new_read_execution_report();
+        let raw_options = prepared_options.raw_options();
+        // SAFETY: Prepared selector and option buffers outlive the call; outputs are valid.
+        let status = unsafe {
+            sys::arcadia_tio_read_with_shape_policy(
+                self.raw.as_ptr(),
+                prepared_selectors.ptr(),
+                prepared_selectors.len(),
+                &raw_options,
+                &mut raw_tensor,
+                &mut report,
+            )
+        };
+        if status != sys::ARCADIA_TIO_ERROR_OK {
+            // SAFETY: Outputs were initialized by this wrapper and may be partially populated.
+            unsafe {
+                sys::arcadia_tio_tensor_free(&mut raw_tensor);
+                sys::arcadia_tio_read_execution_report_free(&mut report);
+            }
+            return Err(TioError::from_last_error(
+                "failed to read with shape policy",
+            ));
+        }
+        let tensor = copy_tensor(&raw_tensor);
+        let execution = copy_read_execution_report(&report);
+        // SAFETY: Native-owned outputs are freed exactly once.
+        unsafe {
+            sys::arcadia_tio_tensor_free(&mut raw_tensor);
+            sys::arcadia_tio_read_execution_report_free(&mut report);
+        }
+        Ok(ReadResult {
+            value: tensor?,
+            execution: execution?,
+        })
+    }
+
+    /// Reads current selector data densely with a shape policy and execution metadata.
+    pub fn read_with_shape_policy_dense(
+        &self,
+        selectors: &[EntrySelector],
+        options: ReadWithShapePolicyOptions,
+        fill_value: f64,
+    ) -> Result<ReadResult<DenseTensor>> {
+        let prepared_selectors = self.prepare_selectors(selectors)?;
+        let prepared_options = PreparedReadWithShapePolicyOptions::new(&options)?;
+        let mut raw_tensor = sys::ArcadiaTioTensor::default();
+        let mut raw_mask = sys::ArcadiaTioMask::default();
+        let mut report = new_read_execution_report();
+        let raw_options = prepared_options.raw_options();
+        // SAFETY: Prepared selector and option buffers outlive the call; outputs are valid.
+        let status = unsafe {
+            sys::arcadia_tio_read_with_shape_policy_dense(
+                self.raw.as_ptr(),
+                prepared_selectors.ptr(),
+                prepared_selectors.len(),
+                &raw_options,
+                fill_value,
+                &mut raw_tensor,
+                &mut raw_mask,
+                &mut report,
+            )
+        };
+        if status != sys::ARCADIA_TIO_ERROR_OK {
+            // SAFETY: Outputs were initialized by this wrapper and may be partially populated.
+            unsafe {
+                sys::arcadia_tio_tensor_free(&mut raw_tensor);
+                sys::arcadia_tio_mask_free(&mut raw_mask);
+                sys::arcadia_tio_read_execution_report_free(&mut report);
+            }
+            return Err(TioError::from_last_error(
+                "failed to read dense tensor with shape policy",
+            ));
+        }
+        let tensor = copy_tensor(&raw_tensor);
+        let mask = copy_mask(&raw_mask);
+        let execution = copy_read_execution_report(&report);
+        // SAFETY: Native-owned outputs are freed exactly once.
+        unsafe {
+            sys::arcadia_tio_tensor_free(&mut raw_tensor);
+            sys::arcadia_tio_mask_free(&mut raw_mask);
+            sys::arcadia_tio_read_execution_report_free(&mut report);
+        }
+        Ok(ReadResult {
+            value: DenseTensor {
+                tensor: tensor?,
+                mask,
+            },
+            execution: execution?,
+        })
+    }
+
+    /// Reads selector data at a retained commit into Rust-owned buffers.
+    pub fn read_at_commit(&self, commit_seq: u64, selectors: &[EntrySelector]) -> Result<Tensor> {
+        let prepared_selectors = self.prepare_selectors(selectors)?;
+        self.read_tensor(|handle, out| unsafe {
+            sys::arcadia_tio_read_at_commit(
+                handle,
+                commit_seq,
+                prepared_selectors.ptr(),
+                prepared_selectors.len(),
+                out,
+            )
+        })
+    }
+
+    /// Reads selector data at a retained commit densely with a fill value.
+    pub fn read_at_commit_dense(
+        &self,
+        commit_seq: u64,
+        selectors: &[EntrySelector],
+        fill_value: f64,
+    ) -> Result<DenseTensor> {
+        let prepared_selectors = self.prepare_selectors(selectors)?;
+        let mut raw_tensor = sys::ArcadiaTioTensor::default();
+        let mut raw_mask = sys::ArcadiaTioMask::default();
+        // SAFETY: Prepared selector buffers outlive the call; outputs are valid.
+        let status = unsafe {
+            sys::arcadia_tio_read_at_commit_dense(
+                self.raw.as_ptr(),
+                commit_seq,
+                prepared_selectors.ptr(),
+                prepared_selectors.len(),
+                fill_value,
+                &mut raw_tensor,
+                &mut raw_mask,
+            )
+        };
+        status_result(status, "failed to read dense tensor at commit")?;
+        let tensor = copy_tensor(&raw_tensor);
+        let mask = copy_mask(&raw_mask);
+        // SAFETY: Native-owned outputs are freed exactly once.
+        unsafe {
+            sys::arcadia_tio_tensor_free(&mut raw_tensor);
+            sys::arcadia_tio_mask_free(&mut raw_mask);
+        }
+        Ok(DenseTensor {
+            tensor: tensor?,
+            mask,
+        })
+    }
+
+    /// Reads selector data at a retained commit with a shape policy and execution metadata.
+    pub fn read_at_commit_with_shape_policy(
+        &self,
+        commit_seq: u64,
+        selectors: &[EntrySelector],
+        options: HistoricalReadWithShapePolicyOptions,
+    ) -> Result<HistoricalReadResult<Tensor>> {
+        let prepared_selectors = self.prepare_selectors(selectors)?;
+        let prepared_options = PreparedHistoricalReadWithShapePolicyOptions::new(&options)?;
+        let mut raw_tensor = sys::ArcadiaTioTensor::default();
+        let mut report = new_historical_read_execution_report();
+        let raw_options = prepared_options.raw_options();
+        // SAFETY: Prepared selector and option buffers outlive the call; outputs are valid.
+        let status = unsafe {
+            sys::arcadia_tio_read_at_commit_with_shape_policy(
+                self.raw.as_ptr(),
+                commit_seq,
+                prepared_selectors.ptr(),
+                prepared_selectors.len(),
+                &raw_options,
+                &mut raw_tensor,
+                &mut report,
+            )
+        };
+        if status != sys::ARCADIA_TIO_ERROR_OK {
+            // SAFETY: Outputs were initialized by this wrapper and may be partially populated.
+            unsafe {
+                sys::arcadia_tio_tensor_free(&mut raw_tensor);
+                sys::arcadia_tio_historical_read_execution_report_free(&mut report);
+            }
+            return Err(TioError::from_last_error(
+                "failed to read at commit with shape policy",
+            ));
+        }
+        let tensor = copy_tensor(&raw_tensor);
+        let execution = copy_historical_read_execution_report(&report);
+        // SAFETY: Native-owned outputs are freed exactly once.
+        unsafe {
+            sys::arcadia_tio_tensor_free(&mut raw_tensor);
+            sys::arcadia_tio_historical_read_execution_report_free(&mut report);
+        }
+        Ok(HistoricalReadResult {
+            value: tensor?,
+            execution: execution?,
+        })
+    }
+
+    /// Reads selector data at a retained commit densely with a shape policy and execution metadata.
+    pub fn read_at_commit_with_shape_policy_dense(
+        &self,
+        commit_seq: u64,
+        selectors: &[EntrySelector],
+        options: HistoricalReadWithShapePolicyOptions,
+        fill_value: f64,
+    ) -> Result<HistoricalReadResult<DenseTensor>> {
+        let prepared_selectors = self.prepare_selectors(selectors)?;
+        let prepared_options = PreparedHistoricalReadWithShapePolicyOptions::new(&options)?;
+        let mut raw_tensor = sys::ArcadiaTioTensor::default();
+        let mut raw_mask = sys::ArcadiaTioMask::default();
+        let mut report = new_historical_read_execution_report();
+        let raw_options = prepared_options.raw_options();
+        // SAFETY: Prepared selector and option buffers outlive the call; outputs are valid.
+        let status = unsafe {
+            sys::arcadia_tio_read_at_commit_with_shape_policy_dense(
+                self.raw.as_ptr(),
+                commit_seq,
+                prepared_selectors.ptr(),
+                prepared_selectors.len(),
+                &raw_options,
+                fill_value,
+                &mut raw_tensor,
+                &mut raw_mask,
+                &mut report,
+            )
+        };
+        if status != sys::ARCADIA_TIO_ERROR_OK {
+            // SAFETY: Outputs were initialized by this wrapper and may be partially populated.
+            unsafe {
+                sys::arcadia_tio_tensor_free(&mut raw_tensor);
+                sys::arcadia_tio_mask_free(&mut raw_mask);
+                sys::arcadia_tio_historical_read_execution_report_free(&mut report);
+            }
+            return Err(TioError::from_last_error(
+                "failed to read dense tensor at commit with shape policy",
+            ));
+        }
+        let tensor = copy_tensor(&raw_tensor);
+        let mask = copy_mask(&raw_mask);
+        let execution = copy_historical_read_execution_report(&report);
+        // SAFETY: Native-owned outputs are freed exactly once.
+        unsafe {
+            sys::arcadia_tio_tensor_free(&mut raw_tensor);
+            sys::arcadia_tio_mask_free(&mut raw_mask);
+            sys::arcadia_tio_historical_read_execution_report_free(&mut report);
+        }
+        Ok(HistoricalReadResult {
+            value: DenseTensor {
+                tensor: tensor?,
+                mask,
+            },
+            execution: execution?,
+        })
+    }
+
     fn append_with_range(
         &mut self,
         shape: &[u64],
@@ -1314,6 +2173,10 @@ impl TensorFile {
         status_result(status, "failed to append tensor data")?;
         let _ = shape;
         Ok(AppendRange { start, end })
+    }
+
+    fn prepare_selectors(&self, selectors: &[EntrySelector]) -> Result<PreparedSelectors> {
+        PreparedSelectors::new(selectors, self.rank()?)
     }
 
     fn read_tensor(
@@ -1359,15 +2222,6 @@ impl TensorFile {
             return Err(TioError::invalid_argument(format!(
                 "append data length {data_len} does not match shape element count {expected_len}"
             )));
-        }
-        let append_axis = self.append_axis()?;
-        let current = self.dim_lens()?;
-        for (axis, (&shape_len, &current_len)) in shape.iter().zip(current.iter()).enumerate() {
-            if axis != append_axis && shape_len != u64::from(current_len) {
-                return Err(TioError::invalid_argument(format!(
-                    "append shape axis {axis} length {shape_len} does not match current length {current_len}"
-                )));
-            }
         }
         Ok(())
     }
@@ -1463,6 +2317,87 @@ fn copy_mask(raw: &sys::ArcadiaTioMask) -> Option<Vec<u8>> {
     }
     // SAFETY: The C ABI returns a native-owned mask with `len` bytes while the mask output is alive.
     Some(unsafe { slice::from_raw_parts(raw.data, raw.len) }.to_vec())
+}
+
+fn new_read_execution_report() -> sys::ArcadiaTioReadExecutionReport {
+    sys::ArcadiaTioReadExecutionReport {
+        version: 1,
+        struct_size: mem::size_of::<sys::ArcadiaTioReadExecutionReport>(),
+        requested_mode: sys::ARCADIA_TIO_READ_EXECUTION_SERIAL,
+        query_max_threads: 0,
+        query_effective_mode: sys::ARCADIA_TIO_READ_EXECUTION_SERIAL,
+        query_effective_threads: 0,
+        query_parallel_runtime: ptr::null_mut(),
+        query_parallel_fallback_reason: ptr::null_mut(),
+        query_parallel_reason_code: ptr::null_mut(),
+        query_parallel_reason_code_taxonomy: ptr::null_mut(),
+    }
+}
+
+fn new_historical_read_execution_report() -> sys::ArcadiaTioHistoricalReadExecutionReport {
+    sys::ArcadiaTioHistoricalReadExecutionReport {
+        version: 1,
+        struct_size: mem::size_of::<sys::ArcadiaTioHistoricalReadExecutionReport>(),
+        requested_mode: sys::ARCADIA_TIO_READ_EXECUTION_SERIAL,
+        query_max_threads: 0,
+        query_effective_mode: sys::ARCADIA_TIO_READ_EXECUTION_SERIAL,
+        query_effective_threads: 0,
+        query_parallel_runtime: ptr::null_mut(),
+        query_parallel_fallback_reason: ptr::null_mut(),
+        query_parallel_reason_code: ptr::null_mut(),
+        query_parallel_reason_code_taxonomy: ptr::null_mut(),
+        query_source_kind: sys::ARCADIA_TIO_HISTORICAL_QUERY_SOURCE_RETAINED_VISIBLE_COMMIT,
+        query_commit_seq: 0,
+    }
+}
+
+fn copy_read_execution_report(
+    raw: &sys::ArcadiaTioReadExecutionReport,
+) -> Result<ReadExecutionReport> {
+    Ok(ReadExecutionReport {
+        requested_mode: ReadExecutionMode::from_raw(raw.requested_mode, raw.query_max_threads)?,
+        query_max_threads: raw.query_max_threads,
+        query_effective_mode: ReadExecutionMode::from_raw(
+            raw.query_effective_mode,
+            raw.query_effective_threads,
+        )?,
+        query_effective_threads: raw.query_effective_threads,
+        query_parallel_runtime: optional_c_string(raw.query_parallel_runtime.cast_const()),
+        query_parallel_fallback_reason: optional_c_string(
+            raw.query_parallel_fallback_reason.cast_const(),
+        ),
+        query_parallel_reason_code: optional_c_string(raw.query_parallel_reason_code.cast_const()),
+        query_parallel_reason_code_taxonomy: optional_c_string(
+            raw.query_parallel_reason_code_taxonomy.cast_const(),
+        ),
+    })
+}
+
+fn copy_historical_read_execution_report(
+    raw: &sys::ArcadiaTioHistoricalReadExecutionReport,
+) -> Result<HistoricalReadExecutionReport> {
+    let execution = ReadExecutionReport {
+        requested_mode: ReadExecutionMode::from_raw(raw.requested_mode, raw.query_max_threads)?,
+        query_max_threads: raw.query_max_threads,
+        query_effective_mode: ReadExecutionMode::from_raw(
+            raw.query_effective_mode,
+            raw.query_effective_threads,
+        )?,
+        query_effective_threads: raw.query_effective_threads,
+        query_parallel_runtime: optional_c_string(raw.query_parallel_runtime.cast_const()),
+        query_parallel_fallback_reason: optional_c_string(
+            raw.query_parallel_fallback_reason.cast_const(),
+        ),
+        query_parallel_reason_code: optional_c_string(raw.query_parallel_reason_code.cast_const()),
+        query_parallel_reason_code_taxonomy: optional_c_string(
+            raw.query_parallel_reason_code_taxonomy.cast_const(),
+        ),
+    };
+    Ok(HistoricalReadExecutionReport {
+        execution,
+        query_source_kind: HistoricalQuerySourceKind::from_raw(raw.query_source_kind)?,
+        query_commit_seq: raw.query_commit_seq,
+    })
 }
 
 fn copy_axis_labels(ptr: *mut sys::ArcadiaTioAxisLabel, len: usize) -> Vec<AxisLabel> {
@@ -1801,6 +2736,358 @@ impl<'a> PreparedCreate<'a> {
     }
 }
 
+struct PreparedCreateUniverseOptions {
+    axis_identities: Vec<sys::ArcadiaTioAxisIdentityInput>,
+}
+
+impl PreparedCreateUniverseOptions {
+    fn new(options: &CreateUniverseOptions) -> Self {
+        let axis_identities = options
+            .axis_identities
+            .iter()
+            .map(|identity| sys::ArcadiaTioAxisIdentityInput {
+                version: 1,
+                struct_size: mem::size_of::<sys::ArcadiaTioAxisIdentityInput>(),
+                axis: identity.axis,
+                mode: identity.mode.to_raw(),
+            })
+            .collect();
+        Self { axis_identities }
+    }
+
+    fn raw_options(&self) -> sys::ArcadiaTioCreateWithUniverseOptions {
+        sys::ArcadiaTioCreateWithUniverseOptions {
+            version: 1,
+            struct_size: mem::size_of::<sys::ArcadiaTioCreateWithUniverseOptions>(),
+            axis_identities: if self.axis_identities.is_empty() {
+                ptr::null()
+            } else {
+                self.axis_identities.as_ptr()
+            },
+            axis_identities_len: self.axis_identities.len(),
+        }
+    }
+}
+
+struct PreparedAppendUniverseOptions<'a> {
+    slot_axes: Vec<Vec<sys::ArcadiaTioUniverseBindingInput>>,
+    slots: Vec<sys::ArcadiaTioSlotUniverseBindingInput>,
+    remap_axes: Vec<Vec<sys::ArcadiaTioUniverseRemapInput>>,
+    remap_slots: Vec<sys::ArcadiaTioSlotUniverseRemapInput>,
+    _borrowed: PhantomData<&'a AppendWithUniverseOptions>,
+}
+
+impl<'a> PreparedAppendUniverseOptions<'a> {
+    fn new(options: &'a AppendWithUniverseOptions) -> Self {
+        let slot_axes = options
+            .slots
+            .iter()
+            .map(|slot| {
+                slot.axes
+                    .iter()
+                    .map(|axis| sys::ArcadiaTioUniverseBindingInput {
+                        axis: axis.axis,
+                        family_uuid: axis.family_uuid,
+                        version_uuid: axis.version_uuid,
+                        length: axis.length,
+                    })
+                    .collect::<Vec<_>>()
+            })
+            .collect::<Vec<_>>();
+        let slots = slot_axes
+            .iter()
+            .map(|axes| sys::ArcadiaTioSlotUniverseBindingInput {
+                axes: if axes.is_empty() {
+                    ptr::null()
+                } else {
+                    axes.as_ptr()
+                },
+                axes_len: axes.len(),
+            })
+            .collect::<Vec<_>>();
+        let remap_axes = options
+            .remap_slots
+            .iter()
+            .map(|slot| {
+                slot.axes
+                    .iter()
+                    .map(|axis| sys::ArcadiaTioUniverseRemapInput {
+                        version: 1,
+                        struct_size: mem::size_of::<sys::ArcadiaTioUniverseRemapInput>(),
+                        axis: axis.axis,
+                        target_family_uuid: axis.target_family_uuid,
+                        target_version_uuid: axis.target_version_uuid,
+                        target_length: axis.target_length,
+                        source_to_target: if axis.source_to_target.is_empty() {
+                            ptr::null()
+                        } else {
+                            axis.source_to_target.as_ptr()
+                        },
+                        source_to_target_len: axis.source_to_target.len(),
+                    })
+                    .collect::<Vec<_>>()
+            })
+            .collect::<Vec<_>>();
+        let remap_slots = remap_axes
+            .iter()
+            .map(|axes| sys::ArcadiaTioSlotUniverseRemapInput {
+                axes: if axes.is_empty() {
+                    ptr::null()
+                } else {
+                    axes.as_ptr()
+                },
+                axes_len: axes.len(),
+            })
+            .collect::<Vec<_>>();
+        Self {
+            slot_axes,
+            slots,
+            remap_axes,
+            remap_slots,
+            _borrowed: PhantomData,
+        }
+    }
+
+    fn raw_options(&self) -> sys::ArcadiaTioAppendWithUniverseOptions {
+        let _ = (&self.slot_axes, &self.remap_axes);
+        sys::ArcadiaTioAppendWithUniverseOptions {
+            version: 1,
+            struct_size: mem::size_of::<sys::ArcadiaTioAppendWithUniverseOptions>(),
+            slots: if self.slots.is_empty() {
+                ptr::null()
+            } else {
+                self.slots.as_ptr()
+            },
+            slots_len: self.slots.len(),
+            remap_slots: if self.remap_slots.is_empty() {
+                ptr::null()
+            } else {
+                self.remap_slots.as_ptr()
+            },
+            remap_slots_len: self.remap_slots.len(),
+        }
+    }
+}
+
+struct PreparedSelectors {
+    take_indices: Vec<Vec<u32>>,
+    selectors: Vec<sys::ArcadiaTioEntrySelector>,
+}
+
+impl PreparedSelectors {
+    fn new(selectors: &[EntrySelector], rank: usize) -> Result<Self> {
+        if selectors.is_empty() {
+            return Ok(Self {
+                take_indices: Vec::new(),
+                selectors: Vec::new(),
+            });
+        }
+        if selectors.len() != rank {
+            return Err(TioError::invalid_argument(format!(
+                "selector count {} does not match file rank {rank}",
+                selectors.len()
+            )));
+        }
+        let take_indices = selectors
+            .iter()
+            .filter_map(|selector| match selector {
+                EntrySelector::Take(indices) => Some(indices.clone()),
+                _ => None,
+            })
+            .collect::<Vec<_>>();
+        let mut next_take = 0usize;
+        let mut raw = Vec::with_capacity(selectors.len());
+        for selector in selectors {
+            let item = match selector {
+                EntrySelector::All => sys::ArcadiaTioEntrySelector {
+                    kind: sys::ARCADIA_TIO_ENTRY_SELECTOR_ALL,
+                    start: 0,
+                    end: 0,
+                    indices: ptr::null(),
+                    indices_len: 0,
+                },
+                EntrySelector::Range { start, end } => {
+                    if start > end {
+                        return Err(TioError::invalid_argument(
+                            "selector range start must be <= end",
+                        ));
+                    }
+                    sys::ArcadiaTioEntrySelector {
+                        kind: sys::ARCADIA_TIO_ENTRY_SELECTOR_RANGE,
+                        start: *start,
+                        end: *end,
+                        indices: ptr::null(),
+                        indices_len: 0,
+                    }
+                }
+                EntrySelector::Take(_) => {
+                    let values = &take_indices[next_take];
+                    next_take += 1;
+                    sys::ArcadiaTioEntrySelector {
+                        kind: sys::ARCADIA_TIO_ENTRY_SELECTOR_TAKE,
+                        start: 0,
+                        end: 0,
+                        indices: if values.is_empty() {
+                            ptr::null()
+                        } else {
+                            values.as_ptr()
+                        },
+                        indices_len: values.len(),
+                    }
+                }
+            };
+            raw.push(item);
+        }
+        Ok(Self {
+            take_indices,
+            selectors: raw,
+        })
+    }
+
+    fn ptr(&self) -> *const sys::ArcadiaTioEntrySelector {
+        let _ = &self.take_indices;
+        if self.selectors.is_empty() {
+            ptr::null()
+        } else {
+            self.selectors.as_ptr()
+        }
+    }
+
+    fn len(&self) -> usize {
+        self.selectors.len()
+    }
+}
+
+struct PreparedReadShapePolicy {
+    explicit_extents: Vec<u64>,
+    explicit_universe_axes: Vec<sys::ArcadiaTioExplicitUniverseAxisTarget>,
+    explicit_extent_axes: Vec<sys::ArcadiaTioExplicitExtentAxisTarget>,
+    policy: sys::ArcadiaTioReadShapePolicyTag,
+}
+
+impl PreparedReadShapePolicy {
+    fn new(policy: &ReadShapePolicy) -> Self {
+        let explicit_extents = match policy {
+            ReadShapePolicy::ExplicitExtents(extents) => extents.clone(),
+            _ => Vec::new(),
+        };
+        let explicit_universe_axes = match policy {
+            ReadShapePolicy::ExplicitUniverse(axes) => axes.iter().map(raw_universe_axis).collect(),
+            ReadShapePolicy::ExplicitUniverseAndExtents { universe_axes, .. } => {
+                universe_axes.iter().map(raw_universe_axis).collect()
+            }
+            _ => Vec::new(),
+        };
+        let explicit_extent_axes = match policy {
+            ReadShapePolicy::ExplicitUniverseAndExtents { extent_axes, .. } => extent_axes
+                .iter()
+                .map(|axis| sys::ArcadiaTioExplicitExtentAxisTarget {
+                    axis: axis.axis,
+                    length: axis.length,
+                })
+                .collect(),
+            _ => Vec::new(),
+        };
+        Self {
+            explicit_extents,
+            explicit_universe_axes,
+            explicit_extent_axes,
+            policy: policy.to_raw_tag(),
+        }
+    }
+
+    fn raw_options(&self) -> sys::ArcadiaTioReadShapePolicyOptions {
+        sys::ArcadiaTioReadShapePolicyOptions {
+            version: 1,
+            struct_size: mem::size_of::<sys::ArcadiaTioReadShapePolicyOptions>(),
+            policy: self.policy,
+            explicit_extents: if self.explicit_extents.is_empty() {
+                ptr::null()
+            } else {
+                self.explicit_extents.as_ptr()
+            },
+            explicit_extents_len: self.explicit_extents.len(),
+            explicit_universe_axes: if self.explicit_universe_axes.is_empty() {
+                ptr::null()
+            } else {
+                self.explicit_universe_axes.as_ptr()
+            },
+            explicit_universe_axes_len: self.explicit_universe_axes.len(),
+            explicit_extent_axes: if self.explicit_extent_axes.is_empty() {
+                ptr::null()
+            } else {
+                self.explicit_extent_axes.as_ptr()
+            },
+            explicit_extent_axes_len: self.explicit_extent_axes.len(),
+        }
+    }
+}
+
+fn raw_universe_axis(
+    axis: &ExplicitUniverseAxisTarget,
+) -> sys::ArcadiaTioExplicitUniverseAxisTarget {
+    sys::ArcadiaTioExplicitUniverseAxisTarget {
+        axis: axis.axis,
+        family_uuid: axis.family_uuid,
+        version_uuid: axis.version_uuid,
+        length: axis.length,
+    }
+}
+
+struct PreparedReadWithShapePolicyOptions {
+    mode: sys::ArcadiaTioReadExecutionMode,
+    max_threads: usize,
+    shape_policy: PreparedReadShapePolicy,
+}
+
+impl PreparedReadWithShapePolicyOptions {
+    fn new(options: &ReadWithShapePolicyOptions) -> Result<Self> {
+        let (mode, max_threads) = options.mode.to_raw()?;
+        Ok(Self {
+            mode,
+            max_threads,
+            shape_policy: PreparedReadShapePolicy::new(&options.shape_policy),
+        })
+    }
+
+    fn raw_options(&self) -> sys::ArcadiaTioReadWithShapePolicyOptions {
+        sys::ArcadiaTioReadWithShapePolicyOptions {
+            version: 1,
+            struct_size: mem::size_of::<sys::ArcadiaTioReadWithShapePolicyOptions>(),
+            mode: self.mode,
+            max_threads: self.max_threads,
+            shape_policy: self.shape_policy.raw_options(),
+        }
+    }
+}
+
+struct PreparedHistoricalReadWithShapePolicyOptions {
+    mode: sys::ArcadiaTioReadExecutionMode,
+    max_threads: usize,
+    shape_policy: PreparedReadShapePolicy,
+}
+
+impl PreparedHistoricalReadWithShapePolicyOptions {
+    fn new(options: &HistoricalReadWithShapePolicyOptions) -> Result<Self> {
+        let (mode, max_threads) = options.mode.to_raw()?;
+        Ok(Self {
+            mode,
+            max_threads,
+            shape_policy: PreparedReadShapePolicy::new(&options.shape_policy),
+        })
+    }
+
+    fn raw_options(&self) -> sys::ArcadiaTioHistoricalReadWithShapePolicyOptions {
+        sys::ArcadiaTioHistoricalReadWithShapePolicyOptions {
+            version: 1,
+            struct_size: mem::size_of::<sys::ArcadiaTioHistoricalReadWithShapePolicyOptions>(),
+            mode: self.mode,
+            max_threads: self.max_threads,
+            shape_policy: self.shape_policy.raw_options(),
+        }
+    }
+}
+
 fn coordinate_input(
     coord: &CoordinateSpec,
     name: Option<&CString>,
@@ -1883,11 +3170,8 @@ mod tests {
 
     #[test]
     fn invalid_compression_mode_rejects_before_native_create() {
-        let mut options = CreateOptions::streaming(
-            DType::F64,
-            vec![DimSpec::new(AxisKind::Time, 0)],
-            0,
-        );
+        let mut options =
+            CreateOptions::streaming(DType::F64, vec![DimSpec::new(AxisKind::Time, 0)], 0);
         options.compression = Some(CompressionConfig {
             mode: 99,
             codec: sys::ARCADIA_TIO_COMPRESSION_CODEC_ZSTD,

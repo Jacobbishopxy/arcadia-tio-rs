@@ -66,8 +66,13 @@ fn main() {
                 .parent()
                 .expect("native target dir should have a parent")
                 .join("include");
-            if root_vendored_include.is_dir() && env::var_os("ARCADIA_TIO_CAPI_INCLUDE_DIR").is_none() {
-                println!("cargo:metadata=include_dir={}", root_vendored_include.display());
+            if root_vendored_include.is_dir()
+                && env::var_os("ARCADIA_TIO_CAPI_INCLUDE_DIR").is_none()
+            {
+                println!(
+                    "cargo:metadata=include_dir={}",
+                    root_vendored_include.display()
+                );
                 println!(
                     "cargo:rustc-env=ARCADIA_TIO_CAPI_RESOLVED_INCLUDE_DIR={}",
                     root_vendored_include.display()

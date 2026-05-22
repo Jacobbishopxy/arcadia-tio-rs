@@ -60,6 +60,14 @@ pub type ArcadiaTioMetadataStability = c_int;
 pub type ArcadiaTioHeaderProfile = c_int;
 /// Entry-selector tag value for historical/current selector reads.
 pub type ArcadiaTioEntrySelectorTag = c_int;
+/// Read execution mode value for option-bearing read APIs.
+pub type ArcadiaTioReadExecutionMode = c_int;
+/// Read shape policy tag value for current and historical reads.
+pub type ArcadiaTioReadShapePolicyTag = c_int;
+/// Axis identity mode used by universe-aware create APIs.
+pub type ArcadiaTioAxisIdentityMode = c_int;
+/// Historical query source kind reported by historical read APIs.
+pub type ArcadiaTioHistoricalQuerySourceKind = c_int;
 
 macro_rules! raw_constant {
     ($name:ident: $ty:ty = $value:expr) => {
@@ -142,6 +150,19 @@ raw_constant!(ARCADIA_TIO_HEADER_PROFILE_RANDOM_ACCESS: ArcadiaTioHeaderProfile 
 raw_constant!(ARCADIA_TIO_ENTRY_SELECTOR_ALL: ArcadiaTioEntrySelectorTag = 0);
 raw_constant!(ARCADIA_TIO_ENTRY_SELECTOR_RANGE: ArcadiaTioEntrySelectorTag = 1);
 raw_constant!(ARCADIA_TIO_ENTRY_SELECTOR_TAKE: ArcadiaTioEntrySelectorTag = 2);
+raw_constant!(ARCADIA_TIO_READ_EXECUTION_SERIAL: ArcadiaTioReadExecutionMode = 0);
+raw_constant!(ARCADIA_TIO_READ_EXECUTION_PARALLEL_THREADS: ArcadiaTioReadExecutionMode = 1);
+raw_constant!(ARCADIA_TIO_READ_SHAPE_POLICY_FILE_ENVELOPE: ArcadiaTioReadShapePolicyTag = 0);
+raw_constant!(ARCADIA_TIO_READ_SHAPE_POLICY_CURRENT_HEAD: ArcadiaTioReadShapePolicyTag = 1);
+raw_constant!(ARCADIA_TIO_READ_SHAPE_POLICY_UNION: ArcadiaTioReadShapePolicyTag = 2);
+raw_constant!(ARCADIA_TIO_READ_SHAPE_POLICY_INTERSECTION: ArcadiaTioReadShapePolicyTag = 3);
+raw_constant!(ARCADIA_TIO_READ_SHAPE_POLICY_INITIAL_REGISTERED: ArcadiaTioReadShapePolicyTag = 4);
+raw_constant!(ARCADIA_TIO_READ_SHAPE_POLICY_EXPLICIT_EXTENTS: ArcadiaTioReadShapePolicyTag = 5);
+raw_constant!(ARCADIA_TIO_READ_SHAPE_POLICY_EXPLICIT_UNIVERSE: ArcadiaTioReadShapePolicyTag = 6);
+raw_constant!(ARCADIA_TIO_READ_SHAPE_POLICY_EXPLICIT_UNIVERSE_AND_EXTENTS: ArcadiaTioReadShapePolicyTag = 7);
+raw_constant!(ARCADIA_TIO_AXIS_IDENTITY_EXTENT_ONLY: ArcadiaTioAxisIdentityMode = 0);
+raw_constant!(ARCADIA_TIO_AXIS_IDENTITY_UNIVERSE_AWARE: ArcadiaTioAxisIdentityMode = 1);
+raw_constant!(ARCADIA_TIO_HISTORICAL_QUERY_SOURCE_RETAINED_VISIBLE_COMMIT: ArcadiaTioHistoricalQuerySourceKind = 0);
 
 /// Write-time compression config passed by pointer.
 #[repr(C)]
@@ -223,6 +244,244 @@ pub struct ArcadiaTioEntrySelector {
     pub indices: *const u32,
     /// Number of indices.
     pub indices_len: usize,
+}
+
+/// Explicit universe target for shape-policy reads.
+#[repr(C)]
+#[derive(Debug, Copy, Clone)]
+pub struct ArcadiaTioExplicitUniverseAxisTarget {
+    /// Axis index.
+    pub axis: u32,
+    /// Universe family UUID bytes.
+    pub family_uuid: [u8; 16],
+    /// Universe version UUID bytes.
+    pub version_uuid: [u8; 16],
+    /// Target universe length.
+    pub length: u64,
+}
+
+/// Explicit extent target for split-domain shape-policy reads.
+#[repr(C)]
+#[derive(Debug, Copy, Clone)]
+pub struct ArcadiaTioExplicitExtentAxisTarget {
+    /// Axis index.
+    pub axis: u32,
+    /// Target axis length.
+    pub length: u64,
+}
+
+/// Axis identity descriptor for universe-aware create APIs.
+#[repr(C)]
+#[derive(Debug, Copy, Clone)]
+pub struct ArcadiaTioAxisIdentityInput {
+    /// Structure version; set to 1.
+    pub version: u32,
+    /// Size of this struct in bytes.
+    pub struct_size: usize,
+    /// Axis index.
+    pub axis: u32,
+    /// Axis identity mode.
+    pub mode: ArcadiaTioAxisIdentityMode,
+}
+
+/// Universe binding for one axis in one appended slot.
+#[repr(C)]
+#[derive(Debug, Copy, Clone)]
+pub struct ArcadiaTioUniverseBindingInput {
+    /// Axis index.
+    pub axis: u32,
+    /// Universe family UUID bytes.
+    pub family_uuid: [u8; 16],
+    /// Universe version UUID bytes.
+    pub version_uuid: [u8; 16],
+    /// Source universe length.
+    pub length: u64,
+}
+
+/// Borrowed universe bindings for one appended slot.
+#[repr(C)]
+#[derive(Debug, Copy, Clone)]
+pub struct ArcadiaTioSlotUniverseBindingInput {
+    /// Borrowed universe binding array.
+    pub axes: *const ArcadiaTioUniverseBindingInput,
+    /// Number of axis bindings.
+    pub axes_len: usize,
+}
+
+/// Optional universe remap for one axis in one appended slot.
+#[repr(C)]
+#[derive(Debug, Copy, Clone)]
+pub struct ArcadiaTioUniverseRemapInput {
+    /// Structure version; set to 1.
+    pub version: u32,
+    /// Size of this struct in bytes.
+    pub struct_size: usize,
+    /// Axis index.
+    pub axis: u32,
+    /// Target universe family UUID bytes.
+    pub target_family_uuid: [u8; 16],
+    /// Target universe version UUID bytes.
+    pub target_version_uuid: [u8; 16],
+    /// Target universe length.
+    pub target_length: u64,
+    /// Borrowed source-to-target index mapping.
+    pub source_to_target: *const u64,
+    /// Number of mapping entries.
+    pub source_to_target_len: usize,
+}
+
+/// Borrowed universe remaps for one appended slot.
+#[repr(C)]
+#[derive(Debug, Copy, Clone)]
+pub struct ArcadiaTioSlotUniverseRemapInput {
+    /// Borrowed universe remap array.
+    pub axes: *const ArcadiaTioUniverseRemapInput,
+    /// Number of axis remaps.
+    pub axes_len: usize,
+}
+
+/// Universe-aware create options.
+#[repr(C)]
+#[derive(Debug, Copy, Clone)]
+pub struct ArcadiaTioCreateWithUniverseOptions {
+    /// Structure version; set to 1.
+    pub version: u32,
+    /// Size of this struct in bytes.
+    pub struct_size: usize,
+    /// Borrowed axis identity array.
+    pub axis_identities: *const ArcadiaTioAxisIdentityInput,
+    /// Number of axis identity descriptors.
+    pub axis_identities_len: usize,
+}
+
+/// Universe-aware append options.
+#[repr(C)]
+#[derive(Debug, Copy, Clone)]
+pub struct ArcadiaTioAppendWithUniverseOptions {
+    /// Structure version; set to 1.
+    pub version: u32,
+    /// Size of this struct in bytes.
+    pub struct_size: usize,
+    /// Borrowed per-slot universe binding array.
+    pub slots: *const ArcadiaTioSlotUniverseBindingInput,
+    /// Number of appended slots.
+    pub slots_len: usize,
+    /// Borrowed per-slot universe remap array.
+    pub remap_slots: *const ArcadiaTioSlotUniverseRemapInput,
+    /// Number of remap slots.
+    pub remap_slots_len: usize,
+}
+
+/// Read shape policy options for current and historical reads.
+#[repr(C)]
+#[derive(Debug, Copy, Clone)]
+pub struct ArcadiaTioReadShapePolicyOptions {
+    /// Structure version; set to 1.
+    pub version: u32,
+    /// Size of this struct in bytes.
+    pub struct_size: usize,
+    /// Shape policy tag.
+    pub policy: ArcadiaTioReadShapePolicyTag,
+    /// Borrowed explicit extents for all axes.
+    pub explicit_extents: *const u64,
+    /// Number of explicit extents.
+    pub explicit_extents_len: usize,
+    /// Borrowed explicit universe axis targets.
+    pub explicit_universe_axes: *const ArcadiaTioExplicitUniverseAxisTarget,
+    /// Number of explicit universe axis targets.
+    pub explicit_universe_axes_len: usize,
+    /// Borrowed explicit extent axis targets for split-domain policies.
+    pub explicit_extent_axes: *const ArcadiaTioExplicitExtentAxisTarget,
+    /// Number of explicit extent axis targets.
+    pub explicit_extent_axes_len: usize,
+}
+
+/// Current read options with execution mode and shape policy.
+#[repr(C)]
+#[derive(Debug, Copy, Clone)]
+pub struct ArcadiaTioReadWithShapePolicyOptions {
+    /// Structure version; set to 1.
+    pub version: u32,
+    /// Size of this struct in bytes.
+    pub struct_size: usize,
+    /// Requested execution mode.
+    pub mode: ArcadiaTioReadExecutionMode,
+    /// Maximum thread count for parallel execution.
+    pub max_threads: usize,
+    /// Shape policy options.
+    pub shape_policy: ArcadiaTioReadShapePolicyOptions,
+}
+
+/// Historical read options with execution mode and shape policy.
+#[repr(C)]
+#[derive(Debug, Copy, Clone)]
+pub struct ArcadiaTioHistoricalReadWithShapePolicyOptions {
+    /// Structure version; set to 1.
+    pub version: u32,
+    /// Size of this struct in bytes.
+    pub struct_size: usize,
+    /// Requested execution mode.
+    pub mode: ArcadiaTioReadExecutionMode,
+    /// Maximum thread count for parallel execution.
+    pub max_threads: usize,
+    /// Shape policy options.
+    pub shape_policy: ArcadiaTioReadShapePolicyOptions,
+}
+
+/// Current read execution report returned by option-bearing current reads.
+#[repr(C)]
+#[derive(Debug, Copy, Clone)]
+pub struct ArcadiaTioReadExecutionReport {
+    /// Structure version; set to 1.
+    pub version: u32,
+    /// Size of this struct in bytes.
+    pub struct_size: usize,
+    /// Requested execution mode.
+    pub requested_mode: ArcadiaTioReadExecutionMode,
+    /// Requested maximum query threads.
+    pub query_max_threads: usize,
+    /// Effective execution mode used by the query.
+    pub query_effective_mode: ArcadiaTioReadExecutionMode,
+    /// Effective thread count used by the query.
+    pub query_effective_threads: usize,
+    /// Native-owned query parallel runtime string.
+    pub query_parallel_runtime: *mut c_char,
+    /// Native-owned query parallel fallback reason string.
+    pub query_parallel_fallback_reason: *mut c_char,
+    /// Native-owned query parallel reason code string.
+    pub query_parallel_reason_code: *mut c_char,
+    /// Native-owned query parallel reason-code taxonomy string.
+    pub query_parallel_reason_code_taxonomy: *mut c_char,
+}
+
+/// Historical read execution report returned by option-bearing historical reads.
+#[repr(C)]
+#[derive(Debug, Copy, Clone)]
+pub struct ArcadiaTioHistoricalReadExecutionReport {
+    /// Structure version; set to 1.
+    pub version: u32,
+    /// Size of this struct in bytes.
+    pub struct_size: usize,
+    /// Requested execution mode.
+    pub requested_mode: ArcadiaTioReadExecutionMode,
+    /// Requested maximum query threads.
+    pub query_max_threads: usize,
+    /// Effective execution mode used by the query.
+    pub query_effective_mode: ArcadiaTioReadExecutionMode,
+    /// Effective thread count used by the query.
+    pub query_effective_threads: usize,
+    /// Native-owned query parallel runtime string.
+    pub query_parallel_runtime: *mut c_char,
+    /// Native-owned query parallel fallback reason string.
+    pub query_parallel_fallback_reason: *mut c_char,
+    /// Native-owned query parallel reason code string.
+    pub query_parallel_reason_code: *mut c_char,
+    /// Native-owned query parallel reason-code taxonomy string.
+    pub query_parallel_reason_code_taxonomy: *mut c_char,
+    /// Historical query source kind.
+    pub query_source_kind: ArcadiaTioHistoricalQuerySourceKind,
+    /// Commit sequence used for the historical query.
+    pub query_commit_seq: u64,
 }
 
 /// Axis label item in file metadata.
@@ -420,6 +679,25 @@ unsafe extern "C" {
         user_kv_values: *const *const c_char,
         user_kv_len: usize,
     ) -> *mut ArcadiaTioHandle;
+    /// Creates a random-access V4 TensorFile with universe-aware axis identity options.
+    pub fn arcadia_tio_create_random_access_with_universe(
+        path: *const c_char,
+        dtype: ArcadiaTioDType,
+        dim_kinds: *const ArcadiaTioAxisKind,
+        dim_lens: *const u32,
+        rank: usize,
+        append_dim: usize,
+        dim_names: *const *const c_char,
+        dim_names_len: usize,
+        symbols: *const *const c_char,
+        symbols_len: usize,
+        channels: *const *const c_char,
+        channels_len: usize,
+        user_kv_keys: *const *const c_char,
+        user_kv_values: *const *const c_char,
+        user_kv_len: usize,
+        options: *const ArcadiaTioCreateWithUniverseOptions,
+    ) -> *mut ArcadiaTioHandle;
     /// Creates a streaming V4 TensorFile.
     pub fn arcadia_tio_create_streaming(
         path: *const c_char,
@@ -446,6 +724,25 @@ unsafe extern "C" {
         user_kv_keys: *const *const c_char,
         user_kv_values: *const *const c_char,
         user_kv_len: usize,
+    ) -> *mut ArcadiaTioHandle;
+    /// Creates a streaming V4 TensorFile with universe-aware axis identity options.
+    pub fn arcadia_tio_create_streaming_with_universe(
+        path: *const c_char,
+        dtype: ArcadiaTioDType,
+        dim_kinds: *const ArcadiaTioAxisKind,
+        dim_lens: *const u32,
+        rank: usize,
+        append_dim: usize,
+        dim_names: *const *const c_char,
+        dim_names_len: usize,
+        symbols: *const *const c_char,
+        symbols_len: usize,
+        channels: *const *const c_char,
+        channels_len: usize,
+        user_kv_keys: *const *const c_char,
+        user_kv_values: *const *const c_char,
+        user_kv_len: usize,
+        options: *const ArcadiaTioCreateWithUniverseOptions,
     ) -> *mut ArcadiaTioHandle;
     /// Creates a random-access V4 TensorFile with coordinate descriptors.
     pub fn arcadia_tio_create_random_access_with_coordinates(
@@ -551,6 +848,16 @@ unsafe extern "C" {
         out_start_entry: *mut u32,
         out_end_entry: *mut u32,
     ) -> c_int;
+    /// Appends f32 payload data with universe bindings and returns assigned entry range.
+    pub fn arcadia_tio_append_f32_with_universe(
+        handle: *mut ArcadiaTioHandle,
+        data: *const c_float,
+        shape: *const u64,
+        rank: usize,
+        options: *const ArcadiaTioAppendWithUniverseOptions,
+        out_start_entry: *mut u32,
+        out_end_entry: *mut u32,
+    ) -> c_int;
     /// Appends f64 payload data.
     pub fn arcadia_tio_append_f64(
         handle: *mut ArcadiaTioHandle,
@@ -564,6 +871,16 @@ unsafe extern "C" {
         data: *const c_double,
         shape: *const u64,
         rank: usize,
+        out_start_entry: *mut u32,
+        out_end_entry: *mut u32,
+    ) -> c_int;
+    /// Appends f64 payload data with universe bindings and returns assigned entry range.
+    pub fn arcadia_tio_append_f64_with_universe(
+        handle: *mut ArcadiaTioHandle,
+        data: *const c_double,
+        shape: *const u64,
+        rank: usize,
+        options: *const ArcadiaTioAppendWithUniverseOptions,
         out_start_entry: *mut u32,
         out_end_entry: *mut u32,
     ) -> c_int;
@@ -583,6 +900,16 @@ unsafe extern "C" {
         out_start_entry: *mut u32,
         out_end_entry: *mut u32,
     ) -> c_int;
+    /// Appends i32 payload data with universe bindings and returns assigned entry range.
+    pub fn arcadia_tio_append_i32_with_universe(
+        handle: *mut ArcadiaTioHandle,
+        data: *const i32,
+        shape: *const u64,
+        rank: usize,
+        options: *const ArcadiaTioAppendWithUniverseOptions,
+        out_start_entry: *mut u32,
+        out_end_entry: *mut u32,
+    ) -> c_int;
     /// Appends i64 payload data.
     pub fn arcadia_tio_append_i64(
         handle: *mut ArcadiaTioHandle,
@@ -596,6 +923,16 @@ unsafe extern "C" {
         data: *const i64,
         shape: *const u64,
         rank: usize,
+        out_start_entry: *mut u32,
+        out_end_entry: *mut u32,
+    ) -> c_int;
+    /// Appends i64 payload data with universe bindings and returns assigned entry range.
+    pub fn arcadia_tio_append_i64_with_universe(
+        handle: *mut ArcadiaTioHandle,
+        data: *const i64,
+        shape: *const u64,
+        rank: usize,
+        options: *const ArcadiaTioAppendWithUniverseOptions,
         out_start_entry: *mut u32,
         out_end_entry: *mut u32,
     ) -> c_int;
@@ -676,5 +1013,63 @@ unsafe extern "C" {
         selectors: *const ArcadiaTioEntrySelector,
         selectors_len: usize,
         out_tensor: *mut ArcadiaTioTensor,
+    ) -> c_int;
+    /// Reads selector data at a commit into a dense tensor and optional mask.
+    pub fn arcadia_tio_read_at_commit_dense(
+        handle: *mut ArcadiaTioHandle,
+        commit_seq: u64,
+        selectors: *const ArcadiaTioEntrySelector,
+        selectors_len: usize,
+        fill_value: c_double,
+        out_tensor: *mut ArcadiaTioTensor,
+        out_mask: *mut ArcadiaTioMask,
+    ) -> c_int;
+    /// Frees native-owned strings in a current read execution report.
+    pub fn arcadia_tio_read_execution_report_free(report: *mut ArcadiaTioReadExecutionReport);
+    /// Frees native-owned strings in a historical read execution report.
+    pub fn arcadia_tio_historical_read_execution_report_free(
+        report: *mut ArcadiaTioHistoricalReadExecutionReport,
+    );
+    /// Reads current selector data with a shape policy into an owned tensor.
+    pub fn arcadia_tio_read_with_shape_policy(
+        handle: *mut ArcadiaTioHandle,
+        selectors: *const ArcadiaTioEntrySelector,
+        selectors_len: usize,
+        options: *const ArcadiaTioReadWithShapePolicyOptions,
+        out_tensor: *mut ArcadiaTioTensor,
+        out_report: *mut ArcadiaTioReadExecutionReport,
+    ) -> c_int;
+    /// Reads current selector data with a shape policy into a dense tensor and optional mask.
+    pub fn arcadia_tio_read_with_shape_policy_dense(
+        handle: *mut ArcadiaTioHandle,
+        selectors: *const ArcadiaTioEntrySelector,
+        selectors_len: usize,
+        options: *const ArcadiaTioReadWithShapePolicyOptions,
+        fill_value: c_double,
+        out_tensor: *mut ArcadiaTioTensor,
+        out_mask: *mut ArcadiaTioMask,
+        out_report: *mut ArcadiaTioReadExecutionReport,
+    ) -> c_int;
+    /// Reads historical selector data with a shape policy into an owned tensor.
+    pub fn arcadia_tio_read_at_commit_with_shape_policy(
+        handle: *mut ArcadiaTioHandle,
+        commit_seq: u64,
+        selectors: *const ArcadiaTioEntrySelector,
+        selectors_len: usize,
+        options: *const ArcadiaTioHistoricalReadWithShapePolicyOptions,
+        out_tensor: *mut ArcadiaTioTensor,
+        out_report: *mut ArcadiaTioHistoricalReadExecutionReport,
+    ) -> c_int;
+    /// Reads historical selector data with a shape policy into a dense tensor and optional mask.
+    pub fn arcadia_tio_read_at_commit_with_shape_policy_dense(
+        handle: *mut ArcadiaTioHandle,
+        commit_seq: u64,
+        selectors: *const ArcadiaTioEntrySelector,
+        selectors_len: usize,
+        options: *const ArcadiaTioHistoricalReadWithShapePolicyOptions,
+        fill_value: c_double,
+        out_tensor: *mut ArcadiaTioTensor,
+        out_mask: *mut ArcadiaTioMask,
+        out_report: *mut ArcadiaTioHistoricalReadExecutionReport,
     ) -> c_int;
 }

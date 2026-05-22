@@ -3,10 +3,13 @@ use std::path::PathBuf;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
 use arcadia_tio_rs::{
-    AxisKind, CoordinateDType, CoordinateEncoding, CoordinateKind, CoordinateMonotonicity,
-    CompressionConfig, CoordinateOrdering, CoordinateSpec, CoordinateStorage, CoordinateStorageKind,
-    CoordinateUniqueness, CoordinateValidationStatus, CoordinateValues, CreateOptions, DType,
-    DimSpec, TensorData, TensorFile,
+    AppendWithUniverseOptions, AxisIdentityInput, AxisKind, CompressionConfig, CoordinateDType,
+    CoordinateEncoding, CoordinateKind, CoordinateMonotonicity, CoordinateOrdering, CoordinateSpec,
+    CoordinateStorage, CoordinateStorageKind, CoordinateUniqueness, CoordinateValidationStatus,
+    CoordinateValues, CreateOptions, CreateUniverseOptions, DType, DimSpec, EntrySelector,
+    ExplicitExtentAxisTarget, ExplicitUniverseAxisTarget, HistoricalQuerySourceKind,
+    HistoricalReadWithShapePolicyOptions, ReadShapePolicy, ReadWithShapePolicyOptions,
+    SlotUniverseBindings, TensorData, TensorFile, UniverseBinding,
 };
 
 #[test]
@@ -130,6 +133,130 @@ fn safe_wrapper_roundtrips_all_first_slice_numeric_dtypes() {
         |file| file.append_i64(&[10, 20, 30], &[3]),
         TensorData::I64(vec![10, 20, 30]),
     );
+}
+
+#[test]
+fn safe_wrapper_universe_shape_policy_and_historical_reads() {
+    let path = unique_path("safe-wrapper-universe-shape-policy.tio");
+    let dims = vec![
+        DimSpec::new(AxisKind::Time, 0).with_name("time"),
+        DimSpec::new(AxisKind::Symbol, 2).with_name("symbol"),
+        DimSpec::new(AxisKind::Channel, 2).with_name("channel"),
+    ];
+    let options = CreateOptions::streaming(DType::F32, dims, 0);
+    let universe_options = CreateUniverseOptions::new(vec![AxisIdentityInput::universe_aware(1)]);
+    let family = [42_u8; 16];
+
+    {
+        let mut file = TensorFile::create_with_universe(&path, options, universe_options)
+            .expect("create universe-aware wrapper file");
+        let first = AppendWithUniverseOptions::new(vec![SlotUniverseBindings::new(vec![
+            UniverseBinding::new(1, family, [1_u8; 16], 2),
+        ])]);
+        let first_range = file
+            .append_f32_with_universe(&[1.0, 1.0, 1.0, 1.0], &[1, 2, 2], &first)
+            .expect("append first universe row");
+        assert_eq!((first_range.start, first_range.end), (0, 1));
+
+        let second = AppendWithUniverseOptions::new(vec![SlotUniverseBindings::new(vec![
+            UniverseBinding::new(1, family, [2_u8; 16], 2),
+        ])]);
+        let second_range = file
+            .append_f32_with_universe(&[2.0, 2.0, 2.0, 2.0], &[1, 2, 2], &second)
+            .expect("append second universe row");
+        assert_eq!((second_range.start, second_range.end), (1, 2));
+    }
+
+    let file = TensorFile::open(&path).expect("reopen universe-aware wrapper file");
+    let current_selectors = vec![
+        EntrySelector::Range { start: 1, end: 2 },
+        EntrySelector::All,
+        EntrySelector::All,
+    ];
+    let current_policy = ReadShapePolicy::ExplicitUniverse(vec![ExplicitUniverseAxisTarget::new(
+        1, family, [2_u8; 16], 2,
+    )]);
+    let current = file
+        .read_with_shape_policy_dense(
+            &current_selectors,
+            ReadWithShapePolicyOptions::serial(current_policy),
+            -1.0,
+        )
+        .expect("current explicit-universe dense read");
+    assert_eq!(current.value.tensor.dtype, DType::F32);
+    assert_eq!(current.value.tensor.shape, vec![1, 2, 2]);
+    assert_eq!(current.value.tensor.data, TensorData::F32(vec![2.0; 4]));
+
+    let historical_policy =
+        ReadShapePolicy::ExplicitUniverse(vec![ExplicitUniverseAxisTarget::new(
+            1, family, [1_u8; 16], 2,
+        )]);
+    let historical = file
+        .read_at_commit_with_shape_policy_dense(
+            1,
+            &[],
+            HistoricalReadWithShapePolicyOptions::serial(historical_policy),
+            -1.0,
+        )
+        .expect("historical explicit-universe dense read");
+    assert_eq!(historical.value.tensor.shape, vec![1, 2, 2]);
+    assert_eq!(historical.value.tensor.data, TensorData::F32(vec![1.0; 4]));
+    assert_eq!(historical.execution.query_commit_seq, 1);
+    assert_eq!(
+        historical.execution.query_source_kind,
+        HistoricalQuerySourceKind::RetainedVisibleCommit
+    );
+
+    let combined_policy = ReadShapePolicy::ExplicitUniverseAndExtents {
+        universe_axes: vec![ExplicitUniverseAxisTarget::new(1, family, [2_u8; 16], 2)],
+        extent_axes: vec![ExplicitExtentAxisTarget::new(2, 3)],
+    };
+    let combined = file
+        .read_with_shape_policy_dense(
+            &current_selectors,
+            ReadWithShapePolicyOptions::serial(combined_policy),
+            -1.0,
+        )
+        .expect("combined explicit-universe/extents dense read");
+    assert_eq!(combined.value.tensor.shape, vec![1, 2, 3]);
+    assert_eq!(combined.value.mask.as_ref().map(Vec::len), Some(6));
+    assert_eq!(combined.value.mask.as_ref().expect("mask")[2], 0);
+
+    drop(file);
+    let _ = fs::remove_file(path);
+}
+
+#[test]
+fn safe_wrapper_rejects_universe_create_with_coordinates() {
+    let path = unique_path("safe-wrapper-universe-coordinate-reject.tio");
+    let dims = vec![
+        DimSpec::new(AxisKind::Time, 0),
+        DimSpec::new(AxisKind::Channel, 1),
+    ];
+    let mut options = CreateOptions::streaming(DType::F32, dims, 0);
+    options.coordinates.push(CoordinateSpec {
+        axis: 1,
+        name: Some("channel_id".to_string()),
+        kind: CoordinateKind::LabelId,
+        encoding: CoordinateEncoding::Plain,
+        storage: CoordinateStorage::Inline(CoordinateValues::I32(vec![7])),
+        ordering: CoordinateOrdering {
+            sorted: arcadia_tio_rs::CoordinateSortedness::Ascending,
+            monotonicity: CoordinateMonotonicity::StrictlyIncreasing,
+            uniqueness: CoordinateUniqueness::Unique,
+        },
+        required: true,
+    });
+    let err = match TensorFile::create_with_universe(
+        &path,
+        options,
+        CreateUniverseOptions::new(vec![AxisIdentityInput::universe_aware(1)]),
+    ) {
+        Ok(_) => panic!("coordinates plus universe create unexpectedly succeeded"),
+        Err(err) => err,
+    };
+    assert_eq!(err.code(), arcadia_tio_rs::ErrorCode::InvalidArgument);
+    assert!(!path.exists());
 }
 
 fn roundtrip_dtype(
