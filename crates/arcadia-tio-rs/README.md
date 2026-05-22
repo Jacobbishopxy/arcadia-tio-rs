@@ -7,17 +7,21 @@ This crate is source-visible wrapper code only. It depends on
 depend on the private `arcadia-tio` Rust implementation crate in its normal
 consumer build path.
 
-The API slice is intentionally bounded but includes the beta read-shape and
-layout-create surface: safe lifecycle ownership, owned error strings,
-create/open metadata types, policy/inferred create helpers, write-forward
-compression selection, bulk tensor I/O helpers, universe-aware create/append
-authoring, current read options and shape policies, historical `read_at_commit`
-options and shape policies, and dense mask materialization. Append helpers
-borrow Rust slices only for the duration of one bulk FFI call, validate
-dtype/rank/shape/data length before crossing the ABI, and return the assigned
-append-entry range. Read helpers copy native-owned tensor/mask/report outputs
-into Rust-owned values and immediately free the C allocation; this slice does
-not expose zero-copy borrowed views over native buffers.
+The API slice is intentionally bounded but now covers the agreed public Rust
+17-family parity scope for beta workflows: safe lifecycle ownership, owned
+error strings, create/open metadata types, policy/inferred create helpers,
+write-forward compression selection, bulk tensor I/O helpers, universe-aware
+create/append authoring, current read options and shape policies, historical
+`read_at_commit` options and shape policies, dense mask materialization,
+f32/f64 rewrite, rewrite-slice, and clear-block mutation helpers, scoped
+reform and compaction workflows, and V4 diagnostics/precise-accounting reports.
+Append, mutation, reform, compaction, and diagnostics helpers borrow Rust
+slices/paths only for the duration of one bulk FFI call, validate
+dtype/rank/shape/data length before crossing the ABI where possible, and return
+or surface the native status. Read and report helpers copy native-owned
+tensor/mask/report outputs into Rust-owned values and immediately free the C
+allocation; this slice does not expose zero-copy borrowed views over native
+buffers.
 
 Native coordinate lookup helpers are deferred until the C ABI exposes a clear
 lookup ownership/error contract.
@@ -54,14 +58,19 @@ assert_eq!(tensor.data, TensorData::F64(vec![1.0, 2.0, 3.0]));
 
 ## Parity caveats
 
-This is not broad parity with the private Rust crate. It currently covers bulk
+Within the maintained API parity matrix, this crate reaches 17/17 source-visible
+public Rust capability families for the agreed beta workflow scope. This is not
+broad parity with every private Rust maintainer hook. It currently covers bulk
 create/open/append/read, RegularChunked policy create, inferred create,
 universe-aware authoring, current and historical read options, current and
 historical read-shape policies, write-forward uncompressed/zstd compression
-controls, and metadata helpers. It does not expose rewrite, reform, compaction,
-retained-history compaction workflows, query-attribution, zero-copy native views,
-native exact/range coordinate lookup helpers, or compressed storage-accounting
-eligibility claims.
+controls, metadata helpers, scoped f32/f64 rewrite/clear-block mutation helpers,
+non-precise reform/compaction workflows including retained-history compaction
+reports, and V4 diagnostics/precise-accounting report APIs. It does not expose
+query-attribution, zero-copy native views, native exact/range coordinate lookup
+helpers, or compressed storage-accounting eligibility claims. Clear-block and
+unsupported auto-compaction calls intentionally surface native policy/layout
+support errors.
 
 ## Local test/runtime library setup
 

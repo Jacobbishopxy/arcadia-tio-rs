@@ -68,6 +68,18 @@ pub type ArcadiaTioReadShapePolicyTag = c_int;
 pub type ArcadiaTioAxisIdentityMode = c_int;
 /// Historical query source kind reported by historical read APIs.
 pub type ArcadiaTioHistoricalQuerySourceKind = c_int;
+/// Compaction mode selector value.
+pub type ArcadiaTioCompactionModeTag = c_int;
+/// Reform target layout selector value.
+pub type ArcadiaTioReformTargetLayout = c_int;
+/// Status value for non-precise V4 report APIs.
+pub type ArcadiaTioV4ReportStatus = c_int;
+/// Ordinary V4 compaction-analysis policy value.
+pub type ArcadiaTioV4CompactionAnalysisPolicy = c_int;
+/// Precise-accounting field selector value.
+pub type ArcadiaTioV4PreciseAccountingField = c_int;
+/// Retained-history compaction policy value.
+pub type ArcadiaTioV4RetainedHistoryPolicy = c_int;
 
 macro_rules! raw_constant {
     ($name:ident: $ty:ty = $value:expr) => {
@@ -163,6 +175,20 @@ raw_constant!(ARCADIA_TIO_READ_SHAPE_POLICY_EXPLICIT_UNIVERSE_AND_EXTENTS: Arcad
 raw_constant!(ARCADIA_TIO_AXIS_IDENTITY_EXTENT_ONLY: ArcadiaTioAxisIdentityMode = 0);
 raw_constant!(ARCADIA_TIO_AXIS_IDENTITY_UNIVERSE_AWARE: ArcadiaTioAxisIdentityMode = 1);
 raw_constant!(ARCADIA_TIO_HISTORICAL_QUERY_SOURCE_RETAINED_VISIBLE_COMMIT: ArcadiaTioHistoricalQuerySourceKind = 0);
+raw_constant!(ARCADIA_TIO_COMPACTION_COPY_LIVE: ArcadiaTioCompactionModeTag = 0);
+raw_constant!(ARCADIA_TIO_COMPACTION_REBLOCK: ArcadiaTioCompactionModeTag = 1);
+raw_constant!(ARCADIA_TIO_REFORM_TARGET_PRESERVE_FAMILY: ArcadiaTioReformTargetLayout = 0);
+raw_constant!(ARCADIA_TIO_REFORM_TARGET_WHOLE_APPEND_UNIT: ArcadiaTioReformTargetLayout = 1);
+raw_constant!(ARCADIA_TIO_REFORM_TARGET_REGULAR_CHUNKED: ArcadiaTioReformTargetLayout = 2);
+raw_constant!(ARCADIA_TIO_V4_REPORT_COMPLETE: ArcadiaTioV4ReportStatus = 0);
+raw_constant!(ARCADIA_TIO_V4_REPORT_UNSUPPORTED: ArcadiaTioV4ReportStatus = 1);
+raw_constant!(ARCADIA_TIO_V4_REPORT_UNKNOWN: ArcadiaTioV4ReportStatus = 2);
+raw_constant!(ARCADIA_TIO_V4_COMPACTION_POLICY_COMPACT_TO_CURRENT_STATE: ArcadiaTioV4CompactionAnalysisPolicy = 0);
+raw_constant!(ARCADIA_TIO_V4_PRECISE_ACCOUNTING_UNREACHABLE_BYTES: ArcadiaTioV4PreciseAccountingField = 0);
+raw_constant!(ARCADIA_TIO_V4_PRECISE_ACCOUNTING_RETAINED_HISTORY_REQUIRED_BYTES: ArcadiaTioV4PreciseAccountingField = 1);
+raw_constant!(ARCADIA_TIO_V4_PRECISE_ACCOUNTING_POPPED_SKIPPED_BYTES: ArcadiaTioV4PreciseAccountingField = 2);
+raw_constant!(ARCADIA_TIO_V4_PRECISE_ACCOUNTING_RECLAIMABLE_BYTES: ArcadiaTioV4PreciseAccountingField = 3);
+raw_constant!(ARCADIA_TIO_V4_RETAINED_HISTORY_RETAIN_LAST: ArcadiaTioV4RetainedHistoryPolicy = 0);
 
 /// Write-time compression config passed by pointer.
 #[repr(C)]
@@ -220,6 +246,398 @@ pub struct ArcadiaTioMask {
     pub len: usize,
 }
 
+/// Compaction behavior selector passed to compaction APIs.
+#[repr(C)]
+#[derive(Debug, Copy, Clone)]
+pub struct ArcadiaTioCompactionMode {
+    /// Compaction mode tag.
+    pub kind: ArcadiaTioCompactionModeTag,
+    /// Entry block size used for reblocking modes.
+    pub reblock_entry_block_size: u32,
+}
+
+/// Shallow compatibility compaction statistics.
+#[repr(C)]
+#[derive(Debug, Copy, Clone)]
+pub struct ArcadiaTioCompactionStats {
+    /// Bytes considered live by the native implementation.
+    pub live_bytes: u64,
+    /// Bytes considered dead by the native implementation.
+    pub dead_bytes: u64,
+    /// Dead-byte ratio reported by the native implementation.
+    pub dead_ratio: c_double,
+    /// Number of commits represented by the file.
+    pub commit_count: u32,
+}
+
+/// Reform destination layout options.
+#[repr(C)]
+#[derive(Debug, Copy, Clone)]
+pub struct ArcadiaTioReformOptions {
+    /// Structure version; set to 1.
+    pub version: u32,
+    /// Structure size in bytes.
+    pub struct_size: usize,
+    /// Target layout family.
+    pub target_layout: ArcadiaTioReformTargetLayout,
+    /// Borrowed RegularChunked block shape.
+    pub regular_chunked_block_shape: *const u32,
+    /// Number of block-shape entries.
+    pub regular_chunked_block_shape_len: usize,
+}
+
+/// Native-owned reform diagnostic report.
+#[repr(C)]
+#[derive(Debug, Copy, Clone)]
+pub struct ArcadiaTioReformReport {
+    /// Structure version; set to 1.
+    pub version: u32,
+    /// Structure size in bytes.
+    pub struct_size: usize,
+    /// Native-owned stable reason code string.
+    pub reason_code: *mut c_char,
+    /// Native-owned reason-code taxonomy string.
+    pub reason_code_taxonomy: *mut c_char,
+    /// Native-owned human-readable reason string.
+    pub reason: *mut c_char,
+}
+
+/// Precise-accounting option flags for report-producing APIs.
+#[repr(C)]
+#[derive(Debug, Copy, Clone)]
+pub struct ArcadiaTioV4PreciseAccountingOptions {
+    /// Structure version; set to 1.
+    pub version: u32,
+    /// Structure size in bytes.
+    pub struct_size: usize,
+    /// Zero requests every precise field relevant to the report family.
+    pub requested_fields_mask: u32,
+    /// Nonzero includes human-readable omitted-field reason strings.
+    pub include_omitted_field_reasons: u8,
+}
+
+/// Precise-accounting field intentionally omitted by a report.
+#[repr(C)]
+#[derive(Debug, Copy, Clone)]
+pub struct ArcadiaTioV4OmittedPreciseAccountingField {
+    /// Structure version; set to 1.
+    pub version: u32,
+    /// Structure size in bytes.
+    pub struct_size: usize,
+    /// Omitted precise-accounting field id.
+    pub field: ArcadiaTioV4PreciseAccountingField,
+    /// Native-owned omission reason string.
+    pub reason: *mut c_char,
+}
+
+/// Precise-accounting byte values plus per-field validity metadata.
+#[repr(C)]
+#[derive(Debug, Copy, Clone)]
+pub struct ArcadiaTioV4PreciseAccountingBytes {
+    /// Structure version; set to 1.
+    pub version: u32,
+    /// Structure size in bytes.
+    pub struct_size: usize,
+    /// Nonzero when unreachable_bytes is valid.
+    pub has_unreachable_bytes: u8,
+    /// Precise unreachable bytes.
+    pub unreachable_bytes: u64,
+    /// Nonzero when retained_history_required_bytes is valid.
+    pub has_retained_history_required_bytes: u8,
+    /// Precise bytes required by retained history.
+    pub retained_history_required_bytes: u64,
+    /// Nonzero when popped_skipped_bytes is valid.
+    pub has_popped_skipped_bytes: u8,
+    /// Precise popped/skipped bytes.
+    pub popped_skipped_bytes: u64,
+    /// Nonzero when reclaimable_bytes is valid.
+    pub has_reclaimable_bytes: u8,
+    /// Precise reclaimable bytes.
+    pub reclaimable_bytes: u64,
+    /// Native-owned omitted-field array.
+    pub omitted_fields: *mut ArcadiaTioV4OmittedPreciseAccountingField,
+    /// Number of omitted-field entries.
+    pub omitted_fields_len: usize,
+    /// Native-owned omitted-field reason-code array aligned with omitted_fields.
+    pub omitted_field_reason_codes: *mut *mut c_char,
+    /// Number of omitted-field reason-code entries.
+    pub omitted_field_reason_codes_len: usize,
+}
+
+/// Bytes currently required by the visible head.
+#[repr(C)]
+#[derive(Debug, Copy, Clone)]
+pub struct ArcadiaTioV4CurrentHeadBytes {
+    /// Payload bytes.
+    pub payload_bytes: u64,
+    /// Index bytes.
+    pub index_bytes: u64,
+    /// Epoch bytes.
+    pub epoch_bytes: u64,
+    /// Auxiliary bytes.
+    pub aux_bytes: u64,
+    /// Commit bytes.
+    pub commit_bytes: u64,
+}
+
+/// Audit bytes for the visible commit chain.
+#[repr(C)]
+#[derive(Debug, Copy, Clone)]
+pub struct ArcadiaTioV4AuditBytes {
+    /// Commit bytes.
+    pub commit_bytes: u64,
+    /// Index bytes.
+    pub index_bytes: u64,
+    /// Epoch bytes.
+    pub epoch_bytes: u64,
+    /// Auxiliary bytes.
+    pub aux_bytes: u64,
+}
+
+/// Payload reuse byte breakdown.
+#[repr(C)]
+#[derive(Debug, Copy, Clone)]
+pub struct ArcadiaTioV4PayloadReuseBytes {
+    /// Payload bytes resurrected from previous commits.
+    pub resurrected_payload_bytes: u64,
+    /// Payload bytes shared with other visible data.
+    pub shared_payload_bytes: u64,
+}
+
+/// Superseded byte breakdown.
+#[repr(C)]
+#[derive(Debug, Copy, Clone)]
+pub struct ArcadiaTioV4SupersededBytes {
+    /// Superseded payload bytes.
+    pub payload_bytes: u64,
+    /// Superseded index bytes.
+    pub index_bytes: u64,
+    /// Superseded epoch bytes.
+    pub epoch_bytes: u64,
+    /// Superseded auxiliary bytes.
+    pub aux_bytes: u64,
+}
+
+/// Non-precise V4 source-file diagnostics report.
+#[repr(C)]
+#[derive(Debug, Copy, Clone)]
+pub struct ArcadiaTioV4DiagnosticsReport {
+    /// Structure version; set to 1.
+    pub version: u32,
+    /// Structure size in bytes.
+    pub struct_size: usize,
+    /// Report status.
+    pub status: ArcadiaTioV4ReportStatus,
+    /// Native-owned status reason string.
+    pub reason: *mut c_char,
+    /// Current-head bytes.
+    pub current_head: ArcadiaTioV4CurrentHeadBytes,
+    /// Visible-chain audit bytes.
+    pub visible_chain_audit: ArcadiaTioV4AuditBytes,
+    /// Payload reuse bytes.
+    pub payload_reuse: ArcadiaTioV4PayloadReuseBytes,
+    /// Superseded bytes.
+    pub superseded: ArcadiaTioV4SupersededBytes,
+    /// Bytes the report cannot classify.
+    pub unknown_bytes: u64,
+    /// Nonzero when precise unreachable-byte details were intentionally omitted.
+    pub omitted_unreachable_bytes: u8,
+    /// Native-owned omission reason string.
+    pub omitted_unreachable_bytes_reason: *mut c_char,
+}
+
+/// Precise V4 source-file diagnostics report.
+#[repr(C)]
+#[derive(Debug, Copy, Clone)]
+pub struct ArcadiaTioV4DiagnosticsPreciseReport {
+    /// Structure version; set to 1.
+    pub version: u32,
+    /// Structure size in bytes.
+    pub struct_size: usize,
+    /// Report status.
+    pub status: ArcadiaTioV4ReportStatus,
+    /// Native-owned status reason string.
+    pub reason: *mut c_char,
+    /// Current-head bytes.
+    pub current_head: ArcadiaTioV4CurrentHeadBytes,
+    /// Visible-chain audit bytes.
+    pub visible_chain_audit: ArcadiaTioV4AuditBytes,
+    /// Payload reuse bytes.
+    pub payload_reuse: ArcadiaTioV4PayloadReuseBytes,
+    /// Superseded bytes.
+    pub superseded: ArcadiaTioV4SupersededBytes,
+    /// Bytes the report cannot classify.
+    pub unknown_bytes: u64,
+    /// Precise-accounting values and validity flags.
+    pub precise_accounting: ArcadiaTioV4PreciseAccountingBytes,
+    /// Native-owned stable reason code string.
+    pub reason_code: *mut c_char,
+}
+
+/// Non-precise V4 ordinary compaction analysis report.
+#[repr(C)]
+#[derive(Debug, Copy, Clone)]
+pub struct ArcadiaTioV4CompactionAnalysisReport {
+    /// Structure version; set to 1.
+    pub version: u32,
+    /// Structure size in bytes.
+    pub struct_size: usize,
+    /// Report status.
+    pub status: ArcadiaTioV4ReportStatus,
+    /// Native-owned status reason string.
+    pub reason: *mut c_char,
+    /// Compaction policy analyzed.
+    pub policy: ArcadiaTioV4CompactionAnalysisPolicy,
+    /// Source file size in bytes.
+    pub source_file_bytes: u64,
+    /// Bytes required for current-state compaction.
+    pub current_state_required_bytes: u64,
+    /// Ordinary reclaimable bytes.
+    pub ordinary_reclaimable_bytes: u64,
+    /// Bytes the report cannot classify.
+    pub unknown_bytes: u64,
+    /// Nonzero when precise unreachable-byte details were intentionally omitted.
+    pub omitted_unreachable_bytes: u8,
+    /// Native-owned omission reason string.
+    pub omitted_unreachable_bytes_reason: *mut c_char,
+}
+
+/// Precise V4 ordinary compaction analysis report.
+#[repr(C)]
+#[derive(Debug, Copy, Clone)]
+pub struct ArcadiaTioV4CompactionAnalysisPreciseReport {
+    /// Structure version; set to 1.
+    pub version: u32,
+    /// Structure size in bytes.
+    pub struct_size: usize,
+    /// Report status.
+    pub status: ArcadiaTioV4ReportStatus,
+    /// Native-owned status reason string.
+    pub reason: *mut c_char,
+    /// Compaction policy analyzed.
+    pub policy: ArcadiaTioV4CompactionAnalysisPolicy,
+    /// Source file size in bytes.
+    pub source_file_bytes: u64,
+    /// Bytes required for current-state compaction.
+    pub current_state_required_bytes: u64,
+    /// Ordinary reclaimable bytes.
+    pub ordinary_reclaimable_bytes: u64,
+    /// Bytes the report cannot classify.
+    pub unknown_bytes: u64,
+    /// Precise-accounting values and validity flags.
+    pub precise_accounting: ArcadiaTioV4PreciseAccountingBytes,
+    /// Native-owned stable reason code string.
+    pub reason_code: *mut c_char,
+}
+
+/// Retained-history compaction options.
+#[repr(C)]
+#[derive(Debug, Copy, Clone)]
+pub struct ArcadiaTioV4RetainedHistoryCompactionOptions {
+    /// Structure version; set to 1.
+    pub version: u32,
+    /// Structure size in bytes.
+    pub struct_size: usize,
+    /// Retained-history policy.
+    pub policy: ArcadiaTioV4RetainedHistoryPolicy,
+    /// Number of latest commits to retain for retain-last policy.
+    pub retain_last_n: u32,
+}
+
+/// Non-precise V4 retained-history compaction report.
+#[repr(C)]
+#[derive(Debug, Copy, Clone)]
+pub struct ArcadiaTioV4RetainedHistoryCompactionReport {
+    /// Structure version; set to 1.
+    pub version: u32,
+    /// Structure size in bytes.
+    pub struct_size: usize,
+    /// Report status.
+    pub status: ArcadiaTioV4ReportStatus,
+    /// Native-owned status reason string.
+    pub reason: *mut c_char,
+    /// Count of retained commits.
+    pub retained_commit_count: u32,
+    /// Native-owned retained commit sequence array.
+    pub retained_commit_seqs: *mut u64,
+    /// Number of retained commit sequence entries.
+    pub retained_commit_seqs_len: usize,
+    /// Nonzero when unretained older commit count is present.
+    pub has_unretained_older_commit_count: u8,
+    /// Number of older commits not retained.
+    pub unretained_older_commit_count: u64,
+    /// Source file size in bytes.
+    pub source_file_bytes: u64,
+    /// Destination file size in bytes.
+    pub destination_file_bytes: u64,
+    /// Nonzero when precise unreachable-byte details were intentionally omitted.
+    pub omitted_unreachable_bytes: u8,
+    /// Native-owned omission reason string.
+    pub omitted_unreachable_bytes_reason: *mut c_char,
+}
+
+/// Precise V4 retained-history compaction report.
+#[repr(C)]
+#[derive(Debug, Copy, Clone)]
+pub struct ArcadiaTioV4RetainedHistoryCompactionPreciseReport {
+    /// Structure version; set to 1.
+    pub version: u32,
+    /// Structure size in bytes.
+    pub struct_size: usize,
+    /// Report status.
+    pub status: ArcadiaTioV4ReportStatus,
+    /// Native-owned status reason string.
+    pub reason: *mut c_char,
+    /// Count of retained commits.
+    pub retained_commit_count: u32,
+    /// Native-owned retained commit sequence array.
+    pub retained_commit_seqs: *mut u64,
+    /// Number of retained commit sequence entries.
+    pub retained_commit_seqs_len: usize,
+    /// Nonzero when unretained older commit count is present.
+    pub has_unretained_older_commit_count: u8,
+    /// Number of older commits not retained.
+    pub unretained_older_commit_count: u64,
+    /// Source file size in bytes.
+    pub source_file_bytes: u64,
+    /// Destination file size in bytes.
+    pub destination_file_bytes: u64,
+    /// Source-file precise accounting at retained-history compaction time.
+    pub precise_source_accounting: ArcadiaTioV4PreciseAccountingBytes,
+    /// Native-owned stable reason code string.
+    pub reason_code: *mut c_char,
+}
+
+/// Auto-compaction configuration stored in file metadata.
+#[repr(C)]
+#[derive(Debug, Copy, Clone)]
+pub struct ArcadiaTioAutoCompactionConfig {
+    /// Nonzero when auto-compaction is enabled.
+    pub enabled: u8,
+    /// Commit retention count for compaction.
+    pub retain_commits: u32,
+    /// Dead-byte ratio threshold.
+    pub dead_ratio_threshold: c_double,
+    /// Minimum dead bytes before compaction can trigger.
+    pub min_dead_bytes: u64,
+    /// Compaction mode.
+    pub mode: ArcadiaTioCompactionMode,
+    /// Commit interval for auto-compaction checks.
+    pub check_every_commits: u32,
+    /// Commit cooldown after compaction.
+    pub cooldown_commits: u32,
+}
+
+/// Auto-compaction state stored in file metadata.
+#[repr(C)]
+#[derive(Debug, Copy, Clone)]
+pub struct ArcadiaTioCompactionState {
+    /// Last compacted commit sequence.
+    pub last_compacted_commit_seq: u64,
+    /// Last compaction timestamp in Unix milliseconds.
+    pub last_compacted_at_unix_ms: u64,
+}
+
 /// Scalar return value for scalar reads.
 #[repr(C)]
 #[derive(Debug, Copy, Clone)]
@@ -230,7 +648,7 @@ pub struct ArcadiaTioScalar {
     pub value: c_double,
 }
 
-/// Entry selector borrowed by selector read APIs.
+/// Entry selector borrowed by selector read and mutation APIs.
 #[repr(C)]
 #[derive(Debug, Copy, Clone)]
 pub struct ArcadiaTioEntrySelector {
@@ -244,6 +662,16 @@ pub struct ArcadiaTioEntrySelector {
     pub indices: *const u32,
     /// Number of indices.
     pub indices_len: usize,
+}
+
+/// Chunk key borrowed by clear-block mutation APIs.
+#[repr(C)]
+#[derive(Debug, Copy, Clone)]
+pub struct ArcadiaTioChunkKey {
+    /// Borrowed chunk coordinate pointer.
+    pub coords: *const u32,
+    /// Number of chunk coordinates.
+    pub len: usize,
 }
 
 /// Explicit universe target for shape-policy reads.
@@ -1060,6 +1488,167 @@ unsafe extern "C" {
         out_start_entry: *mut u32,
         out_end_entry: *mut u32,
     ) -> c_int;
+
+    /// Rewrites one selected entry with f32 payload data.
+    pub fn arcadia_tio_rewrite_f32(
+        handle: *mut ArcadiaTioHandle,
+        selector: *const ArcadiaTioEntrySelector,
+        data: *const c_float,
+        shape: *const u64,
+        rank: usize,
+    ) -> c_int;
+    /// Rewrites one selected entry with f64 payload data.
+    pub fn arcadia_tio_rewrite_f64(
+        handle: *mut ArcadiaTioHandle,
+        selector: *const ArcadiaTioEntrySelector,
+        data: *const c_double,
+        shape: *const u64,
+        rank: usize,
+    ) -> c_int;
+    /// Rewrites a selector slice with f32 payload data.
+    pub fn arcadia_tio_rewrite_slice_f32(
+        handle: *mut ArcadiaTioHandle,
+        selectors: *const ArcadiaTioEntrySelector,
+        selectors_len: usize,
+        data: *const c_float,
+        shape: *const u64,
+        rank: usize,
+    ) -> c_int;
+    /// Rewrites a selector slice with f64 payload data.
+    pub fn arcadia_tio_rewrite_slice_f64(
+        handle: *mut ArcadiaTioHandle,
+        selectors: *const ArcadiaTioEntrySelector,
+        selectors_len: usize,
+        data: *const c_double,
+        shape: *const u64,
+        rank: usize,
+    ) -> c_int;
+    /// Clears storage blocks for borrowed chunk keys.
+    pub fn arcadia_tio_clear_blocks(
+        handle: *mut ArcadiaTioHandle,
+        keys: *const ArcadiaTioChunkKey,
+        keys_len: usize,
+    ) -> c_int;
+
+    /// Returns shallow compatibility compaction stats for an open handle.
+    pub fn arcadia_tio_analyze_compaction(
+        handle: *mut ArcadiaTioHandle,
+        out_stats: *mut ArcadiaTioCompactionStats,
+    ) -> c_int;
+    /// Returns non-precise V4 source-file diagnostics.
+    pub fn arcadia_tio_v4_diagnostics(
+        handle: *mut ArcadiaTioHandle,
+        out_report: *mut ArcadiaTioV4DiagnosticsReport,
+    ) -> c_int;
+    /// Frees native-owned strings in a V4 diagnostics report.
+    pub fn arcadia_tio_v4_diagnostics_report_free(report: *mut ArcadiaTioV4DiagnosticsReport);
+    /// Returns precise V4 source-file diagnostics.
+    pub fn arcadia_tio_v4_diagnostics_precise(
+        handle: *mut ArcadiaTioHandle,
+        options: *const ArcadiaTioV4PreciseAccountingOptions,
+        out_report: *mut ArcadiaTioV4DiagnosticsPreciseReport,
+    ) -> c_int;
+    /// Frees native-owned strings and arrays in a precise V4 diagnostics report.
+    pub fn arcadia_tio_v4_diagnostics_precise_report_free(
+        report: *mut ArcadiaTioV4DiagnosticsPreciseReport,
+    );
+    /// Returns non-precise V4 current-state compaction analysis.
+    pub fn arcadia_tio_analyze_v4_compaction(
+        handle: *mut ArcadiaTioHandle,
+        out_report: *mut ArcadiaTioV4CompactionAnalysisReport,
+    ) -> c_int;
+    /// Frees native-owned strings in a V4 compaction analysis report.
+    pub fn arcadia_tio_v4_compaction_analysis_report_free(
+        report: *mut ArcadiaTioV4CompactionAnalysisReport,
+    );
+    /// Returns precise V4 current-state compaction analysis.
+    pub fn arcadia_tio_analyze_v4_compaction_precise(
+        handle: *mut ArcadiaTioHandle,
+        options: *const ArcadiaTioV4PreciseAccountingOptions,
+        out_report: *mut ArcadiaTioV4CompactionAnalysisPreciseReport,
+    ) -> c_int;
+    /// Frees native-owned strings and arrays in a precise V4 compaction analysis report.
+    pub fn arcadia_tio_v4_compaction_analysis_precise_report_free(
+        report: *mut ArcadiaTioV4CompactionAnalysisPreciseReport,
+    );
+    /// Compacts live chunks into a destination file.
+    pub fn arcadia_tio_compact_to(
+        handle: *mut ArcadiaTioHandle,
+        dst_path: *const c_char,
+        retain_commits: u32,
+        mode: ArcadiaTioCompactionMode,
+    ) -> c_int;
+    /// Conditionally compacts live chunks into a destination file.
+    pub fn arcadia_tio_maybe_compact(
+        handle: *mut ArcadiaTioHandle,
+        dst_path: *const c_char,
+        dead_ratio_threshold: c_double,
+        min_dead_bytes: u64,
+        retain_commits: u32,
+        mode: ArcadiaTioCompactionMode,
+        out_compacted: *mut u8,
+    ) -> c_int;
+    /// Reads auto-compaction metadata configuration.
+    pub fn arcadia_tio_get_auto_compaction_config(
+        handle: *mut ArcadiaTioHandle,
+        out_config: *mut ArcadiaTioAutoCompactionConfig,
+        out_has_config: *mut u8,
+    ) -> c_int;
+    /// Updates auto-compaction metadata configuration.
+    pub fn arcadia_tio_set_auto_compaction_config(
+        handle: *mut ArcadiaTioHandle,
+        config: *const ArcadiaTioAutoCompactionConfig,
+        has_config: u8,
+    ) -> c_int;
+    /// Reads auto-compaction state metadata.
+    pub fn arcadia_tio_compaction_state(
+        handle: *mut ArcadiaTioHandle,
+        out_state: *mut ArcadiaTioCompactionState,
+        out_has_state: *mut u8,
+    ) -> c_int;
+    /// Runs metadata-configured auto-compaction if thresholds trigger.
+    pub fn arcadia_tio_maybe_compact_auto(
+        handle: *mut ArcadiaTioHandle,
+        out_compacted: *mut u8,
+    ) -> c_int;
+    /// Reforms visible data into a destination file.
+    pub fn arcadia_tio_reform_to(
+        handle: *mut ArcadiaTioHandle,
+        dst_path: *const c_char,
+        options: *const ArcadiaTioReformOptions,
+    ) -> c_int;
+    /// Reforms visible data into a destination file with diagnostic report output.
+    pub fn arcadia_tio_reform_to_ex(
+        handle: *mut ArcadiaTioHandle,
+        dst_path: *const c_char,
+        options: *const ArcadiaTioReformOptions,
+        out_report: *mut ArcadiaTioReformReport,
+    ) -> c_int;
+    /// Frees native-owned strings in a reform report.
+    pub fn arcadia_tio_reform_report_free(report: *mut ArcadiaTioReformReport);
+    /// Compacts a V4 file while retaining bounded visible commit history.
+    pub fn arcadia_tio_compact_v4_retained_history_to(
+        handle: *mut ArcadiaTioHandle,
+        dst_path: *const c_char,
+        options: *const ArcadiaTioV4RetainedHistoryCompactionOptions,
+        out_report: *mut ArcadiaTioV4RetainedHistoryCompactionReport,
+    ) -> c_int;
+    /// Frees native-owned strings and arrays in a retained-history compaction report.
+    pub fn arcadia_tio_v4_retained_history_compaction_report_free(
+        report: *mut ArcadiaTioV4RetainedHistoryCompactionReport,
+    );
+    /// Compacts a V4 file while retaining bounded history and precise source accounting.
+    pub fn arcadia_tio_compact_v4_retained_history_to_precise(
+        handle: *mut ArcadiaTioHandle,
+        dst_path: *const c_char,
+        retention_options: *const ArcadiaTioV4RetainedHistoryCompactionOptions,
+        precise_options: *const ArcadiaTioV4PreciseAccountingOptions,
+        out_report: *mut ArcadiaTioV4RetainedHistoryCompactionPreciseReport,
+    ) -> c_int;
+    /// Frees native-owned strings and arrays in a precise retained-history compaction report.
+    pub fn arcadia_tio_v4_retained_history_compaction_precise_report_free(
+        report: *mut ArcadiaTioV4RetainedHistoryCompactionPreciseReport,
+    );
 
     /// Reads rank for an open handle.
     pub fn arcadia_tio_rank(handle: *mut ArcadiaTioHandle, out_rank: *mut usize) -> c_int;

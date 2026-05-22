@@ -117,6 +117,23 @@ impl TioError {
     fn conversion(message: impl Into<String>) -> Self {
         Self::invalid_argument(message)
     }
+
+    fn with_reform_report(mut self, report: &ReformReport) -> Self {
+        let mut details = Vec::new();
+        if let Some(reason_code) = &report.reason_code {
+            details.push(format!("reason_code={reason_code}"));
+        }
+        if let Some(taxonomy) = &report.reason_code_taxonomy {
+            details.push(format!("reason_code_taxonomy={taxonomy}"));
+        }
+        if let Some(reason) = &report.reason {
+            details.push(format!("reason={reason}"));
+        }
+        if !details.is_empty() {
+            self.message = format!("{}; reform report: {}", self.message, details.join(", "));
+        }
+        self
+    }
 }
 
 impl fmt::Display for TioError {
@@ -822,7 +839,7 @@ impl HistoricalReadWithShapePolicyOptions {
     }
 }
 
-/// Safe selector for current and historical read APIs.
+/// Safe selector for current and historical read APIs and scoped mutation APIs.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum EntrySelector {
     /// Select all indices along this axis.
@@ -831,6 +848,30 @@ pub enum EntrySelector {
     Range { start: u32, end: u32 },
     /// Select explicit indices along this axis.
     Take(Vec<u32>),
+}
+
+/// Chunk key used by clear-block mutation APIs.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ChunkKey {
+    coords: Vec<u32>,
+}
+
+impl ChunkKey {
+    /// Creates a chunk key from chunk coordinates.
+    pub fn new(coords: Vec<u32>) -> Self {
+        Self { coords }
+    }
+
+    /// Returns the chunk coordinates.
+    pub fn coords(&self) -> &[u32] {
+        &self.coords
+    }
+}
+
+impl From<Vec<u32>> for ChunkKey {
+    fn from(coords: Vec<u32>) -> Self {
+        Self::new(coords)
+    }
 }
 
 /// Current read execution metadata copied from the native report.
@@ -901,6 +942,618 @@ pub struct HistoricalReadResult<T> {
     pub value: T,
     /// Historical execution metadata.
     pub execution: HistoricalReadExecutionReport,
+}
+
+/// Compaction mode used by compaction workflows.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum CompactionMode {
+    /// Copy live data without reblocking.
+    #[default]
+    CopyLive,
+    /// Reblock live data with the requested entry block size.
+    Reblock { entry_block_size: u32 },
+}
+
+impl CompactionMode {
+    fn to_raw(self) -> sys::ArcadiaTioCompactionMode {
+        match self {
+            Self::CopyLive => sys::ArcadiaTioCompactionMode {
+                kind: sys::ARCADIA_TIO_COMPACTION_COPY_LIVE,
+                reblock_entry_block_size: 0,
+            },
+            Self::Reblock { entry_block_size } => sys::ArcadiaTioCompactionMode {
+                kind: sys::ARCADIA_TIO_COMPACTION_REBLOCK,
+                reblock_entry_block_size: entry_block_size,
+            },
+        }
+    }
+
+    fn from_raw(value: sys::ArcadiaTioCompactionMode) -> Result<Self> {
+        match value.kind {
+            sys::ARCADIA_TIO_COMPACTION_COPY_LIVE => Ok(Self::CopyLive),
+            sys::ARCADIA_TIO_COMPACTION_REBLOCK => Ok(Self::Reblock {
+                entry_block_size: value.reblock_entry_block_size,
+            }),
+            other => Err(TioError::conversion(format!(
+                "unknown compaction mode value {other}"
+            ))),
+        }
+    }
+}
+
+/// Shallow compatibility compaction stats.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct CompactionStats {
+    /// Native-reported live bytes.
+    pub live_bytes: u64,
+    /// Native-reported dead bytes.
+    pub dead_bytes: u64,
+    /// Native-reported dead-byte ratio.
+    pub dead_ratio: f64,
+    /// Number of commits represented by the file.
+    pub commit_count: u32,
+}
+
+/// Status returned by status-aware V4 report APIs.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum V4ReportStatus {
+    /// Report completed.
+    Complete,
+    /// Report family is unsupported for this file/operation.
+    Unsupported,
+    /// Report outcome is unknown.
+    Unknown,
+    /// A future native status value preserved in-band.
+    Other(i32),
+}
+
+impl V4ReportStatus {
+    fn from_raw(value: sys::ArcadiaTioV4ReportStatus) -> Self {
+        match value {
+            sys::ARCADIA_TIO_V4_REPORT_COMPLETE => Self::Complete,
+            sys::ARCADIA_TIO_V4_REPORT_UNSUPPORTED => Self::Unsupported,
+            sys::ARCADIA_TIO_V4_REPORT_UNKNOWN => Self::Unknown,
+            other => Self::Other(other),
+        }
+    }
+}
+
+/// Precise-accounting field ids that can be requested or omitted.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum V4PreciseAccountingField {
+    /// Source-file bytes unreachable from the selected report view.
+    UnreachableBytes,
+    /// Bytes required to retain requested history.
+    RetainedHistoryRequiredBytes,
+    /// Bytes skipped due to pop/revert semantics.
+    PoppedSkippedBytes,
+    /// Bytes reclaimable by the selected workflow.
+    ReclaimableBytes,
+    /// A future native precise-accounting field id preserved in-band.
+    Other(i32),
+}
+
+impl V4PreciseAccountingField {
+    /// Returns this field's single-bit request mask.
+    pub fn mask(self) -> u32 {
+        match self.to_raw() {
+            raw if raw >= 0 && raw < u32::BITS as i32 => 1u32 << raw,
+            _ => 0,
+        }
+    }
+
+    fn from_raw(value: sys::ArcadiaTioV4PreciseAccountingField) -> Self {
+        match value {
+            sys::ARCADIA_TIO_V4_PRECISE_ACCOUNTING_UNREACHABLE_BYTES => Self::UnreachableBytes,
+            sys::ARCADIA_TIO_V4_PRECISE_ACCOUNTING_RETAINED_HISTORY_REQUIRED_BYTES => {
+                Self::RetainedHistoryRequiredBytes
+            }
+            sys::ARCADIA_TIO_V4_PRECISE_ACCOUNTING_POPPED_SKIPPED_BYTES => Self::PoppedSkippedBytes,
+            sys::ARCADIA_TIO_V4_PRECISE_ACCOUNTING_RECLAIMABLE_BYTES => Self::ReclaimableBytes,
+            other => Self::Other(other),
+        }
+    }
+
+    fn to_raw(self) -> sys::ArcadiaTioV4PreciseAccountingField {
+        match self {
+            Self::UnreachableBytes => sys::ARCADIA_TIO_V4_PRECISE_ACCOUNTING_UNREACHABLE_BYTES,
+            Self::RetainedHistoryRequiredBytes => {
+                sys::ARCADIA_TIO_V4_PRECISE_ACCOUNTING_RETAINED_HISTORY_REQUIRED_BYTES
+            }
+            Self::PoppedSkippedBytes => sys::ARCADIA_TIO_V4_PRECISE_ACCOUNTING_POPPED_SKIPPED_BYTES,
+            Self::ReclaimableBytes => sys::ARCADIA_TIO_V4_PRECISE_ACCOUNTING_RECLAIMABLE_BYTES,
+            Self::Other(value) => value,
+        }
+    }
+}
+
+/// Options for precise-accounting report APIs.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct V4PreciseAccountingOptions {
+    /// Zero requests every precise field relevant to the report family.
+    pub requested_fields_mask: u32,
+    /// Whether native should include human-readable omitted-field reason strings.
+    pub include_omitted_field_reasons: bool,
+}
+
+impl V4PreciseAccountingOptions {
+    /// Requests every precise-accounting field relevant to the report family.
+    pub fn all() -> Self {
+        Self {
+            requested_fields_mask: 0,
+            include_omitted_field_reasons: true,
+        }
+    }
+
+    /// Requests only the provided precise-accounting fields.
+    pub fn fields(fields: impl IntoIterator<Item = V4PreciseAccountingField>) -> Self {
+        Self {
+            requested_fields_mask: fields
+                .into_iter()
+                .fold(0u32, |mask, field| mask | field.mask()),
+            include_omitted_field_reasons: true,
+        }
+    }
+
+    fn to_raw(self) -> sys::ArcadiaTioV4PreciseAccountingOptions {
+        sys::ArcadiaTioV4PreciseAccountingOptions {
+            version: 1,
+            struct_size: mem::size_of::<sys::ArcadiaTioV4PreciseAccountingOptions>(),
+            requested_fields_mask: self.requested_fields_mask,
+            include_omitted_field_reasons: u8::from(self.include_omitted_field_reasons),
+        }
+    }
+}
+
+impl Default for V4PreciseAccountingOptions {
+    fn default() -> Self {
+        Self::all()
+    }
+}
+
+/// Omitted precise-accounting field metadata copied from a native report.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct V4OmittedPreciseAccountingField {
+    /// Omitted field id.
+    pub field: V4PreciseAccountingField,
+    /// Optional human-readable reason.
+    pub reason: Option<String>,
+    /// Optional stable reason code aligned with this omitted field.
+    pub reason_code: Option<String>,
+}
+
+/// Precise-accounting bytes with native validity flags preserved as `Option` values.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct V4PreciseAccountingBytes {
+    /// Precise unreachable bytes when available.
+    pub unreachable_bytes: Option<u64>,
+    /// Precise retained-history-required bytes when available.
+    pub retained_history_required_bytes: Option<u64>,
+    /// Precise popped/skipped bytes when available.
+    pub popped_skipped_bytes: Option<u64>,
+    /// Precise reclaimable bytes when available.
+    pub reclaimable_bytes: Option<u64>,
+    /// Fields intentionally omitted by native accounting.
+    pub omitted_fields: Vec<V4OmittedPreciseAccountingField>,
+}
+
+/// V4 current-head byte breakdown.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct V4CurrentHeadBytes {
+    /// Payload bytes.
+    pub payload_bytes: u64,
+    /// Index bytes.
+    pub index_bytes: u64,
+    /// Epoch bytes.
+    pub epoch_bytes: u64,
+    /// Auxiliary bytes.
+    pub aux_bytes: u64,
+    /// Commit bytes.
+    pub commit_bytes: u64,
+}
+
+/// V4 visible-chain audit byte breakdown.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct V4AuditBytes {
+    /// Commit bytes.
+    pub commit_bytes: u64,
+    /// Index bytes.
+    pub index_bytes: u64,
+    /// Epoch bytes.
+    pub epoch_bytes: u64,
+    /// Auxiliary bytes.
+    pub aux_bytes: u64,
+}
+
+/// V4 payload-reuse byte breakdown.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct V4PayloadReuseBytes {
+    /// Payload bytes resurrected from previous commits.
+    pub resurrected_payload_bytes: u64,
+    /// Payload bytes shared with other visible data.
+    pub shared_payload_bytes: u64,
+}
+
+/// V4 superseded byte breakdown.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct V4SupersededBytes {
+    /// Superseded payload bytes.
+    pub payload_bytes: u64,
+    /// Superseded index bytes.
+    pub index_bytes: u64,
+    /// Superseded epoch bytes.
+    pub epoch_bytes: u64,
+    /// Superseded auxiliary bytes.
+    pub aux_bytes: u64,
+}
+
+/// V4 compaction analysis policy reported by the native API.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum V4CompactionAnalysisPolicy {
+    /// Analyze compaction to the current visible state.
+    CompactToCurrentState,
+}
+
+impl V4CompactionAnalysisPolicy {
+    fn from_raw(value: sys::ArcadiaTioV4CompactionAnalysisPolicy) -> Result<Self> {
+        match value {
+            sys::ARCADIA_TIO_V4_COMPACTION_POLICY_COMPACT_TO_CURRENT_STATE => {
+                Ok(Self::CompactToCurrentState)
+            }
+            other => Err(TioError::conversion(format!(
+                "unknown V4 compaction analysis policy value {other}"
+            ))),
+        }
+    }
+}
+
+/// Non-precise V4 source-file diagnostics report.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct V4DiagnosticsReport {
+    /// Report status.
+    pub status: V4ReportStatus,
+    /// Optional native status reason.
+    pub reason: Option<String>,
+    /// Current-head byte breakdown.
+    pub current_head: V4CurrentHeadBytes,
+    /// Visible-chain audit bytes.
+    pub visible_chain_audit: V4AuditBytes,
+    /// Payload reuse bytes.
+    pub payload_reuse: V4PayloadReuseBytes,
+    /// Superseded bytes.
+    pub superseded: V4SupersededBytes,
+    /// Bytes the report cannot classify.
+    pub unknown_bytes: u64,
+    /// Whether precise unreachable-byte details were intentionally omitted.
+    pub omitted_unreachable_bytes: bool,
+    /// Optional omission reason.
+    pub omitted_unreachable_bytes_reason: Option<String>,
+}
+
+/// Precise V4 source-file diagnostics report.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct V4DiagnosticsPreciseReport {
+    /// Report status.
+    pub status: V4ReportStatus,
+    /// Optional native status reason.
+    pub reason: Option<String>,
+    /// Current-head byte breakdown.
+    pub current_head: V4CurrentHeadBytes,
+    /// Visible-chain audit bytes.
+    pub visible_chain_audit: V4AuditBytes,
+    /// Payload reuse bytes.
+    pub payload_reuse: V4PayloadReuseBytes,
+    /// Superseded bytes.
+    pub superseded: V4SupersededBytes,
+    /// Bytes the report cannot classify.
+    pub unknown_bytes: u64,
+    /// Precise-accounting bytes and omitted-field metadata.
+    pub precise_accounting: V4PreciseAccountingBytes,
+    /// Optional stable status/reason code.
+    pub reason_code: Option<String>,
+}
+
+/// Non-precise V4 ordinary compaction analysis report.
+#[derive(Debug, Clone, PartialEq)]
+pub struct V4CompactionAnalysisReport {
+    /// Report status.
+    pub status: V4ReportStatus,
+    /// Optional native status reason.
+    pub reason: Option<String>,
+    /// Native compaction policy analyzed.
+    pub policy: V4CompactionAnalysisPolicy,
+    /// Source file size in bytes.
+    pub source_file_bytes: u64,
+    /// Bytes required for current-state compaction.
+    pub current_state_required_bytes: u64,
+    /// Ordinary reclaimable bytes.
+    pub ordinary_reclaimable_bytes: u64,
+    /// Bytes the report cannot classify.
+    pub unknown_bytes: u64,
+    /// Whether precise unreachable-byte details were intentionally omitted.
+    pub omitted_unreachable_bytes: bool,
+    /// Optional omission reason.
+    pub omitted_unreachable_bytes_reason: Option<String>,
+}
+
+/// Precise V4 ordinary compaction analysis report.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct V4CompactionAnalysisPreciseReport {
+    /// Report status.
+    pub status: V4ReportStatus,
+    /// Optional native status reason.
+    pub reason: Option<String>,
+    /// Native compaction policy analyzed.
+    pub policy: V4CompactionAnalysisPolicy,
+    /// Source file size in bytes.
+    pub source_file_bytes: u64,
+    /// Bytes required for current-state compaction.
+    pub current_state_required_bytes: u64,
+    /// Ordinary reclaimable bytes.
+    pub ordinary_reclaimable_bytes: u64,
+    /// Bytes the report cannot classify.
+    pub unknown_bytes: u64,
+    /// Precise-accounting bytes and omitted-field metadata.
+    pub precise_accounting: V4PreciseAccountingBytes,
+    /// Optional stable status/reason code.
+    pub reason_code: Option<String>,
+}
+
+/// Options for ordinary compaction helpers.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct CompactionOptions {
+    /// Number of commits to retain.
+    pub retain_commits: u32,
+    /// Compaction mode.
+    pub mode: CompactionMode,
+    /// Dead-byte ratio threshold for conditional compaction.
+    pub dead_ratio_threshold: f64,
+    /// Minimum dead bytes for conditional compaction.
+    pub min_dead_bytes: u64,
+}
+
+impl Default for CompactionOptions {
+    fn default() -> Self {
+        Self {
+            retain_commits: 1,
+            mode: CompactionMode::CopyLive,
+            dead_ratio_threshold: 0.3,
+            min_dead_bytes: 0,
+        }
+    }
+}
+
+/// Auto-compaction metadata configuration.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct AutoCompactionConfig {
+    /// Whether auto-compaction is enabled.
+    pub enabled: bool,
+    /// Number of commits to retain.
+    pub retain_commits: u32,
+    /// Dead-byte ratio threshold.
+    pub dead_ratio_threshold: f64,
+    /// Minimum dead bytes before auto-compaction can trigger.
+    pub min_dead_bytes: u64,
+    /// Compaction mode.
+    pub mode: CompactionMode,
+    /// Commit interval for auto-compaction checks.
+    pub check_every_commits: u32,
+    /// Commit cooldown after compaction.
+    pub cooldown_commits: u32,
+}
+
+impl Default for AutoCompactionConfig {
+    fn default() -> Self {
+        Self {
+            enabled: true,
+            retain_commits: 1,
+            dead_ratio_threshold: 0.3,
+            min_dead_bytes: 0,
+            mode: CompactionMode::CopyLive,
+            check_every_commits: 1,
+            cooldown_commits: 0,
+        }
+    }
+}
+
+impl AutoCompactionConfig {
+    fn to_raw(self) -> sys::ArcadiaTioAutoCompactionConfig {
+        sys::ArcadiaTioAutoCompactionConfig {
+            enabled: u8::from(self.enabled),
+            retain_commits: self.retain_commits,
+            dead_ratio_threshold: self.dead_ratio_threshold,
+            min_dead_bytes: self.min_dead_bytes,
+            mode: self.mode.to_raw(),
+            check_every_commits: self.check_every_commits,
+            cooldown_commits: self.cooldown_commits,
+        }
+    }
+}
+
+/// Auto-compaction state metadata.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct CompactionState {
+    /// Last compacted commit sequence.
+    pub last_compacted_commit_seq: u64,
+    /// Last compaction timestamp in Unix milliseconds.
+    pub last_compacted_at_unix_ms: u64,
+}
+
+/// Reform target layout.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ReformTargetLayout {
+    /// Preserve the source layout family.
+    PreserveFamily,
+    /// Reform to WholeAppendUnit.
+    WholeAppendUnit,
+    /// Reform to RegularChunked.
+    RegularChunked,
+}
+
+impl ReformTargetLayout {
+    fn to_raw(self) -> sys::ArcadiaTioReformTargetLayout {
+        match self {
+            Self::PreserveFamily => sys::ARCADIA_TIO_REFORM_TARGET_PRESERVE_FAMILY,
+            Self::WholeAppendUnit => sys::ARCADIA_TIO_REFORM_TARGET_WHOLE_APPEND_UNIT,
+            Self::RegularChunked => sys::ARCADIA_TIO_REFORM_TARGET_REGULAR_CHUNKED,
+        }
+    }
+}
+
+/// Safe reform policy/options.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ReformOptions {
+    /// Target layout family.
+    pub target_layout: ReformTargetLayout,
+    /// RegularChunked block shape used when target_layout is RegularChunked.
+    pub regular_chunked_block_shape: Vec<u32>,
+}
+
+impl ReformOptions {
+    /// Builds options that preserve the source layout family.
+    pub fn preserve_family() -> Self {
+        Self {
+            target_layout: ReformTargetLayout::PreserveFamily,
+            regular_chunked_block_shape: Vec::new(),
+        }
+    }
+
+    /// Builds options targeting WholeAppendUnit.
+    pub fn whole_append_unit() -> Self {
+        Self {
+            target_layout: ReformTargetLayout::WholeAppendUnit,
+            regular_chunked_block_shape: Vec::new(),
+        }
+    }
+
+    /// Builds options targeting RegularChunked with a native block shape.
+    pub fn regular_chunked(block_shape: Vec<u32>) -> Self {
+        Self {
+            target_layout: ReformTargetLayout::RegularChunked,
+            regular_chunked_block_shape: block_shape,
+        }
+    }
+
+    fn to_raw(&self) -> sys::ArcadiaTioReformOptions {
+        let block_shape_ptr = if self.regular_chunked_block_shape.is_empty() {
+            ptr::null()
+        } else {
+            self.regular_chunked_block_shape.as_ptr()
+        };
+        sys::ArcadiaTioReformOptions {
+            version: 1,
+            struct_size: mem::size_of::<sys::ArcadiaTioReformOptions>(),
+            target_layout: self.target_layout.to_raw(),
+            regular_chunked_block_shape: block_shape_ptr,
+            regular_chunked_block_shape_len: self.regular_chunked_block_shape.len(),
+        }
+    }
+}
+
+/// Native reform diagnostic report copied into owned Rust strings.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ReformReport {
+    /// Stable reason code if reported.
+    pub reason_code: Option<String>,
+    /// Reason-code taxonomy if reported.
+    pub reason_code_taxonomy: Option<String>,
+    /// Human-readable reason if reported.
+    pub reason: Option<String>,
+}
+
+/// Retained-history compaction policy.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum V4RetainedHistoryPolicy {
+    /// Retain the last N visible commits.
+    RetainLast,
+}
+
+impl V4RetainedHistoryPolicy {
+    fn to_raw(self) -> sys::ArcadiaTioV4RetainedHistoryPolicy {
+        match self {
+            Self::RetainLast => sys::ARCADIA_TIO_V4_RETAINED_HISTORY_RETAIN_LAST,
+        }
+    }
+}
+
+/// Retained-history compaction options.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct V4RetainedHistoryCompactionOptions {
+    /// Retained-history policy.
+    pub policy: V4RetainedHistoryPolicy,
+    /// Number of latest commits to retain for retain-last.
+    pub retain_last_n: u32,
+}
+
+impl V4RetainedHistoryCompactionOptions {
+    /// Builds retain-last retained-history compaction options.
+    pub fn retain_last(retain_last_n: u32) -> Self {
+        Self {
+            policy: V4RetainedHistoryPolicy::RetainLast,
+            retain_last_n,
+        }
+    }
+
+    fn to_raw(self) -> sys::ArcadiaTioV4RetainedHistoryCompactionOptions {
+        sys::ArcadiaTioV4RetainedHistoryCompactionOptions {
+            version: 1,
+            struct_size: mem::size_of::<sys::ArcadiaTioV4RetainedHistoryCompactionOptions>(),
+            policy: self.policy.to_raw(),
+            retain_last_n: self.retain_last_n,
+        }
+    }
+}
+
+impl Default for V4RetainedHistoryCompactionOptions {
+    fn default() -> Self {
+        Self::retain_last(1)
+    }
+}
+
+/// Non-precise retained-history compaction report.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct V4RetainedHistoryCompactionReport {
+    /// Report status.
+    pub status: V4ReportStatus,
+    /// Optional native status reason.
+    pub reason: Option<String>,
+    /// Number of retained commits.
+    pub retained_commit_count: u32,
+    /// Retained commit sequence numbers.
+    pub retained_commit_seqs: Vec<u64>,
+    /// Optional count of older commits not retained.
+    pub unretained_older_commit_count: Option<u64>,
+    /// Source file size in bytes.
+    pub source_file_bytes: u64,
+    /// Destination file size in bytes.
+    pub destination_file_bytes: u64,
+    /// Whether precise unreachable-byte details were intentionally omitted.
+    pub omitted_unreachable_bytes: bool,
+    /// Optional omission reason.
+    pub omitted_unreachable_bytes_reason: Option<String>,
+}
+
+/// Precise retained-history compaction report.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct V4RetainedHistoryCompactionPreciseReport {
+    /// Report status.
+    pub status: V4ReportStatus,
+    /// Optional native status reason.
+    pub reason: Option<String>,
+    /// Number of retained commits.
+    pub retained_commit_count: u32,
+    /// Retained commit sequence numbers.
+    pub retained_commit_seqs: Vec<u64>,
+    /// Optional count of older commits not retained.
+    pub unretained_older_commit_count: Option<u64>,
+    /// Source file size in bytes.
+    pub source_file_bytes: u64,
+    /// Destination file size in bytes.
+    pub destination_file_bytes: u64,
+    /// Source-file precise accounting at retained-history compaction time.
+    pub precise_source_accounting: V4PreciseAccountingBytes,
+    /// Optional stable status/reason code.
+    pub reason_code: Option<String>,
 }
 
 /// Create-time storage/layout profile.
@@ -2183,6 +2836,461 @@ impl TensorFile {
         })
     }
 
+    /// Rewrites a single native entry selector with f32 payload data.
+    pub fn rewrite_f32(
+        &mut self,
+        selector: EntrySelector,
+        data: &[f32],
+        shape: &[u64],
+    ) -> Result<()> {
+        self.validate_mutation_payload(DType::F32, data.len(), shape, "rewrite")?;
+        let prepared_selector = PreparedSingleSelector::new(&selector)?;
+        // SAFETY: Prepared selector and borrowed data/shape slices outlive the FFI call.
+        let status = unsafe {
+            sys::arcadia_tio_rewrite_f32(
+                self.raw.as_ptr(),
+                prepared_selector.ptr(),
+                data.as_ptr(),
+                shape.as_ptr(),
+                shape.len(),
+            )
+        };
+        status_result(status, "failed to rewrite f32 data")
+    }
+
+    /// Rewrites a single native entry selector with f64 payload data.
+    pub fn rewrite_f64(
+        &mut self,
+        selector: EntrySelector,
+        data: &[f64],
+        shape: &[u64],
+    ) -> Result<()> {
+        self.validate_mutation_payload(DType::F64, data.len(), shape, "rewrite")?;
+        let prepared_selector = PreparedSingleSelector::new(&selector)?;
+        // SAFETY: Prepared selector and borrowed data/shape slices outlive the FFI call.
+        let status = unsafe {
+            sys::arcadia_tio_rewrite_f64(
+                self.raw.as_ptr(),
+                prepared_selector.ptr(),
+                data.as_ptr(),
+                shape.as_ptr(),
+                shape.len(),
+            )
+        };
+        status_result(status, "failed to rewrite f64 data")
+    }
+
+    /// Rewrites a selector slice with f32 payload data.
+    pub fn rewrite_slice_f32(
+        &mut self,
+        selectors: &[EntrySelector],
+        data: &[f32],
+        shape: &[u64],
+    ) -> Result<()> {
+        self.validate_mutation_payload(DType::F32, data.len(), shape, "rewrite slice")?;
+        let rank = self.rank()?;
+        if selectors.len() != rank {
+            return Err(TioError::invalid_argument(format!(
+                "selector count {} does not match file rank {rank}",
+                selectors.len()
+            )));
+        }
+        let prepared_selectors = PreparedSelectors::new(selectors, rank)?;
+        // SAFETY: Prepared selector buffers and borrowed data/shape slices outlive the FFI call.
+        let status = unsafe {
+            sys::arcadia_tio_rewrite_slice_f32(
+                self.raw.as_ptr(),
+                prepared_selectors.ptr(),
+                prepared_selectors.len(),
+                data.as_ptr(),
+                shape.as_ptr(),
+                shape.len(),
+            )
+        };
+        status_result(status, "failed to rewrite f32 selector slice")
+    }
+
+    /// Rewrites a selector slice with f64 payload data.
+    pub fn rewrite_slice_f64(
+        &mut self,
+        selectors: &[EntrySelector],
+        data: &[f64],
+        shape: &[u64],
+    ) -> Result<()> {
+        self.validate_mutation_payload(DType::F64, data.len(), shape, "rewrite slice")?;
+        let rank = self.rank()?;
+        if selectors.len() != rank {
+            return Err(TioError::invalid_argument(format!(
+                "selector count {} does not match file rank {rank}",
+                selectors.len()
+            )));
+        }
+        let prepared_selectors = PreparedSelectors::new(selectors, rank)?;
+        // SAFETY: Prepared selector buffers and borrowed data/shape slices outlive the FFI call.
+        let status = unsafe {
+            sys::arcadia_tio_rewrite_slice_f64(
+                self.raw.as_ptr(),
+                prepared_selectors.ptr(),
+                prepared_selectors.len(),
+                data.as_ptr(),
+                shape.as_ptr(),
+                shape.len(),
+            )
+        };
+        status_result(status, "failed to rewrite f64 selector slice")
+    }
+
+    /// Clears storage blocks identified by chunk keys.
+    pub fn clear_blocks(&mut self, keys: &[ChunkKey]) -> Result<()> {
+        let prepared_keys = PreparedChunkKeys::new(keys);
+        // SAFETY: Prepared chunk-key buffers and their borrowed coordinate slices outlive the call.
+        let status = unsafe {
+            sys::arcadia_tio_clear_blocks(
+                self.raw.as_ptr(),
+                prepared_keys.ptr(),
+                prepared_keys.len(),
+            )
+        };
+        status_result(status, "failed to clear blocks")
+    }
+
+    /// Returns shallow compatibility compaction statistics.
+    pub fn analyze_compaction(&self) -> Result<CompactionStats> {
+        let mut stats = sys::ArcadiaTioCompactionStats {
+            live_bytes: 0,
+            dead_bytes: 0,
+            dead_ratio: 0.0,
+            commit_count: 0,
+        };
+        // SAFETY: `stats` is a valid output pointer and the handle is live.
+        let status = unsafe { sys::arcadia_tio_analyze_compaction(self.raw.as_ptr(), &mut stats) };
+        status_result(status, "failed to analyze compaction")?;
+        Ok(CompactionStats {
+            live_bytes: stats.live_bytes,
+            dead_bytes: stats.dead_bytes,
+            dead_ratio: stats.dead_ratio,
+            commit_count: stats.commit_count,
+        })
+    }
+
+    /// Returns non-precise V4 source-file diagnostics.
+    pub fn v4_diagnostics(&self) -> Result<V4DiagnosticsReport> {
+        let mut report = new_v4_diagnostics_report();
+        // SAFETY: `report` is initialized for native output and the handle is live.
+        let status = unsafe { sys::arcadia_tio_v4_diagnostics(self.raw.as_ptr(), &mut report) };
+        if status != sys::ARCADIA_TIO_ERROR_OK {
+            // SAFETY: Report was initialized by this wrapper and may be partially populated.
+            unsafe { sys::arcadia_tio_v4_diagnostics_report_free(&mut report) };
+            return Err(TioError::from_last_error("failed to get V4 diagnostics"));
+        }
+        let copied = copy_v4_diagnostics_report(&report);
+        // SAFETY: Native-owned strings in `report` are freed exactly once after copying.
+        unsafe { sys::arcadia_tio_v4_diagnostics_report_free(&mut report) };
+        Ok(copied)
+    }
+
+    /// Returns precise V4 source-file diagnostics with validity metadata.
+    pub fn v4_diagnostics_precise(
+        &self,
+        options: V4PreciseAccountingOptions,
+    ) -> Result<V4DiagnosticsPreciseReport> {
+        let raw_options = options.to_raw();
+        let mut report = new_v4_diagnostics_precise_report();
+        // SAFETY: Options, output report, and handle are valid for this call.
+        let status = unsafe {
+            sys::arcadia_tio_v4_diagnostics_precise(self.raw.as_ptr(), &raw_options, &mut report)
+        };
+        if status != sys::ARCADIA_TIO_ERROR_OK {
+            // SAFETY: Report was initialized by this wrapper and may be partially populated.
+            unsafe { sys::arcadia_tio_v4_diagnostics_precise_report_free(&mut report) };
+            return Err(TioError::from_last_error(
+                "failed to get precise V4 diagnostics",
+            ));
+        }
+        let copied = copy_v4_diagnostics_precise_report(&report);
+        // SAFETY: Native-owned strings/arrays in `report` are freed exactly once after copying.
+        unsafe { sys::arcadia_tio_v4_diagnostics_precise_report_free(&mut report) };
+        Ok(copied)
+    }
+
+    /// Returns non-precise V4 current-state compaction analysis.
+    pub fn analyze_v4_compaction(&self) -> Result<V4CompactionAnalysisReport> {
+        let mut report = new_v4_compaction_analysis_report();
+        // SAFETY: `report` is initialized for native output and the handle is live.
+        let status =
+            unsafe { sys::arcadia_tio_analyze_v4_compaction(self.raw.as_ptr(), &mut report) };
+        if status != sys::ARCADIA_TIO_ERROR_OK {
+            // SAFETY: Report was initialized by this wrapper and may be partially populated.
+            unsafe { sys::arcadia_tio_v4_compaction_analysis_report_free(&mut report) };
+            return Err(TioError::from_last_error("failed to analyze V4 compaction"));
+        }
+        let copied = copy_v4_compaction_analysis_report(&report);
+        // SAFETY: Native-owned strings in `report` are freed exactly once after copying.
+        unsafe { sys::arcadia_tio_v4_compaction_analysis_report_free(&mut report) };
+        copied
+    }
+
+    /// Returns precise V4 current-state compaction analysis with validity metadata.
+    pub fn analyze_v4_compaction_precise(
+        &self,
+        options: V4PreciseAccountingOptions,
+    ) -> Result<V4CompactionAnalysisPreciseReport> {
+        let raw_options = options.to_raw();
+        let mut report = new_v4_compaction_analysis_precise_report();
+        // SAFETY: Options, output report, and handle are valid for this call.
+        let status = unsafe {
+            sys::arcadia_tio_analyze_v4_compaction_precise(
+                self.raw.as_ptr(),
+                &raw_options,
+                &mut report,
+            )
+        };
+        if status != sys::ARCADIA_TIO_ERROR_OK {
+            // SAFETY: Report was initialized by this wrapper and may be partially populated.
+            unsafe { sys::arcadia_tio_v4_compaction_analysis_precise_report_free(&mut report) };
+            return Err(TioError::from_last_error(
+                "failed to analyze precise V4 compaction",
+            ));
+        }
+        let copied = copy_v4_compaction_analysis_precise_report(&report);
+        // SAFETY: Native-owned strings/arrays in `report` are freed exactly once after copying.
+        unsafe { sys::arcadia_tio_v4_compaction_analysis_precise_report_free(&mut report) };
+        copied
+    }
+
+    /// Compacts live chunks into a destination file.
+    pub fn compact_to(
+        &mut self,
+        dst_path: impl AsRef<Path>,
+        options: CompactionOptions,
+    ) -> Result<()> {
+        let dst_path = path_to_cstring(dst_path)?;
+        // SAFETY: Destination path C string and handle are live for this call.
+        let status = unsafe {
+            sys::arcadia_tio_compact_to(
+                self.raw.as_ptr(),
+                dst_path.as_ptr(),
+                options.retain_commits,
+                options.mode.to_raw(),
+            )
+        };
+        status_result(status, "failed to compact TensorFile")
+    }
+
+    /// Conditionally compacts live chunks into a destination file.
+    pub fn maybe_compact(
+        &mut self,
+        dst_path: impl AsRef<Path>,
+        options: CompactionOptions,
+    ) -> Result<bool> {
+        let dst_path = path_to_cstring(dst_path)?;
+        let mut compacted = 0u8;
+        // SAFETY: Destination path C string, output flag, and handle are live for this call.
+        let status = unsafe {
+            sys::arcadia_tio_maybe_compact(
+                self.raw.as_ptr(),
+                dst_path.as_ptr(),
+                options.dead_ratio_threshold,
+                options.min_dead_bytes,
+                options.retain_commits,
+                options.mode.to_raw(),
+                &mut compacted,
+            )
+        };
+        status_result(status, "failed to maybe compact TensorFile")?;
+        Ok(compacted != 0)
+    }
+
+    /// Reads auto-compaction metadata configuration, if present.
+    pub fn auto_compaction_config(&self) -> Result<Option<AutoCompactionConfig>> {
+        self.get_auto_compaction_config()
+    }
+
+    /// Reads auto-compaction metadata configuration, if present.
+    pub fn get_auto_compaction_config(&self) -> Result<Option<AutoCompactionConfig>> {
+        let mut config = new_auto_compaction_config();
+        let mut has_config = 0u8;
+        // SAFETY: Output pointers are valid and the handle is live.
+        let status = unsafe {
+            sys::arcadia_tio_get_auto_compaction_config(
+                self.raw.as_ptr(),
+                &mut config,
+                &mut has_config,
+            )
+        };
+        status_result(status, "failed to get auto-compaction config")?;
+        if has_config == 0 {
+            Ok(None)
+        } else {
+            copy_auto_compaction_config(config).map(Some)
+        }
+    }
+
+    /// Updates or clears auto-compaction metadata configuration.
+    pub fn set_auto_compaction_config(
+        &mut self,
+        config: Option<AutoCompactionConfig>,
+    ) -> Result<()> {
+        let raw = config.map(|cfg| cfg.to_raw());
+        let (ptr, has_config) = match raw.as_ref() {
+            Some(cfg) => (cfg as *const sys::ArcadiaTioAutoCompactionConfig, 1u8),
+            None => (ptr::null(), 0u8),
+        };
+        // SAFETY: Optional config pointer is either null or points to a local value valid for this call.
+        let status = unsafe {
+            sys::arcadia_tio_set_auto_compaction_config(self.raw.as_ptr(), ptr, has_config)
+        };
+        status_result(status, "failed to set auto-compaction config")
+    }
+
+    /// Clears auto-compaction metadata configuration.
+    pub fn clear_auto_compaction(&mut self) -> Result<()> {
+        self.set_auto_compaction_config(None)
+    }
+
+    /// Reads auto-compaction state metadata, if present.
+    pub fn compaction_state(&self) -> Result<Option<CompactionState>> {
+        let mut state = sys::ArcadiaTioCompactionState {
+            last_compacted_commit_seq: 0,
+            last_compacted_at_unix_ms: 0,
+        };
+        let mut has_state = 0u8;
+        // SAFETY: Output pointers are valid and the handle is live.
+        let status = unsafe {
+            sys::arcadia_tio_compaction_state(self.raw.as_ptr(), &mut state, &mut has_state)
+        };
+        status_result(status, "failed to read compaction state")?;
+        if has_state == 0 {
+            Ok(None)
+        } else {
+            Ok(Some(CompactionState {
+                last_compacted_commit_seq: state.last_compacted_commit_seq,
+                last_compacted_at_unix_ms: state.last_compacted_at_unix_ms,
+            }))
+        }
+    }
+
+    /// Runs metadata-configured auto-compaction if native thresholds trigger.
+    pub fn maybe_compact_auto(&mut self) -> Result<bool> {
+        let mut compacted = 0u8;
+        // SAFETY: Output flag is valid and the handle is live.
+        let status =
+            unsafe { sys::arcadia_tio_maybe_compact_auto(self.raw.as_ptr(), &mut compacted) };
+        status_result(status, "failed to maybe auto-compact TensorFile")?;
+        Ok(compacted != 0)
+    }
+
+    /// Compacts a V4 file into a retained-history destination.
+    pub fn compact_v4_retained_history_to(
+        &mut self,
+        dst_path: impl AsRef<Path>,
+        options: V4RetainedHistoryCompactionOptions,
+    ) -> Result<V4RetainedHistoryCompactionReport> {
+        let dst_path = path_to_cstring(dst_path)?;
+        let raw_options = options.to_raw();
+        let mut report = new_v4_retained_history_compaction_report();
+        // SAFETY: Inputs and initialized output report are valid for this call.
+        let status = unsafe {
+            sys::arcadia_tio_compact_v4_retained_history_to(
+                self.raw.as_ptr(),
+                dst_path.as_ptr(),
+                &raw_options,
+                &mut report,
+            )
+        };
+        if status != sys::ARCADIA_TIO_ERROR_OK {
+            // SAFETY: Report was initialized by this wrapper and may be partially populated.
+            unsafe { sys::arcadia_tio_v4_retained_history_compaction_report_free(&mut report) };
+            return Err(TioError::from_last_error(
+                "failed to compact V4 retained history",
+            ));
+        }
+        let copied = copy_v4_retained_history_compaction_report(&report);
+        // SAFETY: Native-owned strings/arrays in `report` are freed exactly once after copying.
+        unsafe { sys::arcadia_tio_v4_retained_history_compaction_report_free(&mut report) };
+        copied
+    }
+
+    /// Compacts a V4 file into a retained-history destination with precise source accounting.
+    pub fn compact_v4_retained_history_to_precise(
+        &mut self,
+        dst_path: impl AsRef<Path>,
+        retention_options: V4RetainedHistoryCompactionOptions,
+        precise_options: V4PreciseAccountingOptions,
+    ) -> Result<V4RetainedHistoryCompactionPreciseReport> {
+        let dst_path = path_to_cstring(dst_path)?;
+        let raw_retention_options = retention_options.to_raw();
+        let raw_precise_options = precise_options.to_raw();
+        let mut report = new_v4_retained_history_compaction_precise_report();
+        // SAFETY: Inputs and initialized output report are valid for this call.
+        let status = unsafe {
+            sys::arcadia_tio_compact_v4_retained_history_to_precise(
+                self.raw.as_ptr(),
+                dst_path.as_ptr(),
+                &raw_retention_options,
+                &raw_precise_options,
+                &mut report,
+            )
+        };
+        if status != sys::ARCADIA_TIO_ERROR_OK {
+            // SAFETY: Report was initialized by this wrapper and may be partially populated.
+            unsafe {
+                sys::arcadia_tio_v4_retained_history_compaction_precise_report_free(&mut report)
+            };
+            return Err(TioError::from_last_error(
+                "failed to compact V4 retained history with precise accounting",
+            ));
+        }
+        let copied = copy_v4_retained_history_compaction_precise_report(&report);
+        // SAFETY: Native-owned strings/arrays in `report` are freed exactly once after copying.
+        unsafe { sys::arcadia_tio_v4_retained_history_compaction_precise_report_free(&mut report) };
+        copied
+    }
+
+    /// Reforms visible data into a destination file with an explicit target layout.
+    pub fn reform_to(&mut self, dst_path: impl AsRef<Path>, options: ReformOptions) -> Result<()> {
+        let dst_path = path_to_cstring(dst_path)?;
+        let raw_options = options.to_raw();
+        // SAFETY: Inputs are valid for the duration of the FFI call.
+        let status = unsafe {
+            sys::arcadia_tio_reform_to(self.raw.as_ptr(), dst_path.as_ptr(), &raw_options)
+        };
+        status_result(status, "failed to reform TensorFile")
+    }
+
+    /// Reforms visible data into a destination file and returns native diagnostic metadata.
+    pub fn reform_to_ex(
+        &mut self,
+        dst_path: impl AsRef<Path>,
+        options: ReformOptions,
+    ) -> Result<ReformReport> {
+        let dst_path = path_to_cstring(dst_path)?;
+        let raw_options = options.to_raw();
+        let mut report = new_reform_report();
+        // SAFETY: Inputs and initialized output report are valid for this call.
+        let status = unsafe {
+            sys::arcadia_tio_reform_to_ex(
+                self.raw.as_ptr(),
+                dst_path.as_ptr(),
+                &raw_options,
+                &mut report,
+            )
+        };
+        if status != sys::ARCADIA_TIO_ERROR_OK {
+            let copied = copy_reform_report(&report);
+            // SAFETY: Report was initialized by this wrapper and may be partially populated.
+            unsafe { sys::arcadia_tio_reform_report_free(&mut report) };
+            return Err(
+                TioError::from_last_error("failed to reform TensorFile with report")
+                    .with_reform_report(&copied),
+            );
+        }
+        let copied = copy_reform_report(&report);
+        // SAFETY: Native-owned strings in `report` are freed exactly once after copying.
+        unsafe { sys::arcadia_tio_reform_report_free(&mut report) };
+        Ok(copied)
+    }
+
     /// Reads the full tensor into Rust-owned buffers.
     pub fn read_all(&self) -> Result<Tensor> {
         self.read_tensor(|handle, out| unsafe { sys::arcadia_tio_read_all(handle, out) })
@@ -2763,23 +3871,43 @@ impl TensorFile {
     }
 
     fn validate_append(&self, dtype: DType, data_len: usize, shape: &[u64]) -> Result<()> {
+        self.validate_typed_payload(dtype, data_len, shape, "append")
+    }
+
+    fn validate_mutation_payload(
+        &self,
+        dtype: DType,
+        data_len: usize,
+        shape: &[u64],
+        operation: &str,
+    ) -> Result<()> {
+        self.validate_typed_payload(dtype, data_len, shape, operation)
+    }
+
+    fn validate_typed_payload(
+        &self,
+        dtype: DType,
+        data_len: usize,
+        shape: &[u64],
+        operation: &str,
+    ) -> Result<()> {
         let actual_dtype = self.dtype()?;
         if actual_dtype != dtype {
             return Err(TioError::invalid_argument(format!(
-                "append dtype {dtype:?} does not match file dtype {actual_dtype:?}"
+                "{operation} dtype {dtype:?} does not match file dtype {actual_dtype:?}"
             )));
         }
         let rank = self.rank()?;
         if shape.len() != rank {
             return Err(TioError::invalid_argument(format!(
-                "append shape rank {} does not match file rank {rank}",
+                "{operation} shape rank {} does not match file rank {rank}",
                 shape.len()
             )));
         }
         let expected_len = shape_element_len(shape)?;
         if expected_len != data_len {
             return Err(TioError::invalid_argument(format!(
-                "append data length {data_len} does not match shape element count {expected_len}"
+                "{operation} data length {data_len} does not match shape element count {expected_len}"
             )));
         }
         Ok(())
@@ -3021,6 +4149,377 @@ fn copy_historical_read_execution_report(
         execution,
         query_source_kind: HistoricalQuerySourceKind::from_raw(raw.query_source_kind)?,
         query_commit_seq: raw.query_commit_seq,
+    })
+}
+
+fn new_v4_precise_accounting_bytes() -> sys::ArcadiaTioV4PreciseAccountingBytes {
+    sys::ArcadiaTioV4PreciseAccountingBytes {
+        version: 1,
+        struct_size: mem::size_of::<sys::ArcadiaTioV4PreciseAccountingBytes>(),
+        has_unreachable_bytes: 0,
+        unreachable_bytes: 0,
+        has_retained_history_required_bytes: 0,
+        retained_history_required_bytes: 0,
+        has_popped_skipped_bytes: 0,
+        popped_skipped_bytes: 0,
+        has_reclaimable_bytes: 0,
+        reclaimable_bytes: 0,
+        omitted_fields: ptr::null_mut(),
+        omitted_fields_len: 0,
+        omitted_field_reason_codes: ptr::null_mut(),
+        omitted_field_reason_codes_len: 0,
+    }
+}
+
+fn copy_v4_precise_accounting_bytes(
+    raw: &sys::ArcadiaTioV4PreciseAccountingBytes,
+) -> V4PreciseAccountingBytes {
+    let omitted_fields = if raw.omitted_fields.is_null() || raw.omitted_fields_len == 0 {
+        Vec::new()
+    } else {
+        // SAFETY: Native report owns `omitted_fields_len` entries until the parent report is freed.
+        let fields = unsafe { slice::from_raw_parts(raw.omitted_fields, raw.omitted_fields_len) };
+        let reason_codes = if raw.omitted_field_reason_codes.is_null()
+            || raw.omitted_field_reason_codes_len == 0
+        {
+            &[][..]
+        } else {
+            // SAFETY: Native report owns `omitted_field_reason_codes_len` entries until parent free.
+            unsafe {
+                slice::from_raw_parts(
+                    raw.omitted_field_reason_codes,
+                    raw.omitted_field_reason_codes_len,
+                )
+            }
+        };
+        fields
+            .iter()
+            .enumerate()
+            .map(|(index, field)| V4OmittedPreciseAccountingField {
+                field: V4PreciseAccountingField::from_raw(field.field),
+                reason: optional_c_string(field.reason.cast_const()),
+                reason_code: reason_codes
+                    .get(index)
+                    .and_then(|ptr| optional_c_string((*ptr).cast_const())),
+            })
+            .collect()
+    };
+    V4PreciseAccountingBytes {
+        unreachable_bytes: (raw.has_unreachable_bytes != 0).then_some(raw.unreachable_bytes),
+        retained_history_required_bytes: (raw.has_retained_history_required_bytes != 0)
+            .then_some(raw.retained_history_required_bytes),
+        popped_skipped_bytes: (raw.has_popped_skipped_bytes != 0)
+            .then_some(raw.popped_skipped_bytes),
+        reclaimable_bytes: (raw.has_reclaimable_bytes != 0).then_some(raw.reclaimable_bytes),
+        omitted_fields,
+    }
+}
+
+fn copy_v4_current_head_bytes(raw: sys::ArcadiaTioV4CurrentHeadBytes) -> V4CurrentHeadBytes {
+    V4CurrentHeadBytes {
+        payload_bytes: raw.payload_bytes,
+        index_bytes: raw.index_bytes,
+        epoch_bytes: raw.epoch_bytes,
+        aux_bytes: raw.aux_bytes,
+        commit_bytes: raw.commit_bytes,
+    }
+}
+
+fn copy_v4_audit_bytes(raw: sys::ArcadiaTioV4AuditBytes) -> V4AuditBytes {
+    V4AuditBytes {
+        commit_bytes: raw.commit_bytes,
+        index_bytes: raw.index_bytes,
+        epoch_bytes: raw.epoch_bytes,
+        aux_bytes: raw.aux_bytes,
+    }
+}
+
+fn copy_v4_payload_reuse_bytes(raw: sys::ArcadiaTioV4PayloadReuseBytes) -> V4PayloadReuseBytes {
+    V4PayloadReuseBytes {
+        resurrected_payload_bytes: raw.resurrected_payload_bytes,
+        shared_payload_bytes: raw.shared_payload_bytes,
+    }
+}
+
+fn copy_v4_superseded_bytes(raw: sys::ArcadiaTioV4SupersededBytes) -> V4SupersededBytes {
+    V4SupersededBytes {
+        payload_bytes: raw.payload_bytes,
+        index_bytes: raw.index_bytes,
+        epoch_bytes: raw.epoch_bytes,
+        aux_bytes: raw.aux_bytes,
+    }
+}
+
+fn new_v4_diagnostics_report() -> sys::ArcadiaTioV4DiagnosticsReport {
+    sys::ArcadiaTioV4DiagnosticsReport {
+        version: 1,
+        struct_size: mem::size_of::<sys::ArcadiaTioV4DiagnosticsReport>(),
+        status: sys::ARCADIA_TIO_V4_REPORT_UNKNOWN,
+        reason: ptr::null_mut(),
+        current_head: sys::ArcadiaTioV4CurrentHeadBytes {
+            payload_bytes: 0,
+            index_bytes: 0,
+            epoch_bytes: 0,
+            aux_bytes: 0,
+            commit_bytes: 0,
+        },
+        visible_chain_audit: sys::ArcadiaTioV4AuditBytes {
+            commit_bytes: 0,
+            index_bytes: 0,
+            epoch_bytes: 0,
+            aux_bytes: 0,
+        },
+        payload_reuse: sys::ArcadiaTioV4PayloadReuseBytes {
+            resurrected_payload_bytes: 0,
+            shared_payload_bytes: 0,
+        },
+        superseded: sys::ArcadiaTioV4SupersededBytes {
+            payload_bytes: 0,
+            index_bytes: 0,
+            epoch_bytes: 0,
+            aux_bytes: 0,
+        },
+        unknown_bytes: 0,
+        omitted_unreachable_bytes: 0,
+        omitted_unreachable_bytes_reason: ptr::null_mut(),
+    }
+}
+
+fn copy_v4_diagnostics_report(raw: &sys::ArcadiaTioV4DiagnosticsReport) -> V4DiagnosticsReport {
+    V4DiagnosticsReport {
+        status: V4ReportStatus::from_raw(raw.status),
+        reason: optional_c_string(raw.reason.cast_const()),
+        current_head: copy_v4_current_head_bytes(raw.current_head),
+        visible_chain_audit: copy_v4_audit_bytes(raw.visible_chain_audit),
+        payload_reuse: copy_v4_payload_reuse_bytes(raw.payload_reuse),
+        superseded: copy_v4_superseded_bytes(raw.superseded),
+        unknown_bytes: raw.unknown_bytes,
+        omitted_unreachable_bytes: raw.omitted_unreachable_bytes != 0,
+        omitted_unreachable_bytes_reason: optional_c_string(
+            raw.omitted_unreachable_bytes_reason.cast_const(),
+        ),
+    }
+}
+
+fn new_v4_diagnostics_precise_report() -> sys::ArcadiaTioV4DiagnosticsPreciseReport {
+    sys::ArcadiaTioV4DiagnosticsPreciseReport {
+        version: 1,
+        struct_size: mem::size_of::<sys::ArcadiaTioV4DiagnosticsPreciseReport>(),
+        status: sys::ARCADIA_TIO_V4_REPORT_UNKNOWN,
+        reason: ptr::null_mut(),
+        current_head: new_v4_diagnostics_report().current_head,
+        visible_chain_audit: new_v4_diagnostics_report().visible_chain_audit,
+        payload_reuse: new_v4_diagnostics_report().payload_reuse,
+        superseded: new_v4_diagnostics_report().superseded,
+        unknown_bytes: 0,
+        precise_accounting: new_v4_precise_accounting_bytes(),
+        reason_code: ptr::null_mut(),
+    }
+}
+
+fn copy_v4_diagnostics_precise_report(
+    raw: &sys::ArcadiaTioV4DiagnosticsPreciseReport,
+) -> V4DiagnosticsPreciseReport {
+    V4DiagnosticsPreciseReport {
+        status: V4ReportStatus::from_raw(raw.status),
+        reason: optional_c_string(raw.reason.cast_const()),
+        current_head: copy_v4_current_head_bytes(raw.current_head),
+        visible_chain_audit: copy_v4_audit_bytes(raw.visible_chain_audit),
+        payload_reuse: copy_v4_payload_reuse_bytes(raw.payload_reuse),
+        superseded: copy_v4_superseded_bytes(raw.superseded),
+        unknown_bytes: raw.unknown_bytes,
+        precise_accounting: copy_v4_precise_accounting_bytes(&raw.precise_accounting),
+        reason_code: optional_c_string(raw.reason_code.cast_const()),
+    }
+}
+
+fn new_v4_compaction_analysis_report() -> sys::ArcadiaTioV4CompactionAnalysisReport {
+    sys::ArcadiaTioV4CompactionAnalysisReport {
+        version: 1,
+        struct_size: mem::size_of::<sys::ArcadiaTioV4CompactionAnalysisReport>(),
+        status: sys::ARCADIA_TIO_V4_REPORT_UNKNOWN,
+        reason: ptr::null_mut(),
+        policy: sys::ARCADIA_TIO_V4_COMPACTION_POLICY_COMPACT_TO_CURRENT_STATE,
+        source_file_bytes: 0,
+        current_state_required_bytes: 0,
+        ordinary_reclaimable_bytes: 0,
+        unknown_bytes: 0,
+        omitted_unreachable_bytes: 0,
+        omitted_unreachable_bytes_reason: ptr::null_mut(),
+    }
+}
+
+fn copy_v4_compaction_analysis_report(
+    raw: &sys::ArcadiaTioV4CompactionAnalysisReport,
+) -> Result<V4CompactionAnalysisReport> {
+    Ok(V4CompactionAnalysisReport {
+        status: V4ReportStatus::from_raw(raw.status),
+        reason: optional_c_string(raw.reason.cast_const()),
+        policy: V4CompactionAnalysisPolicy::from_raw(raw.policy)?,
+        source_file_bytes: raw.source_file_bytes,
+        current_state_required_bytes: raw.current_state_required_bytes,
+        ordinary_reclaimable_bytes: raw.ordinary_reclaimable_bytes,
+        unknown_bytes: raw.unknown_bytes,
+        omitted_unreachable_bytes: raw.omitted_unreachable_bytes != 0,
+        omitted_unreachable_bytes_reason: optional_c_string(
+            raw.omitted_unreachable_bytes_reason.cast_const(),
+        ),
+    })
+}
+
+fn new_v4_compaction_analysis_precise_report() -> sys::ArcadiaTioV4CompactionAnalysisPreciseReport {
+    sys::ArcadiaTioV4CompactionAnalysisPreciseReport {
+        version: 1,
+        struct_size: mem::size_of::<sys::ArcadiaTioV4CompactionAnalysisPreciseReport>(),
+        status: sys::ARCADIA_TIO_V4_REPORT_UNKNOWN,
+        reason: ptr::null_mut(),
+        policy: sys::ARCADIA_TIO_V4_COMPACTION_POLICY_COMPACT_TO_CURRENT_STATE,
+        source_file_bytes: 0,
+        current_state_required_bytes: 0,
+        ordinary_reclaimable_bytes: 0,
+        unknown_bytes: 0,
+        precise_accounting: new_v4_precise_accounting_bytes(),
+        reason_code: ptr::null_mut(),
+    }
+}
+
+fn copy_v4_compaction_analysis_precise_report(
+    raw: &sys::ArcadiaTioV4CompactionAnalysisPreciseReport,
+) -> Result<V4CompactionAnalysisPreciseReport> {
+    Ok(V4CompactionAnalysisPreciseReport {
+        status: V4ReportStatus::from_raw(raw.status),
+        reason: optional_c_string(raw.reason.cast_const()),
+        policy: V4CompactionAnalysisPolicy::from_raw(raw.policy)?,
+        source_file_bytes: raw.source_file_bytes,
+        current_state_required_bytes: raw.current_state_required_bytes,
+        ordinary_reclaimable_bytes: raw.ordinary_reclaimable_bytes,
+        unknown_bytes: raw.unknown_bytes,
+        precise_accounting: copy_v4_precise_accounting_bytes(&raw.precise_accounting),
+        reason_code: optional_c_string(raw.reason_code.cast_const()),
+    })
+}
+
+fn new_v4_retained_history_compaction_report() -> sys::ArcadiaTioV4RetainedHistoryCompactionReport {
+    sys::ArcadiaTioV4RetainedHistoryCompactionReport {
+        version: 1,
+        struct_size: mem::size_of::<sys::ArcadiaTioV4RetainedHistoryCompactionReport>(),
+        status: sys::ARCADIA_TIO_V4_REPORT_UNKNOWN,
+        reason: ptr::null_mut(),
+        retained_commit_count: 0,
+        retained_commit_seqs: ptr::null_mut(),
+        retained_commit_seqs_len: 0,
+        has_unretained_older_commit_count: 0,
+        unretained_older_commit_count: 0,
+        source_file_bytes: 0,
+        destination_file_bytes: 0,
+        omitted_unreachable_bytes: 0,
+        omitted_unreachable_bytes_reason: ptr::null_mut(),
+    }
+}
+
+fn copy_retained_commit_seqs(ptr: *mut u64, len: usize) -> Vec<u64> {
+    if ptr.is_null() || len == 0 {
+        Vec::new()
+    } else {
+        // SAFETY: Native report owns `len` entries until the parent report is freed.
+        unsafe { slice::from_raw_parts(ptr, len) }.to_vec()
+    }
+}
+
+fn copy_v4_retained_history_compaction_report(
+    raw: &sys::ArcadiaTioV4RetainedHistoryCompactionReport,
+) -> Result<V4RetainedHistoryCompactionReport> {
+    Ok(V4RetainedHistoryCompactionReport {
+        status: V4ReportStatus::from_raw(raw.status),
+        reason: optional_c_string(raw.reason.cast_const()),
+        retained_commit_count: raw.retained_commit_count,
+        retained_commit_seqs: copy_retained_commit_seqs(
+            raw.retained_commit_seqs,
+            raw.retained_commit_seqs_len,
+        ),
+        unretained_older_commit_count: (raw.has_unretained_older_commit_count != 0)
+            .then_some(raw.unretained_older_commit_count),
+        source_file_bytes: raw.source_file_bytes,
+        destination_file_bytes: raw.destination_file_bytes,
+        omitted_unreachable_bytes: raw.omitted_unreachable_bytes != 0,
+        omitted_unreachable_bytes_reason: optional_c_string(
+            raw.omitted_unreachable_bytes_reason.cast_const(),
+        ),
+    })
+}
+
+fn new_v4_retained_history_compaction_precise_report()
+-> sys::ArcadiaTioV4RetainedHistoryCompactionPreciseReport {
+    sys::ArcadiaTioV4RetainedHistoryCompactionPreciseReport {
+        version: 1,
+        struct_size: mem::size_of::<sys::ArcadiaTioV4RetainedHistoryCompactionPreciseReport>(),
+        status: sys::ARCADIA_TIO_V4_REPORT_UNKNOWN,
+        reason: ptr::null_mut(),
+        retained_commit_count: 0,
+        retained_commit_seqs: ptr::null_mut(),
+        retained_commit_seqs_len: 0,
+        has_unretained_older_commit_count: 0,
+        unretained_older_commit_count: 0,
+        source_file_bytes: 0,
+        destination_file_bytes: 0,
+        precise_source_accounting: new_v4_precise_accounting_bytes(),
+        reason_code: ptr::null_mut(),
+    }
+}
+
+fn copy_v4_retained_history_compaction_precise_report(
+    raw: &sys::ArcadiaTioV4RetainedHistoryCompactionPreciseReport,
+) -> Result<V4RetainedHistoryCompactionPreciseReport> {
+    Ok(V4RetainedHistoryCompactionPreciseReport {
+        status: V4ReportStatus::from_raw(raw.status),
+        reason: optional_c_string(raw.reason.cast_const()),
+        retained_commit_count: raw.retained_commit_count,
+        retained_commit_seqs: copy_retained_commit_seqs(
+            raw.retained_commit_seqs,
+            raw.retained_commit_seqs_len,
+        ),
+        unretained_older_commit_count: (raw.has_unretained_older_commit_count != 0)
+            .then_some(raw.unretained_older_commit_count),
+        source_file_bytes: raw.source_file_bytes,
+        destination_file_bytes: raw.destination_file_bytes,
+        precise_source_accounting: copy_v4_precise_accounting_bytes(&raw.precise_source_accounting),
+        reason_code: optional_c_string(raw.reason_code.cast_const()),
+    })
+}
+
+fn new_reform_report() -> sys::ArcadiaTioReformReport {
+    sys::ArcadiaTioReformReport {
+        version: 1,
+        struct_size: mem::size_of::<sys::ArcadiaTioReformReport>(),
+        reason_code: ptr::null_mut(),
+        reason_code_taxonomy: ptr::null_mut(),
+        reason: ptr::null_mut(),
+    }
+}
+
+fn copy_reform_report(raw: &sys::ArcadiaTioReformReport) -> ReformReport {
+    ReformReport {
+        reason_code: optional_c_string(raw.reason_code.cast_const()),
+        reason_code_taxonomy: optional_c_string(raw.reason_code_taxonomy.cast_const()),
+        reason: optional_c_string(raw.reason.cast_const()),
+    }
+}
+
+fn new_auto_compaction_config() -> sys::ArcadiaTioAutoCompactionConfig {
+    AutoCompactionConfig::default().to_raw()
+}
+
+fn copy_auto_compaction_config(
+    raw: sys::ArcadiaTioAutoCompactionConfig,
+) -> Result<AutoCompactionConfig> {
+    Ok(AutoCompactionConfig {
+        enabled: raw.enabled != 0,
+        retain_commits: raw.retain_commits,
+        dead_ratio_threshold: raw.dead_ratio_threshold,
+        min_dead_bytes: raw.min_dead_bytes,
+        mode: CompactionMode::from_raw(raw.mode)?,
+        check_every_commits: raw.check_every_commits,
+        cooldown_commits: raw.cooldown_commits,
     })
 }
 
@@ -3490,6 +4989,104 @@ impl<'a> PreparedAppendUniverseOptions<'a> {
             },
             remap_slots_len: self.remap_slots.len(),
         }
+    }
+}
+
+struct PreparedSingleSelector {
+    take_indices: Option<Vec<u32>>,
+    selector: sys::ArcadiaTioEntrySelector,
+}
+
+impl PreparedSingleSelector {
+    fn new(selector: &EntrySelector) -> Result<Self> {
+        let (take_indices, selector) = match selector {
+            EntrySelector::All => (
+                None,
+                sys::ArcadiaTioEntrySelector {
+                    kind: sys::ARCADIA_TIO_ENTRY_SELECTOR_ALL,
+                    start: 0,
+                    end: 0,
+                    indices: ptr::null(),
+                    indices_len: 0,
+                },
+            ),
+            EntrySelector::Range { start, end } => {
+                if start > end {
+                    return Err(TioError::invalid_argument(
+                        "selector range start must be <= end",
+                    ));
+                }
+                (
+                    None,
+                    sys::ArcadiaTioEntrySelector {
+                        kind: sys::ARCADIA_TIO_ENTRY_SELECTOR_RANGE,
+                        start: *start,
+                        end: *end,
+                        indices: ptr::null(),
+                        indices_len: 0,
+                    },
+                )
+            }
+            EntrySelector::Take(indices) => {
+                let values = indices.clone();
+                let selector = sys::ArcadiaTioEntrySelector {
+                    kind: sys::ARCADIA_TIO_ENTRY_SELECTOR_TAKE,
+                    start: 0,
+                    end: 0,
+                    indices: if values.is_empty() {
+                        ptr::null()
+                    } else {
+                        values.as_ptr()
+                    },
+                    indices_len: values.len(),
+                };
+                (Some(values), selector)
+            }
+        };
+        Ok(Self {
+            take_indices,
+            selector,
+        })
+    }
+
+    fn ptr(&self) -> *const sys::ArcadiaTioEntrySelector {
+        let _ = &self.take_indices;
+        &self.selector
+    }
+}
+
+struct PreparedChunkKeys<'a> {
+    keys: &'a [ChunkKey],
+    raw: Vec<sys::ArcadiaTioChunkKey>,
+}
+
+impl<'a> PreparedChunkKeys<'a> {
+    fn new(keys: &'a [ChunkKey]) -> Self {
+        let raw = keys
+            .iter()
+            .map(|key| sys::ArcadiaTioChunkKey {
+                coords: if key.coords.is_empty() {
+                    ptr::null()
+                } else {
+                    key.coords.as_ptr()
+                },
+                len: key.coords.len(),
+            })
+            .collect();
+        Self { keys, raw }
+    }
+
+    fn ptr(&self) -> *const sys::ArcadiaTioChunkKey {
+        let _ = &self.keys;
+        if self.raw.is_empty() {
+            ptr::null()
+        } else {
+            self.raw.as_ptr()
+        }
+    }
+
+    fn len(&self) -> usize {
+        self.raw.len()
     }
 }
 
