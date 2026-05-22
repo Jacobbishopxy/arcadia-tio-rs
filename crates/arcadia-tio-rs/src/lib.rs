@@ -1,0 +1,1914 @@
+#![doc = include_str!("../README.md")]
+#![forbid(unsafe_op_in_unsafe_fn)]
+
+use std::ffi::{CStr, CString};
+use std::fmt;
+use std::marker::PhantomData;
+use std::mem::{self, MaybeUninit};
+use std::os::raw::{c_char, c_void};
+use std::path::Path;
+use std::ptr::{self, NonNull};
+use std::rc::Rc;
+use std::slice;
+
+use arcadia_tio_sys as sys;
+
+/// Result type returned by the safe wrapper.
+pub type Result<T> = std::result::Result<T, TioError>;
+
+/// Error code surfaced by the C ABI.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ErrorCode {
+    /// No error.
+    Ok,
+    /// Invalid argument.
+    InvalidArgument,
+    /// Operation is not implemented by the native library.
+    Unimplemented,
+    /// I/O failure.
+    Io,
+    /// FlatBuffers serialization/deserialization failure.
+    Flatbuffers,
+    /// Unknown native status code.
+    Unknown(i32),
+}
+
+impl ErrorCode {
+    fn from_raw(value: i32) -> Self {
+        match value {
+            sys::ARCADIA_TIO_ERROR_OK => Self::Ok,
+            sys::ARCADIA_TIO_ERROR_INVALID_ARGUMENT => Self::InvalidArgument,
+            sys::ARCADIA_TIO_ERROR_UNIMPLEMENTED => Self::Unimplemented,
+            sys::ARCADIA_TIO_ERROR_IO => Self::Io,
+            sys::ARCADIA_TIO_ERROR_FLATBUFFERS => Self::Flatbuffers,
+            other => Self::Unknown(other),
+        }
+    }
+
+    fn as_raw(self) -> i32 {
+        match self {
+            Self::Ok => sys::ARCADIA_TIO_ERROR_OK,
+            Self::InvalidArgument => sys::ARCADIA_TIO_ERROR_INVALID_ARGUMENT,
+            Self::Unimplemented => sys::ARCADIA_TIO_ERROR_UNIMPLEMENTED,
+            Self::Io => sys::ARCADIA_TIO_ERROR_IO,
+            Self::Flatbuffers => sys::ARCADIA_TIO_ERROR_FLATBUFFERS,
+            Self::Unknown(value) => value,
+        }
+    }
+}
+
+/// Owned safe wrapper error.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TioError {
+    code: ErrorCode,
+    message: String,
+}
+
+impl TioError {
+    /// Returns the native/status error code.
+    pub fn code(&self) -> ErrorCode {
+        self.code
+    }
+
+    /// Returns the owned error message.
+    pub fn message(&self) -> &str {
+        &self.message
+    }
+
+    fn invalid_argument(message: impl Into<String>) -> Self {
+        Self {
+            code: ErrorCode::InvalidArgument,
+            message: message.into(),
+        }
+    }
+
+    fn unimplemented(message: impl Into<String>) -> Self {
+        Self {
+            code: ErrorCode::Unimplemented,
+            message: message.into(),
+        }
+    }
+
+    fn from_last_error(fallback: &str) -> Self {
+        // SAFETY: The C ABI exposes thread-local borrowed error storage. The wrapper copies the
+        // string immediately into owned Rust memory before returning.
+        let raw_code = unsafe { sys::arcadia_tio_last_error_code() };
+        // SAFETY: The returned pointer is borrowed and may be null. It is only read for this call.
+        let raw_message = unsafe { sys::arcadia_tio_last_error_message() };
+        let message = if raw_message.is_null() {
+            fallback.to_string()
+        } else {
+            // SAFETY: C ABI documents this as a NUL-terminated thread-local string.
+            let copied = unsafe { CStr::from_ptr(raw_message) }
+                .to_string_lossy()
+                .into_owned();
+            if copied.is_empty() {
+                fallback.to_string()
+            } else {
+                copied
+            }
+        };
+        Self {
+            code: ErrorCode::from_raw(raw_code),
+            message,
+        }
+    }
+
+    fn conversion(message: impl Into<String>) -> Self {
+        Self::invalid_argument(message)
+    }
+}
+
+impl fmt::Display for TioError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(
+            f,
+            "Arcadia TIO error {:?} ({}): {}",
+            self.code,
+            self.code.as_raw(),
+            self.message
+        )
+    }
+}
+
+impl std::error::Error for TioError {}
+
+fn status_result(status: i32, context: &str) -> Result<()> {
+    if status == sys::ARCADIA_TIO_ERROR_OK {
+        Ok(())
+    } else {
+        Err(TioError::from_last_error(context))
+    }
+}
+
+fn path_to_cstring(path: impl AsRef<Path>) -> Result<CString> {
+    let path = path.as_ref();
+    let text = path
+        .to_str()
+        .ok_or_else(|| TioError::invalid_argument("path must be valid UTF-8 for the C ABI"))?;
+    CString::new(text).map_err(|_| TioError::invalid_argument("path contains an interior NUL byte"))
+}
+
+fn string_to_cstring(value: &str, label: &str) -> Result<CString> {
+    CString::new(value)
+        .map_err(|_| TioError::invalid_argument(format!("{label} contains an interior NUL byte")))
+}
+
+fn optional_c_string(ptr: *const c_char) -> Option<String> {
+    if ptr.is_null() {
+        None
+    } else {
+        // SAFETY: Native metadata strings are documented as NUL-terminated C strings owned by the
+        // metadata object while it is alive. The wrapper copies them immediately.
+        Some(
+            unsafe { CStr::from_ptr(ptr) }
+                .to_string_lossy()
+                .into_owned(),
+        )
+    }
+}
+
+fn required_c_string(ptr: *const c_char) -> String {
+    optional_c_string(ptr).unwrap_or_default()
+}
+
+/// Payload dtype supported by the first safe wrapper slice.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DType {
+    /// 32-bit floating point.
+    F32,
+    /// 64-bit floating point.
+    F64,
+    /// 32-bit signed integer.
+    I32,
+    /// 64-bit signed integer.
+    I64,
+}
+
+impl DType {
+    fn to_raw(self) -> sys::ArcadiaTioDType {
+        match self {
+            Self::F32 => sys::ARCADIA_TIO_DTYPE_F32,
+            Self::F64 => sys::ARCADIA_TIO_DTYPE_F64,
+            Self::I32 => sys::ARCADIA_TIO_DTYPE_I32,
+            Self::I64 => sys::ARCADIA_TIO_DTYPE_I64,
+        }
+    }
+
+    fn from_raw(value: sys::ArcadiaTioDType) -> Result<Self> {
+        match value {
+            sys::ARCADIA_TIO_DTYPE_F32 => Ok(Self::F32),
+            sys::ARCADIA_TIO_DTYPE_F64 => Ok(Self::F64),
+            sys::ARCADIA_TIO_DTYPE_I32 => Ok(Self::I32),
+            sys::ARCADIA_TIO_DTYPE_I64 => Ok(Self::I64),
+            other => Err(TioError::conversion(format!("unknown dtype value {other}"))),
+        }
+    }
+
+    /// Returns the number of bytes per scalar value for this dtype.
+    pub fn size_bytes(self) -> usize {
+        match self {
+            Self::F32 | Self::I32 => 4,
+            Self::F64 | Self::I64 => 8,
+        }
+    }
+}
+
+/// Semantic axis kind used in create metadata.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AxisKind {
+    /// Time axis.
+    Time,
+    /// Symbol axis.
+    Symbol,
+    /// Channel axis.
+    Channel,
+    /// Other axis.
+    Other,
+}
+
+impl AxisKind {
+    fn to_raw(self) -> sys::ArcadiaTioAxisKind {
+        match self {
+            Self::Time => sys::ARCADIA_TIO_AXIS_TIME,
+            Self::Symbol => sys::ARCADIA_TIO_AXIS_SYMBOL,
+            Self::Channel => sys::ARCADIA_TIO_AXIS_CHANNEL,
+            Self::Other => sys::ARCADIA_TIO_AXIS_OTHER,
+        }
+    }
+
+    fn from_raw(value: sys::ArcadiaTioAxisKind) -> Result<Self> {
+        match value {
+            sys::ARCADIA_TIO_AXIS_TIME => Ok(Self::Time),
+            sys::ARCADIA_TIO_AXIS_SYMBOL => Ok(Self::Symbol),
+            sys::ARCADIA_TIO_AXIS_CHANNEL => Ok(Self::Channel),
+            sys::ARCADIA_TIO_AXIS_OTHER => Ok(Self::Other),
+            other => Err(TioError::conversion(format!(
+                "unknown axis kind value {other}"
+            ))),
+        }
+    }
+}
+
+/// Effective header/profile reported by metadata.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum HeaderProfile {
+    /// Streaming profile.
+    Streaming,
+    /// Random-access profile.
+    RandomAccess,
+}
+
+impl HeaderProfile {
+    fn from_raw(value: sys::ArcadiaTioHeaderProfile) -> Result<Self> {
+        match value {
+            sys::ARCADIA_TIO_HEADER_PROFILE_STREAMING => Ok(Self::Streaming),
+            sys::ARCADIA_TIO_HEADER_PROFILE_RANDOM_ACCESS => Ok(Self::RandomAccess),
+            other => Err(TioError::conversion(format!(
+                "unknown header profile value {other}"
+            ))),
+        }
+    }
+}
+
+/// Shape/dimension metadata.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DimSpec {
+    /// Semantic axis kind.
+    pub kind: AxisKind,
+    /// Current axis length.
+    pub len: u32,
+    /// Optional axis name.
+    pub name: Option<String>,
+}
+
+impl DimSpec {
+    /// Creates a dimension descriptor without a name.
+    pub fn new(kind: AxisKind, len: u32) -> Self {
+        Self {
+            kind,
+            len,
+            name: None,
+        }
+    }
+
+    /// Sets an axis name.
+    pub fn with_name(mut self, name: impl Into<String>) -> Self {
+        self.name = Some(name.into());
+        self
+    }
+}
+
+/// Axis label metadata item.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AxisLabel {
+    /// Numeric label id assigned by the native metadata model.
+    pub id: u32,
+    /// Label name.
+    pub name: String,
+}
+
+/// User metadata key/value item.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct UserKv {
+    /// Metadata key.
+    pub key: String,
+    /// Metadata value.
+    pub value: String,
+}
+
+/// File metadata snapshot copied into Rust-owned values.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct FileMeta {
+    /// Payload dtype.
+    pub dtype: DType,
+    /// Dimension descriptors.
+    pub dims: Vec<DimSpec>,
+    /// Append dimension index.
+    pub append_dim: usize,
+    /// Symbol labels.
+    pub symbols: Vec<AxisLabel>,
+    /// Channel labels.
+    pub channels: Vec<AxisLabel>,
+    /// User metadata.
+    pub user_kv: Vec<UserKv>,
+    /// Effective header profile.
+    pub effective_profile: HeaderProfile,
+    /// Current head commit sequence.
+    pub commit_seq: u64,
+}
+
+/// Owned tensor payload copied out of native C ABI buffers.
+#[derive(Debug, Clone, PartialEq)]
+pub enum TensorData {
+    /// f32 payload data.
+    F32(Vec<f32>),
+    /// f64 payload data.
+    F64(Vec<f64>),
+    /// i32 payload data.
+    I32(Vec<i32>),
+    /// i64 payload data.
+    I64(Vec<i64>),
+}
+
+impl TensorData {
+    /// Returns the payload dtype.
+    pub fn dtype(&self) -> DType {
+        match self {
+            Self::F32(_) => DType::F32,
+            Self::F64(_) => DType::F64,
+            Self::I32(_) => DType::I32,
+            Self::I64(_) => DType::I64,
+        }
+    }
+
+    /// Returns the number of scalar values.
+    pub fn len(&self) -> usize {
+        match self {
+            Self::F32(values) => values.len(),
+            Self::F64(values) => values.len(),
+            Self::I32(values) => values.len(),
+            Self::I64(values) => values.len(),
+        }
+    }
+
+    /// Returns true when there are no scalar values.
+    pub fn is_empty(&self) -> bool {
+        self.len() == 0
+    }
+}
+
+/// Owned tensor copied into Rust memory.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Tensor {
+    /// Payload dtype.
+    pub dtype: DType,
+    /// Tensor shape.
+    pub shape: Vec<u64>,
+    /// Owned tensor payload.
+    pub data: TensorData,
+}
+
+impl Tensor {
+    /// Returns the number of scalar values implied by the shape.
+    pub fn element_len(&self) -> Result<usize> {
+        shape_element_len(&self.shape)
+    }
+}
+
+/// Dense read result with an optional validity mask copied into Rust memory.
+#[derive(Debug, Clone, PartialEq)]
+pub struct DenseTensor {
+    /// Dense tensor payload.
+    pub tensor: Tensor,
+    /// Optional validity mask where `1` means valid and `0` means filled/null.
+    pub mask: Option<Vec<u8>>,
+}
+
+/// Append entry range assigned by the native append call.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct AppendRange {
+    /// First appended entry id.
+    pub start: u32,
+    /// One-past-last appended entry id.
+    pub end: u32,
+}
+
+/// Create-time storage/layout profile.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CreateLayout {
+    /// Streaming V4 create path.
+    Streaming,
+    /// Random-access V4 create path.
+    RandomAccess,
+}
+
+/// Owned create options for the first wrapper slice.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CreateOptions {
+    /// Payload dtype.
+    pub dtype: DType,
+    /// Dimension descriptors.
+    pub dims: Vec<DimSpec>,
+    /// Append dimension index.
+    pub append_dim: usize,
+    /// Create layout/profile.
+    pub layout: CreateLayout,
+    /// Symbol labels.
+    pub symbols: Vec<String>,
+    /// Channel labels.
+    pub channels: Vec<String>,
+    /// User metadata key/value pairs.
+    pub user_kv: Vec<(String, String)>,
+    /// Optional coordinate descriptors.
+    pub coordinates: Vec<CoordinateSpec>,
+    /// Optional write-time compression policy for future appends.
+    pub compression: Option<CompressionConfig>,
+}
+
+impl CreateOptions {
+    /// Builds streaming create options.
+    pub fn streaming(dtype: DType, dims: Vec<DimSpec>, append_dim: usize) -> Self {
+        Self {
+            dtype,
+            dims,
+            append_dim,
+            layout: CreateLayout::Streaming,
+            symbols: Vec::new(),
+            channels: Vec::new(),
+            user_kv: Vec::new(),
+            coordinates: Vec::new(),
+            compression: None,
+        }
+    }
+
+    /// Builds random-access create options.
+    pub fn random_access(dtype: DType, dims: Vec<DimSpec>, append_dim: usize) -> Self {
+        Self {
+            layout: CreateLayout::RandomAccess,
+            ..Self::streaming(dtype, dims, append_dim)
+        }
+    }
+}
+
+/// Write-time compression policy for future appends.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct CompressionConfig {
+    /// Native compression mode.
+    pub mode: sys::ArcadiaTioCompressionMode,
+    /// Native compression codec.
+    pub codec: sys::ArcadiaTioCompressionCodec,
+    /// Auto-mode minimum raw payload bytes.
+    pub min_payload_bytes: u32,
+    /// Zstd level.
+    pub zstd_level: i32,
+}
+
+impl CompressionConfig {
+    /// Explicit uncompressed writes.
+    pub fn uncompressed() -> Self {
+        Self {
+            mode: sys::ARCADIA_TIO_COMPRESSION_FORCE_OFF,
+            codec: sys::ARCADIA_TIO_COMPRESSION_CODEC_ZSTD,
+            min_payload_bytes: 0,
+            zstd_level: 3,
+        }
+    }
+
+    /// Explicit zstd writes at the requested level.
+    pub fn zstd_level(level: i32) -> Self {
+        Self {
+            mode: sys::ARCADIA_TIO_COMPRESSION_FORCE_ON,
+            codec: sys::ARCADIA_TIO_COMPRESSION_CODEC_ZSTD,
+            min_payload_bytes: 0,
+            zstd_level: level,
+        }
+    }
+
+    fn validate(self) -> Result<Self> {
+        if !matches!(
+            self.mode,
+            sys::ARCADIA_TIO_COMPRESSION_FORCE_OFF
+                | sys::ARCADIA_TIO_COMPRESSION_AUTO
+                | sys::ARCADIA_TIO_COMPRESSION_FORCE_ON
+        ) {
+            return Err(TioError::invalid_argument("unknown compression mode"));
+        }
+        if self.codec != sys::ARCADIA_TIO_COMPRESSION_CODEC_ZSTD {
+            return Err(TioError::unimplemented(
+                "LZ4 V4 payload compression is not supported yet",
+            ));
+        }
+        if !(-7..=22).contains(&self.zstd_level) {
+            return Err(TioError::invalid_argument(
+                "zstd_level must be within [-7, 22]",
+            ));
+        }
+        Ok(self)
+    }
+
+    fn to_raw(self) -> sys::ArcadiaTioCompressionConfig {
+        sys::ArcadiaTioCompressionConfig {
+            version: 1,
+            struct_size: std::mem::size_of::<sys::ArcadiaTioCompressionConfig>(),
+            mode: self.mode,
+            codec: self.codec,
+            min_payload_bytes: self.min_payload_bytes,
+            zstd_level: self.zstd_level,
+        }
+    }
+}
+
+/// Coordinate dtype supported by native coordinate metadata.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CoordinateDType {
+    /// 32-bit signed integer coordinates.
+    I32,
+    /// 64-bit signed integer coordinates.
+    I64,
+}
+
+impl CoordinateDType {
+    fn to_raw(self) -> sys::ArcadiaTioCoordinateDType {
+        match self {
+            Self::I32 => sys::ARCADIA_TIO_COORDINATE_DTYPE_I32,
+            Self::I64 => sys::ARCADIA_TIO_COORDINATE_DTYPE_I64,
+        }
+    }
+
+    fn from_raw(value: sys::ArcadiaTioCoordinateDType) -> Result<Self> {
+        match value {
+            sys::ARCADIA_TIO_COORDINATE_DTYPE_I32 => Ok(Self::I32),
+            sys::ARCADIA_TIO_COORDINATE_DTYPE_I64 => Ok(Self::I64),
+            other => Err(TioError::conversion(format!(
+                "unknown coordinate dtype value {other}"
+            ))),
+        }
+    }
+}
+
+/// Coordinate semantic kind.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CoordinateKind {
+    /// Ordinal/position coordinate.
+    Position,
+    /// Numeric label id coordinate.
+    LabelId,
+    /// Date coordinate.
+    Date,
+    /// Timestamp coordinate.
+    Timestamp,
+    /// Domain-specific numeric value.
+    DomainValue,
+}
+
+impl CoordinateKind {
+    fn to_raw(self) -> sys::ArcadiaTioCoordinateKind {
+        match self {
+            Self::Position => sys::ARCADIA_TIO_COORDINATE_KIND_POSITION,
+            Self::LabelId => sys::ARCADIA_TIO_COORDINATE_KIND_LABEL_ID,
+            Self::Date => sys::ARCADIA_TIO_COORDINATE_KIND_DATE,
+            Self::Timestamp => sys::ARCADIA_TIO_COORDINATE_KIND_TIMESTAMP,
+            Self::DomainValue => sys::ARCADIA_TIO_COORDINATE_KIND_DOMAIN_VALUE,
+        }
+    }
+
+    fn from_raw(value: sys::ArcadiaTioCoordinateKind) -> Result<Self> {
+        match value {
+            sys::ARCADIA_TIO_COORDINATE_KIND_POSITION => Ok(Self::Position),
+            sys::ARCADIA_TIO_COORDINATE_KIND_LABEL_ID => Ok(Self::LabelId),
+            sys::ARCADIA_TIO_COORDINATE_KIND_DATE => Ok(Self::Date),
+            sys::ARCADIA_TIO_COORDINATE_KIND_TIMESTAMP => Ok(Self::Timestamp),
+            sys::ARCADIA_TIO_COORDINATE_KIND_DOMAIN_VALUE => Ok(Self::DomainValue),
+            other => Err(TioError::conversion(format!(
+                "unknown coordinate kind value {other}"
+            ))),
+        }
+    }
+}
+
+/// Integer coordinate encoding.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CoordinateEncoding {
+    /// Plain integer coordinate values.
+    Plain,
+    /// Days since an agreed epoch.
+    DateDays,
+    /// YYYYMMDD encoded date integer.
+    DateYyyymmdd,
+    /// Unix epoch seconds.
+    EpochSeconds,
+    /// Unix epoch milliseconds.
+    EpochMilliseconds,
+    /// Unix epoch microseconds.
+    EpochMicroseconds,
+    /// Unix epoch nanoseconds.
+    EpochNanoseconds,
+}
+
+impl CoordinateEncoding {
+    fn to_raw(self) -> sys::ArcadiaTioCoordinateEncoding {
+        match self {
+            Self::Plain => sys::ARCADIA_TIO_COORDINATE_ENCODING_PLAIN,
+            Self::DateDays => sys::ARCADIA_TIO_COORDINATE_ENCODING_DATE_DAYS,
+            Self::DateYyyymmdd => sys::ARCADIA_TIO_COORDINATE_ENCODING_DATE_YYYYMMDD,
+            Self::EpochSeconds => sys::ARCADIA_TIO_COORDINATE_ENCODING_EPOCH_SECONDS,
+            Self::EpochMilliseconds => sys::ARCADIA_TIO_COORDINATE_ENCODING_EPOCH_MILLISECONDS,
+            Self::EpochMicroseconds => sys::ARCADIA_TIO_COORDINATE_ENCODING_EPOCH_MICROSECONDS,
+            Self::EpochNanoseconds => sys::ARCADIA_TIO_COORDINATE_ENCODING_EPOCH_NANOSECONDS,
+        }
+    }
+
+    fn from_raw(value: sys::ArcadiaTioCoordinateEncoding) -> Result<Self> {
+        match value {
+            sys::ARCADIA_TIO_COORDINATE_ENCODING_PLAIN => Ok(Self::Plain),
+            sys::ARCADIA_TIO_COORDINATE_ENCODING_DATE_DAYS => Ok(Self::DateDays),
+            sys::ARCADIA_TIO_COORDINATE_ENCODING_DATE_YYYYMMDD => Ok(Self::DateYyyymmdd),
+            sys::ARCADIA_TIO_COORDINATE_ENCODING_EPOCH_SECONDS => Ok(Self::EpochSeconds),
+            sys::ARCADIA_TIO_COORDINATE_ENCODING_EPOCH_MILLISECONDS => Ok(Self::EpochMilliseconds),
+            sys::ARCADIA_TIO_COORDINATE_ENCODING_EPOCH_MICROSECONDS => Ok(Self::EpochMicroseconds),
+            sys::ARCADIA_TIO_COORDINATE_ENCODING_EPOCH_NANOSECONDS => Ok(Self::EpochNanoseconds),
+            other => Err(TioError::conversion(format!(
+                "unknown coordinate encoding value {other}"
+            ))),
+        }
+    }
+}
+
+/// Coordinate sortedness hint.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CoordinateSortedness {
+    /// Sortedness not declared.
+    Unknown,
+    /// Values are ascending.
+    Ascending,
+    /// Values are descending.
+    Descending,
+    /// Values are unsorted.
+    Unsorted,
+}
+
+impl CoordinateSortedness {
+    fn to_raw(self) -> sys::ArcadiaTioCoordinateSortedness {
+        match self {
+            Self::Unknown => sys::ARCADIA_TIO_COORDINATE_SORTED_UNKNOWN,
+            Self::Ascending => sys::ARCADIA_TIO_COORDINATE_SORTED_ASCENDING,
+            Self::Descending => sys::ARCADIA_TIO_COORDINATE_SORTED_DESCENDING,
+            Self::Unsorted => sys::ARCADIA_TIO_COORDINATE_SORTED_UNSORTED,
+        }
+    }
+
+    fn from_raw(value: sys::ArcadiaTioCoordinateSortedness) -> Result<Self> {
+        match value {
+            sys::ARCADIA_TIO_COORDINATE_SORTED_UNKNOWN => Ok(Self::Unknown),
+            sys::ARCADIA_TIO_COORDINATE_SORTED_ASCENDING => Ok(Self::Ascending),
+            sys::ARCADIA_TIO_COORDINATE_SORTED_DESCENDING => Ok(Self::Descending),
+            sys::ARCADIA_TIO_COORDINATE_SORTED_UNSORTED => Ok(Self::Unsorted),
+            other => Err(TioError::conversion(format!(
+                "unknown coordinate sortedness value {other}"
+            ))),
+        }
+    }
+}
+
+/// Coordinate monotonicity hint.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CoordinateMonotonicity {
+    /// Monotonicity not declared.
+    Unknown,
+    /// Values are non-decreasing.
+    NonDecreasing,
+    /// Values are strictly increasing.
+    StrictlyIncreasing,
+    /// Values are non-increasing.
+    NonIncreasing,
+    /// Values are strictly decreasing.
+    StrictlyDecreasing,
+    /// Values are not monotonic.
+    NotMonotonic,
+}
+
+impl CoordinateMonotonicity {
+    fn to_raw(self) -> sys::ArcadiaTioCoordinateMonotonicity {
+        match self {
+            Self::Unknown => sys::ARCADIA_TIO_COORDINATE_MONOTONICITY_UNKNOWN,
+            Self::NonDecreasing => sys::ARCADIA_TIO_COORDINATE_MONOTONICITY_NON_DECREASING,
+            Self::StrictlyIncreasing => {
+                sys::ARCADIA_TIO_COORDINATE_MONOTONICITY_STRICTLY_INCREASING
+            }
+            Self::NonIncreasing => sys::ARCADIA_TIO_COORDINATE_MONOTONICITY_NON_INCREASING,
+            Self::StrictlyDecreasing => {
+                sys::ARCADIA_TIO_COORDINATE_MONOTONICITY_STRICTLY_DECREASING
+            }
+            Self::NotMonotonic => sys::ARCADIA_TIO_COORDINATE_MONOTONICITY_NOT_MONOTONIC,
+        }
+    }
+
+    fn from_raw(value: sys::ArcadiaTioCoordinateMonotonicity) -> Result<Self> {
+        match value {
+            sys::ARCADIA_TIO_COORDINATE_MONOTONICITY_UNKNOWN => Ok(Self::Unknown),
+            sys::ARCADIA_TIO_COORDINATE_MONOTONICITY_NON_DECREASING => Ok(Self::NonDecreasing),
+            sys::ARCADIA_TIO_COORDINATE_MONOTONICITY_STRICTLY_INCREASING => {
+                Ok(Self::StrictlyIncreasing)
+            }
+            sys::ARCADIA_TIO_COORDINATE_MONOTONICITY_NON_INCREASING => Ok(Self::NonIncreasing),
+            sys::ARCADIA_TIO_COORDINATE_MONOTONICITY_STRICTLY_DECREASING => {
+                Ok(Self::StrictlyDecreasing)
+            }
+            sys::ARCADIA_TIO_COORDINATE_MONOTONICITY_NOT_MONOTONIC => Ok(Self::NotMonotonic),
+            other => Err(TioError::conversion(format!(
+                "unknown coordinate monotonicity value {other}"
+            ))),
+        }
+    }
+}
+
+/// Coordinate uniqueness hint.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CoordinateUniqueness {
+    /// Uniqueness not declared.
+    Unknown,
+    /// Values are unique.
+    Unique,
+    /// Values have duplicates.
+    HasDuplicates,
+}
+
+impl CoordinateUniqueness {
+    fn to_raw(self) -> sys::ArcadiaTioCoordinateUniqueness {
+        match self {
+            Self::Unknown => sys::ARCADIA_TIO_COORDINATE_UNIQUENESS_UNKNOWN,
+            Self::Unique => sys::ARCADIA_TIO_COORDINATE_UNIQUENESS_UNIQUE,
+            Self::HasDuplicates => sys::ARCADIA_TIO_COORDINATE_UNIQUENESS_HAS_DUPLICATES,
+        }
+    }
+
+    fn from_raw(value: sys::ArcadiaTioCoordinateUniqueness) -> Result<Self> {
+        match value {
+            sys::ARCADIA_TIO_COORDINATE_UNIQUENESS_UNKNOWN => Ok(Self::Unknown),
+            sys::ARCADIA_TIO_COORDINATE_UNIQUENESS_UNIQUE => Ok(Self::Unique),
+            sys::ARCADIA_TIO_COORDINATE_UNIQUENESS_HAS_DUPLICATES => Ok(Self::HasDuplicates),
+            other => Err(TioError::conversion(format!(
+                "unknown coordinate uniqueness value {other}"
+            ))),
+        }
+    }
+}
+
+/// Coordinate storage location kind.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CoordinateStorageKind {
+    /// Inline coordinate values stored in the TIO file.
+    Inline,
+    /// External coordinates referenced by descriptor metadata only.
+    External,
+}
+
+impl CoordinateStorageKind {
+    fn from_raw(value: sys::ArcadiaTioCoordinateStorageKind) -> Result<Self> {
+        match value {
+            sys::ARCADIA_TIO_COORDINATE_STORAGE_INLINE => Ok(Self::Inline),
+            sys::ARCADIA_TIO_COORDINATE_STORAGE_EXTERNAL => Ok(Self::External),
+            other => Err(TioError::conversion(format!(
+                "unknown coordinate storage kind value {other}"
+            ))),
+        }
+    }
+}
+
+/// External coordinate source kind.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ExternalCoordinateSourceKind {
+    /// Same-file object reference.
+    SameFileObject,
+    /// Relative path reference.
+    RelativePath,
+    /// Absolute path reference.
+    AbsolutePath,
+    /// URI reference.
+    Uri,
+}
+
+impl ExternalCoordinateSourceKind {
+    fn to_raw(self) -> sys::ArcadiaTioCoordinateSourceKind {
+        match self {
+            Self::SameFileObject => sys::ARCADIA_TIO_COORDINATE_SOURCE_SAME_FILE_OBJECT,
+            Self::RelativePath => sys::ARCADIA_TIO_COORDINATE_SOURCE_RELATIVE_PATH,
+            Self::AbsolutePath => sys::ARCADIA_TIO_COORDINATE_SOURCE_ABSOLUTE_PATH,
+            Self::Uri => sys::ARCADIA_TIO_COORDINATE_SOURCE_URI,
+        }
+    }
+
+    fn from_raw(value: sys::ArcadiaTioCoordinateSourceKind) -> Result<Self> {
+        match value {
+            sys::ARCADIA_TIO_COORDINATE_SOURCE_SAME_FILE_OBJECT => Ok(Self::SameFileObject),
+            sys::ARCADIA_TIO_COORDINATE_SOURCE_RELATIVE_PATH => Ok(Self::RelativePath),
+            sys::ARCADIA_TIO_COORDINATE_SOURCE_ABSOLUTE_PATH => Ok(Self::AbsolutePath),
+            sys::ARCADIA_TIO_COORDINATE_SOURCE_URI => Ok(Self::Uri),
+            other => Err(TioError::conversion(format!(
+                "unknown coordinate source kind value {other}"
+            ))),
+        }
+    }
+}
+
+/// Coordinate validation status.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CoordinateValidationStatus {
+    /// Coordinate values are validated.
+    Validated,
+    /// Coordinate values are not validated or externally referenced.
+    Unvalidated,
+}
+
+impl CoordinateValidationStatus {
+    fn from_raw(value: sys::ArcadiaTioCoordinateValidationStatus) -> Result<Self> {
+        match value {
+            sys::ARCADIA_TIO_COORDINATE_VALIDATED => Ok(Self::Validated),
+            sys::ARCADIA_TIO_COORDINATE_UNVALIDATED => Ok(Self::Unvalidated),
+            other => Err(TioError::conversion(format!(
+                "unknown coordinate validation status value {other}"
+            ))),
+        }
+    }
+}
+
+/// Coordinate ordering hints.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct CoordinateOrdering {
+    /// Sortedness hint.
+    pub sorted: CoordinateSortedness,
+    /// Monotonicity hint.
+    pub monotonicity: CoordinateMonotonicity,
+    /// Uniqueness hint.
+    pub uniqueness: CoordinateUniqueness,
+}
+
+impl Default for CoordinateOrdering {
+    fn default() -> Self {
+        Self {
+            sorted: CoordinateSortedness::Unknown,
+            monotonicity: CoordinateMonotonicity::Unknown,
+            uniqueness: CoordinateUniqueness::Unknown,
+        }
+    }
+}
+
+/// Owned inline coordinate values accepted by create metadata.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum CoordinateValues {
+    /// i32 coordinate values.
+    I32(Vec<i32>),
+    /// i64 coordinate values.
+    I64(Vec<i64>),
+}
+
+impl CoordinateValues {
+    fn dtype(&self) -> CoordinateDType {
+        match self {
+            Self::I32(_) => CoordinateDType::I32,
+            Self::I64(_) => CoordinateDType::I64,
+        }
+    }
+
+    fn len(&self) -> usize {
+        match self {
+            Self::I32(values) => values.len(),
+            Self::I64(values) => values.len(),
+        }
+    }
+
+    fn as_ptr(&self) -> *const c_void {
+        match self {
+            Self::I32(values) => values.as_ptr().cast(),
+            Self::I64(values) => values.as_ptr().cast(),
+        }
+    }
+}
+
+/// Coordinate storage descriptor accepted at create time.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum CoordinateStorage {
+    /// Inline coordinate values. The values are borrowed only for the create call.
+    Inline(CoordinateValues),
+    /// External coordinate descriptor. External values are not resolved by this wrapper slice.
+    External {
+        /// External source kind.
+        source_kind: ExternalCoordinateSourceKind,
+        /// External URI/path.
+        uri: String,
+        /// External coordinate dtype.
+        dtype: CoordinateDType,
+        /// External coordinate length.
+        length: u64,
+    },
+}
+
+/// Coordinate descriptor accepted by create APIs.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CoordinateSpec {
+    /// Axis index.
+    pub axis: usize,
+    /// Optional coordinate name.
+    pub name: Option<String>,
+    /// Coordinate kind.
+    pub kind: CoordinateKind,
+    /// Coordinate encoding.
+    pub encoding: CoordinateEncoding,
+    /// Coordinate storage descriptor.
+    pub storage: CoordinateStorage,
+    /// Ordering hints.
+    pub ordering: CoordinateOrdering,
+    /// Whether the coordinate is required by consumers.
+    pub required: bool,
+}
+
+/// Coordinate metadata snapshot copied from native-owned descriptors.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CoordinateMeta {
+    /// Axis index.
+    pub axis: usize,
+    /// Optional axis name snapshot.
+    pub axis_name_snapshot: Option<String>,
+    /// Optional coordinate name.
+    pub name: Option<String>,
+    /// Coordinate kind.
+    pub kind: CoordinateKind,
+    /// Coordinate dtype.
+    pub dtype: CoordinateDType,
+    /// Coordinate encoding.
+    pub encoding: CoordinateEncoding,
+    /// Coordinate length.
+    pub length: u64,
+    /// Ordering hints.
+    pub ordering: CoordinateOrdering,
+    /// Storage kind.
+    pub storage_kind: CoordinateStorageKind,
+    /// External source kind.
+    pub external_source_kind: ExternalCoordinateSourceKind,
+    /// External URI when storage is external.
+    pub external_uri: Option<String>,
+    /// Whether this coordinate is required.
+    pub required: bool,
+    /// Validation status.
+    pub validation_status: CoordinateValidationStatus,
+}
+
+/// RAII TensorFile handle over the native C ABI.
+///
+/// The wrapper closes the native handle exactly once in `Drop`. It deliberately does not
+/// implement `Send` or `Sync` in this first slice because the C ABI handle thread-safety contract
+/// is not documented for concurrent mutation.
+pub struct TensorFile {
+    raw: NonNull<sys::ArcadiaTioHandle>,
+    _not_send_or_sync: PhantomData<Rc<()>>,
+}
+
+impl TensorFile {
+    /// Creates a TensorFile from safe create options.
+    pub fn create(path: impl AsRef<Path>, options: CreateOptions) -> Result<Self> {
+        let prepared = PreparedCreate::new(path, &options)?;
+        let compression = options
+            .compression
+            .map(CompressionConfig::validate)
+            .transpose()?;
+        // SAFETY: PreparedCreate owns all borrowed C strings/vectors for the duration of this call.
+        // Pointers and lengths match the owned Rust slices in `prepared` and `options`.
+        let raw = unsafe {
+            match options.layout {
+                CreateLayout::Streaming => sys::arcadia_tio_create_streaming_with_coordinates(
+                    prepared.path.as_ptr(),
+                    options.dtype.to_raw(),
+                    prepared.dim_kinds.as_ptr(),
+                    prepared.dim_lens.as_ptr(),
+                    prepared.dim_lens.len(),
+                    options.append_dim,
+                    prepared.dim_name_ptr(),
+                    prepared.dim_name_len(),
+                    prepared.symbol_ptr(),
+                    prepared.symbol_len(),
+                    prepared.channel_ptr(),
+                    prepared.channel_len(),
+                    prepared.user_key_ptr(),
+                    prepared.user_value_ptr(),
+                    prepared.user_kv_len(),
+                    prepared.coordinate_ptr(),
+                    prepared.coordinate_len(),
+                ),
+                CreateLayout::RandomAccess => {
+                    sys::arcadia_tio_create_random_access_with_coordinates(
+                        prepared.path.as_ptr(),
+                        options.dtype.to_raw(),
+                        prepared.dim_kinds.as_ptr(),
+                        prepared.dim_lens.as_ptr(),
+                        prepared.dim_lens.len(),
+                        options.append_dim,
+                        prepared.dim_name_ptr(),
+                        prepared.dim_name_len(),
+                        prepared.symbol_ptr(),
+                        prepared.symbol_len(),
+                        prepared.channel_ptr(),
+                        prepared.channel_len(),
+                        prepared.user_key_ptr(),
+                        prepared.user_value_ptr(),
+                        prepared.user_kv_len(),
+                        prepared.coordinate_ptr(),
+                        prepared.coordinate_len(),
+                    )
+                }
+            }
+        };
+        let file = Self::from_raw_handle(raw, "failed to create TensorFile")?;
+        if let Some(compression) = compression {
+            file.set_compression(compression)?;
+        }
+        Ok(file)
+    }
+
+    /// Set write-time compression for future appends on this handle.
+    pub fn set_compression(&self, compression: CompressionConfig) -> Result<()> {
+        let raw = compression.validate()?.to_raw();
+        let status = unsafe { sys::arcadia_tio_set_compression_config(self.raw.as_ptr(), &raw) };
+        status_result(status, "failed to set compression config")
+    }
+
+    /// Opens an existing TensorFile.
+    pub fn open(path: impl AsRef<Path>) -> Result<Self> {
+        let path = path_to_cstring(path)?;
+        // SAFETY: The C string is valid for the duration of this call.
+        let raw = unsafe { sys::arcadia_tio_open(path.as_ptr()) };
+        Self::from_raw_handle(raw, "failed to open TensorFile")
+    }
+
+    /// Loads metadata without keeping a TensorFile handle open.
+    pub fn load_meta(path: impl AsRef<Path>) -> Result<FileMeta> {
+        let path = path_to_cstring(path)?;
+        let mut raw = MaybeUninit::<sys::ArcadiaTioFileMeta>::uninit();
+        // SAFETY: `raw` points to valid uninitialized storage for the C ABI to fill.
+        let status = unsafe { sys::arcadia_tio_load_meta(path.as_ptr(), raw.as_mut_ptr()) };
+        status_result(status, "failed to load TensorFile metadata")?;
+        // SAFETY: Successful status initializes `raw`.
+        let mut raw = unsafe { raw.assume_init() };
+        let meta = copy_file_meta(&raw);
+        // SAFETY: `raw` contains native-owned buffers returned by load_meta and is freed exactly once.
+        unsafe { sys::arcadia_tio_file_meta_free(&mut raw) };
+        meta
+    }
+
+    /// Loads coordinate metadata without keeping a TensorFile handle open.
+    pub fn load_coordinate_meta(path: impl AsRef<Path>) -> Result<Vec<CoordinateMeta>> {
+        let path = path_to_cstring(path)?;
+        let mut raw_meta: *mut sys::ArcadiaTioAxisCoordinateMeta = ptr::null_mut();
+        let mut len = 0usize;
+        // SAFETY: The path C string and out pointers are valid for the duration of this call.
+        let status = unsafe {
+            sys::arcadia_tio_load_coordinate_meta(path.as_ptr(), &mut raw_meta, &mut len)
+        };
+        status_result(status, "failed to load coordinate metadata")?;
+        let out = copy_coordinate_meta(raw_meta, len);
+        // SAFETY: `raw_meta`/`len` are native-owned output from load_coordinate_meta and freed once.
+        unsafe { sys::arcadia_tio_axis_coordinate_meta_free(raw_meta, len) };
+        out
+    }
+
+    /// Returns the native C ABI version reported by the linked library.
+    pub fn native_abi_version() -> u32 {
+        // SAFETY: Version query has no preconditions.
+        unsafe { sys::arcadia_tio_abi_version() }
+    }
+
+    /// Returns the tensor rank.
+    pub fn rank(&self) -> Result<usize> {
+        let mut rank = 0usize;
+        // SAFETY: `self.raw` is a live native handle and out pointer is valid.
+        let status = unsafe { sys::arcadia_tio_rank(self.raw.as_ptr(), &mut rank) };
+        status_result(status, "failed to read TensorFile rank")?;
+        Ok(rank)
+    }
+
+    /// Returns the payload dtype.
+    pub fn dtype(&self) -> Result<DType> {
+        let mut dtype = sys::ARCADIA_TIO_DTYPE_F32;
+        // SAFETY: `self.raw` is a live native handle and out pointer is valid.
+        let status = unsafe { sys::arcadia_tio_dtype(self.raw.as_ptr(), &mut dtype) };
+        status_result(status, "failed to read TensorFile dtype")?;
+        DType::from_raw(dtype)
+    }
+
+    /// Returns the append-axis index.
+    pub fn append_axis(&self) -> Result<usize> {
+        let mut axis = 0usize;
+        // SAFETY: `self.raw` is a live native handle and out pointer is valid.
+        let status = unsafe { sys::arcadia_tio_append_axis(self.raw.as_ptr(), &mut axis) };
+        status_result(status, "failed to read TensorFile append axis")?;
+        Ok(axis)
+    }
+
+    /// Returns the current dimension lengths.
+    pub fn dim_lens(&self) -> Result<Vec<u32>> {
+        let rank = self.rank()?;
+        let mut dims = vec![0u32; rank];
+        // SAFETY: `dims` has exactly `rank` writable elements and the handle is live.
+        let status =
+            unsafe { sys::arcadia_tio_dim_lens(self.raw.as_ptr(), dims.as_mut_ptr(), dims.len()) };
+        status_result(status, "failed to read TensorFile dimension lengths")?;
+        Ok(dims)
+    }
+
+    /// Returns the native path snapshot for this handle.
+    pub fn path(&self) -> Result<String> {
+        let mut raw_path: *mut c_char = ptr::null_mut();
+        // SAFETY: `raw_path` is a valid out pointer and the handle is live.
+        let status = unsafe { sys::arcadia_tio_path(self.raw.as_ptr(), &mut raw_path) };
+        status_result(status, "failed to read TensorFile path")?;
+        let value = required_c_string(raw_path.cast_const());
+        // SAFETY: `raw_path` is native-owned output from arcadia_tio_path.
+        unsafe { sys::arcadia_tio_string_free(raw_path) };
+        Ok(value)
+    }
+
+    /// Reads coordinate metadata from the open handle.
+    pub fn coordinate_meta(&self) -> Result<Vec<CoordinateMeta>> {
+        let mut raw_meta: *mut sys::ArcadiaTioAxisCoordinateMeta = ptr::null_mut();
+        let mut len = 0usize;
+        // SAFETY: Out pointers are valid and the handle is live.
+        let status =
+            unsafe { sys::arcadia_tio_coordinate_meta(self.raw.as_ptr(), &mut raw_meta, &mut len) };
+        status_result(status, "failed to read coordinate metadata")?;
+        let out = copy_coordinate_meta(raw_meta, len);
+        // SAFETY: `raw_meta`/`len` are native-owned output from coordinate_meta and freed once.
+        unsafe { sys::arcadia_tio_axis_coordinate_meta_free(raw_meta, len) };
+        out
+    }
+
+    /// Appends a bulk f32 slice and returns the assigned append-entry range.
+    pub fn append_f32(&mut self, data: &[f32], shape: &[u64]) -> Result<AppendRange> {
+        self.validate_append(DType::F32, data.len(), shape)?;
+        self.append_with_range(shape, |handle, start, end| unsafe {
+            sys::arcadia_tio_append_f32_with_range(
+                handle,
+                data.as_ptr(),
+                shape.as_ptr(),
+                shape.len(),
+                start,
+                end,
+            )
+        })
+    }
+
+    /// Appends a bulk f64 slice and returns the assigned append-entry range.
+    pub fn append_f64(&mut self, data: &[f64], shape: &[u64]) -> Result<AppendRange> {
+        self.validate_append(DType::F64, data.len(), shape)?;
+        self.append_with_range(shape, |handle, start, end| unsafe {
+            sys::arcadia_tio_append_f64_with_range(
+                handle,
+                data.as_ptr(),
+                shape.as_ptr(),
+                shape.len(),
+                start,
+                end,
+            )
+        })
+    }
+
+    /// Appends a bulk i32 slice and returns the assigned append-entry range.
+    pub fn append_i32(&mut self, data: &[i32], shape: &[u64]) -> Result<AppendRange> {
+        self.validate_append(DType::I32, data.len(), shape)?;
+        self.append_with_range(shape, |handle, start, end| unsafe {
+            sys::arcadia_tio_append_i32_with_range(
+                handle,
+                data.as_ptr(),
+                shape.as_ptr(),
+                shape.len(),
+                start,
+                end,
+            )
+        })
+    }
+
+    /// Appends a bulk i64 slice and returns the assigned append-entry range.
+    pub fn append_i64(&mut self, data: &[i64], shape: &[u64]) -> Result<AppendRange> {
+        self.validate_append(DType::I64, data.len(), shape)?;
+        self.append_with_range(shape, |handle, start, end| unsafe {
+            sys::arcadia_tio_append_i64_with_range(
+                handle,
+                data.as_ptr(),
+                shape.as_ptr(),
+                shape.len(),
+                start,
+                end,
+            )
+        })
+    }
+
+    /// Reads the full tensor into Rust-owned buffers.
+    pub fn read_all(&self) -> Result<Tensor> {
+        self.read_tensor(|handle, out| unsafe { sys::arcadia_tio_read_all(handle, out) })
+    }
+
+    /// Reads the full tensor densely with a fill value and optional validity mask.
+    pub fn read_all_dense(&self, fill_value: f64) -> Result<DenseTensor> {
+        let mut raw_tensor = sys::ArcadiaTioTensor::default();
+        let mut raw_mask = sys::ArcadiaTioMask::default();
+        // SAFETY: Output structs are valid and the handle is live.
+        let status = unsafe {
+            sys::arcadia_tio_read_all_dense(
+                self.raw.as_ptr(),
+                fill_value,
+                &mut raw_tensor,
+                &mut raw_mask,
+            )
+        };
+        status_result(status, "failed to read dense tensor")?;
+        let tensor = copy_tensor(&raw_tensor);
+        let mask = copy_mask(&raw_mask);
+        // SAFETY: Native-owned buffers are returned by read_all_dense and freed exactly once.
+        unsafe {
+            sys::arcadia_tio_tensor_free(&mut raw_tensor);
+            sys::arcadia_tio_mask_free(&mut raw_mask);
+        }
+        Ok(DenseTensor {
+            tensor: tensor?,
+            mask,
+        })
+    }
+
+    /// Reads an axis range into Rust-owned buffers.
+    pub fn read_axis_range(&self, axis: usize, start: u32, end: u32) -> Result<Tensor> {
+        if start > end {
+            return Err(TioError::invalid_argument(
+                "axis range start must be <= end",
+            ));
+        }
+        self.validate_axis(axis)?;
+        self.read_tensor(|handle, out| unsafe {
+            sys::arcadia_tio_read_axis_range(handle, axis, start, end, out)
+        })
+    }
+
+    /// Reads an axis take selection into Rust-owned buffers.
+    pub fn read_axis_take(&self, axis: usize, indices: &[u32]) -> Result<Tensor> {
+        self.validate_axis(axis)?;
+        self.read_tensor(|handle, out| unsafe {
+            sys::arcadia_tio_read_axis_take(handle, axis, indices.as_ptr(), indices.len(), out)
+        })
+    }
+
+    /// Reads an append-entry range into Rust-owned buffers.
+    pub fn read_entry_range(&self, start: u32, end: u32) -> Result<Tensor> {
+        if start > end {
+            return Err(TioError::invalid_argument(
+                "entry range start must be <= end",
+            ));
+        }
+        self.read_tensor(|handle, out| unsafe {
+            sys::arcadia_tio_read_entry_range(handle, start, end, out)
+        })
+    }
+
+    /// Reads selected append entries into Rust-owned buffers.
+    pub fn take_entries(&self, indices: &[u32]) -> Result<Tensor> {
+        self.read_tensor(|handle, out| unsafe {
+            sys::arcadia_tio_take_entries(handle, indices.as_ptr(), indices.len(), out)
+        })
+    }
+
+    /// Reads inline coordinate values for an axis into Rust-owned buffers.
+    ///
+    /// This is metadata-scope coordinate value access, not native exact/range coordinate lookup.
+    pub fn read_axis_coordinates(&self, axis: usize) -> Result<Tensor> {
+        self.validate_axis(axis)?;
+        self.read_tensor(|handle, out| unsafe {
+            sys::arcadia_tio_read_axis_coordinates(handle, axis, out)
+        })
+    }
+
+    fn append_with_range(
+        &mut self,
+        shape: &[u64],
+        call: impl FnOnce(*mut sys::ArcadiaTioHandle, *mut u32, *mut u32) -> i32,
+    ) -> Result<AppendRange> {
+        let mut start = 0u32;
+        let mut end = 0u32;
+        let status = call(self.raw.as_ptr(), &mut start, &mut end);
+        status_result(status, "failed to append tensor data")?;
+        let _ = shape;
+        Ok(AppendRange { start, end })
+    }
+
+    fn read_tensor(
+        &self,
+        call: impl FnOnce(*mut sys::ArcadiaTioHandle, *mut sys::ArcadiaTioTensor) -> i32,
+    ) -> Result<Tensor> {
+        let mut raw = sys::ArcadiaTioTensor::default();
+        let status = call(self.raw.as_ptr(), &mut raw);
+        status_result(status, "failed to read tensor")?;
+        let tensor = copy_tensor(&raw);
+        // SAFETY: `raw` is native-owned output from a tensor read call and freed exactly once.
+        unsafe { sys::arcadia_tio_tensor_free(&mut raw) };
+        tensor
+    }
+
+    fn validate_axis(&self, axis: usize) -> Result<()> {
+        let rank = self.rank()?;
+        if axis >= rank {
+            Err(TioError::invalid_argument(format!(
+                "axis {axis} out of range for rank {rank}"
+            )))
+        } else {
+            Ok(())
+        }
+    }
+
+    fn validate_append(&self, dtype: DType, data_len: usize, shape: &[u64]) -> Result<()> {
+        let actual_dtype = self.dtype()?;
+        if actual_dtype != dtype {
+            return Err(TioError::invalid_argument(format!(
+                "append dtype {dtype:?} does not match file dtype {actual_dtype:?}"
+            )));
+        }
+        let rank = self.rank()?;
+        if shape.len() != rank {
+            return Err(TioError::invalid_argument(format!(
+                "append shape rank {} does not match file rank {rank}",
+                shape.len()
+            )));
+        }
+        let expected_len = shape_element_len(shape)?;
+        if expected_len != data_len {
+            return Err(TioError::invalid_argument(format!(
+                "append data length {data_len} does not match shape element count {expected_len}"
+            )));
+        }
+        let append_axis = self.append_axis()?;
+        let current = self.dim_lens()?;
+        for (axis, (&shape_len, &current_len)) in shape.iter().zip(current.iter()).enumerate() {
+            if axis != append_axis && shape_len != u64::from(current_len) {
+                return Err(TioError::invalid_argument(format!(
+                    "append shape axis {axis} length {shape_len} does not match current length {current_len}"
+                )));
+            }
+        }
+        Ok(())
+    }
+
+    fn from_raw_handle(raw: *mut sys::ArcadiaTioHandle, context: &str) -> Result<Self> {
+        let raw = NonNull::new(raw).ok_or_else(|| TioError::from_last_error(context))?;
+        Ok(Self {
+            raw,
+            _not_send_or_sync: PhantomData,
+        })
+    }
+
+    #[allow(dead_code)]
+    fn raw_handle(&self) -> *mut sys::ArcadiaTioHandle {
+        self.raw.as_ptr()
+    }
+}
+
+impl Drop for TensorFile {
+    fn drop(&mut self) {
+        // SAFETY: `TensorFile` owns this non-null handle and Drop runs at most once.
+        unsafe { sys::arcadia_tio_close(self.raw.as_ptr()) };
+    }
+}
+
+fn shape_element_len(shape: &[u64]) -> Result<usize> {
+    let mut product = 1usize;
+    for &dim in shape {
+        let dim = usize::try_from(dim)
+            .map_err(|_| TioError::invalid_argument("shape dimension does not fit usize"))?;
+        product = product
+            .checked_mul(dim)
+            .ok_or_else(|| TioError::invalid_argument("shape element count overflows usize"))?;
+    }
+    Ok(product)
+}
+
+fn copy_shape(raw: &sys::ArcadiaTioTensor) -> Result<Vec<u64>> {
+    if raw.rank == 0 {
+        return Ok(Vec::new());
+    }
+    if raw.shape.is_null() {
+        return Err(TioError::conversion("native tensor shape pointer is null"));
+    }
+    // SAFETY: Native tensor shape pointer is valid for `rank` while the tensor output is alive.
+    Ok(unsafe { slice::from_raw_parts(raw.shape, raw.rank) }.to_vec())
+}
+
+fn copy_tensor(raw: &sys::ArcadiaTioTensor) -> Result<Tensor> {
+    let dtype = DType::from_raw(raw.dtype)?;
+    let shape = copy_shape(raw)?;
+    let element_count = shape_element_len(&shape)?;
+    let expected_bytes = element_count
+        .checked_mul(dtype.size_bytes())
+        .ok_or_else(|| TioError::conversion("native tensor byte length overflows usize"))?;
+    if raw.len_bytes != expected_bytes {
+        return Err(TioError::conversion(format!(
+            "native tensor byte length {} does not match shape/dtype byte length {expected_bytes}",
+            raw.len_bytes
+        )));
+    }
+    if raw.len_bytes > 0 && raw.data.is_null() {
+        return Err(TioError::conversion("native tensor data pointer is null"));
+    }
+    let data = match dtype {
+        DType::F32 => {
+            // SAFETY: The C ABI guarantees alignment and byte length for the tensor dtype.
+            let values = unsafe { slice::from_raw_parts(raw.data.cast::<f32>(), element_count) };
+            TensorData::F32(values.to_vec())
+        }
+        DType::F64 => {
+            // SAFETY: The C ABI guarantees alignment and byte length for the tensor dtype.
+            let values = unsafe { slice::from_raw_parts(raw.data.cast::<f64>(), element_count) };
+            TensorData::F64(values.to_vec())
+        }
+        DType::I32 => {
+            // SAFETY: The C ABI guarantees alignment and byte length for the tensor dtype.
+            let values = unsafe { slice::from_raw_parts(raw.data.cast::<i32>(), element_count) };
+            TensorData::I32(values.to_vec())
+        }
+        DType::I64 => {
+            // SAFETY: The C ABI guarantees alignment and byte length for the tensor dtype.
+            let values = unsafe { slice::from_raw_parts(raw.data.cast::<i64>(), element_count) };
+            TensorData::I64(values.to_vec())
+        }
+    };
+    Ok(Tensor { dtype, shape, data })
+}
+
+fn copy_mask(raw: &sys::ArcadiaTioMask) -> Option<Vec<u8>> {
+    if raw.len == 0 || raw.data.is_null() {
+        return None;
+    }
+    // SAFETY: The C ABI returns a native-owned mask with `len` bytes while the mask output is alive.
+    Some(unsafe { slice::from_raw_parts(raw.data, raw.len) }.to_vec())
+}
+
+fn copy_axis_labels(ptr: *mut sys::ArcadiaTioAxisLabel, len: usize) -> Vec<AxisLabel> {
+    if ptr.is_null() || len == 0 {
+        return Vec::new();
+    }
+    // SAFETY: Metadata arrays are valid for `len` while the native metadata object is alive.
+    unsafe { slice::from_raw_parts(ptr, len) }
+        .iter()
+        .map(|item| AxisLabel {
+            id: item.id,
+            name: required_c_string(item.name.cast_const()),
+        })
+        .collect()
+}
+
+fn copy_user_kv(ptr: *mut sys::ArcadiaTioUserKv, len: usize) -> Vec<UserKv> {
+    if ptr.is_null() || len == 0 {
+        return Vec::new();
+    }
+    // SAFETY: Metadata arrays are valid for `len` while the native metadata object is alive.
+    unsafe { slice::from_raw_parts(ptr, len) }
+        .iter()
+        .map(|item| UserKv {
+            key: required_c_string(item.key.cast_const()),
+            value: required_c_string(item.value.cast_const()),
+        })
+        .collect()
+}
+
+fn copy_file_meta(raw: &sys::ArcadiaTioFileMeta) -> Result<FileMeta> {
+    let dims = if raw.dims.is_null() || raw.rank == 0 {
+        Vec::new()
+    } else {
+        // SAFETY: Metadata dimension array is valid for `rank` while the native metadata object is alive.
+        unsafe { slice::from_raw_parts(raw.dims, raw.rank) }
+            .iter()
+            .map(|dim| {
+                Ok(DimSpec {
+                    kind: AxisKind::from_raw(dim.kind)?,
+                    len: dim.len,
+                    name: optional_c_string(dim.name.cast_const()),
+                })
+            })
+            .collect::<Result<Vec<_>>>()?
+    };
+    Ok(FileMeta {
+        dtype: DType::from_raw(raw.dtype)?,
+        dims,
+        append_dim: raw.append_dim,
+        symbols: copy_axis_labels(raw.symbols, raw.symbols_len),
+        channels: copy_axis_labels(raw.channels, raw.channels_len),
+        user_kv: copy_user_kv(raw.user_kv, raw.user_kv_len),
+        effective_profile: HeaderProfile::from_raw(raw.effective_profile)?,
+        commit_seq: raw.commit_seq,
+    })
+}
+
+fn copy_coordinate_meta(
+    ptr: *mut sys::ArcadiaTioAxisCoordinateMeta,
+    len: usize,
+) -> Result<Vec<CoordinateMeta>> {
+    if ptr.is_null() || len == 0 {
+        return Ok(Vec::new());
+    }
+    // SAFETY: Coordinate metadata array is valid for `len` until freed by the caller.
+    unsafe { slice::from_raw_parts(ptr, len) }
+        .iter()
+        .map(|item| {
+            Ok(CoordinateMeta {
+                axis: item.axis,
+                axis_name_snapshot: optional_c_string(item.axis_name_snapshot.cast_const()),
+                name: optional_c_string(item.name.cast_const()),
+                kind: CoordinateKind::from_raw(item.kind)?,
+                dtype: CoordinateDType::from_raw(item.dtype)?,
+                encoding: CoordinateEncoding::from_raw(item.encoding)?,
+                length: item.length,
+                ordering: CoordinateOrdering {
+                    sorted: CoordinateSortedness::from_raw(item.sorted)?,
+                    monotonicity: CoordinateMonotonicity::from_raw(item.monotonicity)?,
+                    uniqueness: CoordinateUniqueness::from_raw(item.uniqueness)?,
+                },
+                storage_kind: CoordinateStorageKind::from_raw(item.storage_kind)?,
+                external_source_kind: ExternalCoordinateSourceKind::from_raw(
+                    item.external_source_kind,
+                )?,
+                external_uri: optional_c_string(item.external_uri.cast_const()),
+                required: item.required != 0,
+                validation_status: CoordinateValidationStatus::from_raw(item.validation_status)?,
+            })
+        })
+        .collect()
+}
+
+#[allow(dead_code)]
+struct PreparedCreate<'a> {
+    path: CString,
+    dim_kinds: Vec<sys::ArcadiaTioAxisKind>,
+    dim_lens: Vec<u32>,
+    dim_name_strings: Vec<CString>,
+    dim_name_ptrs: Vec<*const c_char>,
+    symbols: Vec<CString>,
+    symbol_ptrs: Vec<*const c_char>,
+    channels: Vec<CString>,
+    channel_ptrs: Vec<*const c_char>,
+    user_keys: Vec<CString>,
+    user_values: Vec<CString>,
+    user_key_ptrs: Vec<*const c_char>,
+    user_value_ptrs: Vec<*const c_char>,
+    coordinate_names: Vec<Option<CString>>,
+    coordinate_external_uris: Vec<Option<CString>>,
+    coordinate_inputs: Vec<sys::ArcadiaTioAxisCoordinateInput>,
+    _coordinate_values: PhantomData<&'a [CoordinateSpec]>,
+}
+
+impl<'a> PreparedCreate<'a> {
+    fn new(path: impl AsRef<Path>, options: &'a CreateOptions) -> Result<Self> {
+        if options.dims.is_empty() {
+            return Err(TioError::invalid_argument("rank must be > 0"));
+        }
+        if options.append_dim >= options.dims.len() {
+            return Err(TioError::invalid_argument("append_dim out of range"));
+        }
+        if options.dims.len() > usize::MAX / 2 {
+            return Err(TioError::invalid_argument("rank is too large"));
+        }
+        for (idx, dim) in options.dims.iter().enumerate() {
+            if matches!(dim.name.as_deref(), Some("")) {
+                return Err(TioError::invalid_argument(format!(
+                    "dimension {idx} name cannot be empty"
+                )));
+            }
+        }
+
+        let path = path_to_cstring(path)?;
+        let dim_kinds = options
+            .dims
+            .iter()
+            .map(|dim| dim.kind.to_raw())
+            .collect::<Vec<_>>();
+        let dim_lens = options.dims.iter().map(|dim| dim.len).collect::<Vec<_>>();
+
+        let dim_name_strings = options
+            .dims
+            .iter()
+            .filter_map(|dim| dim.name.as_ref())
+            .map(|name| string_to_cstring(name, "dimension name"))
+            .collect::<Result<Vec<_>>>()?;
+        let mut dim_name_iter = dim_name_strings.iter();
+        let dim_name_ptrs = options
+            .dims
+            .iter()
+            .map(|dim| {
+                if dim.name.is_some() {
+                    dim_name_iter.next().expect("name count matches").as_ptr()
+                } else {
+                    ptr::null()
+                }
+            })
+            .collect::<Vec<_>>();
+
+        let symbols = options
+            .symbols
+            .iter()
+            .map(|value| string_to_cstring(value, "symbol label"))
+            .collect::<Result<Vec<_>>>()?;
+        let symbol_ptrs = symbols
+            .iter()
+            .map(|value| value.as_ptr())
+            .collect::<Vec<_>>();
+        let channels = options
+            .channels
+            .iter()
+            .map(|value| string_to_cstring(value, "channel label"))
+            .collect::<Result<Vec<_>>>()?;
+        let channel_ptrs = channels
+            .iter()
+            .map(|value| value.as_ptr())
+            .collect::<Vec<_>>();
+        let user_keys = options
+            .user_kv
+            .iter()
+            .map(|(key, _)| string_to_cstring(key, "user metadata key"))
+            .collect::<Result<Vec<_>>>()?;
+        let user_values = options
+            .user_kv
+            .iter()
+            .map(|(_, value)| string_to_cstring(value, "user metadata value"))
+            .collect::<Result<Vec<_>>>()?;
+        let user_key_ptrs = user_keys
+            .iter()
+            .map(|value| value.as_ptr())
+            .collect::<Vec<_>>();
+        let user_value_ptrs = user_values
+            .iter()
+            .map(|value| value.as_ptr())
+            .collect::<Vec<_>>();
+
+        for (idx, coord) in options.coordinates.iter().enumerate() {
+            if coord.axis >= options.dims.len() {
+                return Err(TioError::invalid_argument(format!(
+                    "coordinate {idx} axis out of range"
+                )));
+            }
+            if matches!(coord.name.as_deref(), Some("")) {
+                return Err(TioError::invalid_argument(format!(
+                    "coordinate {idx} name cannot be empty"
+                )));
+            }
+        }
+        let coordinate_names = options
+            .coordinates
+            .iter()
+            .map(|coord| {
+                coord
+                    .name
+                    .as_deref()
+                    .map(|name| string_to_cstring(name, "coordinate name"))
+                    .transpose()
+            })
+            .collect::<Result<Vec<_>>>()?;
+        let coordinate_external_uris = options
+            .coordinates
+            .iter()
+            .map(|coord| match &coord.storage {
+                CoordinateStorage::Inline(_) => Ok(None),
+                CoordinateStorage::External { uri, .. } => {
+                    string_to_cstring(uri, "external coordinate URI").map(Some)
+                }
+            })
+            .collect::<Result<Vec<_>>>()?;
+        let coordinate_inputs = options
+            .coordinates
+            .iter()
+            .enumerate()
+            .map(|(idx, coord)| {
+                coordinate_input(
+                    coord,
+                    coordinate_names[idx].as_ref(),
+                    coordinate_external_uris[idx].as_ref(),
+                )
+            })
+            .collect::<Vec<_>>();
+
+        Ok(Self {
+            path,
+            dim_kinds,
+            dim_lens,
+            dim_name_strings,
+            dim_name_ptrs,
+            symbols,
+            symbol_ptrs,
+            channels,
+            channel_ptrs,
+            user_keys,
+            user_values,
+            user_key_ptrs,
+            user_value_ptrs,
+            coordinate_names,
+            coordinate_external_uris,
+            coordinate_inputs,
+            _coordinate_values: PhantomData,
+        })
+    }
+
+    fn dim_name_ptr(&self) -> *const *const c_char {
+        if self.dim_name_ptrs.iter().all(|ptr| ptr.is_null()) {
+            ptr::null()
+        } else {
+            self.dim_name_ptrs.as_ptr()
+        }
+    }
+
+    fn dim_name_len(&self) -> usize {
+        if self.dim_name_ptrs.iter().all(|ptr| ptr.is_null()) {
+            0
+        } else {
+            self.dim_name_ptrs.len()
+        }
+    }
+
+    fn symbol_ptr(&self) -> *const *const c_char {
+        if self.symbol_ptrs.is_empty() {
+            ptr::null()
+        } else {
+            self.symbol_ptrs.as_ptr()
+        }
+    }
+
+    fn symbol_len(&self) -> usize {
+        self.symbol_ptrs.len()
+    }
+
+    fn channel_ptr(&self) -> *const *const c_char {
+        if self.channel_ptrs.is_empty() {
+            ptr::null()
+        } else {
+            self.channel_ptrs.as_ptr()
+        }
+    }
+
+    fn channel_len(&self) -> usize {
+        self.channel_ptrs.len()
+    }
+
+    fn user_key_ptr(&self) -> *const *const c_char {
+        if self.user_key_ptrs.is_empty() {
+            ptr::null()
+        } else {
+            self.user_key_ptrs.as_ptr()
+        }
+    }
+
+    fn user_value_ptr(&self) -> *const *const c_char {
+        if self.user_value_ptrs.is_empty() {
+            ptr::null()
+        } else {
+            self.user_value_ptrs.as_ptr()
+        }
+    }
+
+    fn user_kv_len(&self) -> usize {
+        self.user_key_ptrs.len()
+    }
+
+    fn coordinate_ptr(&self) -> *const sys::ArcadiaTioAxisCoordinateInput {
+        if self.coordinate_inputs.is_empty() {
+            ptr::null()
+        } else {
+            self.coordinate_inputs.as_ptr()
+        }
+    }
+
+    fn coordinate_len(&self) -> usize {
+        self.coordinate_inputs.len()
+    }
+}
+
+fn coordinate_input(
+    coord: &CoordinateSpec,
+    name: Option<&CString>,
+    external_uri: Option<&CString>,
+) -> sys::ArcadiaTioAxisCoordinateInput {
+    let (
+        storage_kind,
+        external_source_kind,
+        external_uri_ptr,
+        external_dtype,
+        external_length,
+        values_ptr,
+        values_len,
+        dtype,
+    ) = match &coord.storage {
+        CoordinateStorage::Inline(values) => (
+            sys::ARCADIA_TIO_COORDINATE_STORAGE_INLINE,
+            sys::ARCADIA_TIO_COORDINATE_SOURCE_SAME_FILE_OBJECT,
+            ptr::null(),
+            values.dtype().to_raw(),
+            0,
+            values.as_ptr(),
+            values.len(),
+            values.dtype(),
+        ),
+        CoordinateStorage::External {
+            source_kind,
+            uri: _,
+            dtype,
+            length,
+        } => (
+            sys::ARCADIA_TIO_COORDINATE_STORAGE_EXTERNAL,
+            source_kind.to_raw(),
+            external_uri.map_or(ptr::null(), |value| value.as_ptr()),
+            dtype.to_raw(),
+            *length,
+            ptr::null(),
+            0,
+            *dtype,
+        ),
+    };
+    sys::ArcadiaTioAxisCoordinateInput {
+        version: 1,
+        struct_size: mem::size_of::<sys::ArcadiaTioAxisCoordinateInput>(),
+        axis: coord.axis,
+        name: name.map_or(ptr::null(), |value| value.as_ptr()),
+        kind: coord.kind.to_raw(),
+        dtype: dtype.to_raw(),
+        encoding: coord.encoding.to_raw(),
+        values: values_ptr,
+        values_len,
+        sorted: coord.ordering.sorted.to_raw(),
+        monotonicity: coord.ordering.monotonicity.to_raw(),
+        uniqueness: coord.ordering.uniqueness.to_raw(),
+        storage_kind,
+        external_source_kind,
+        external_uri: external_uri_ptr,
+        external_dtype,
+        external_length,
+        required: u8::from(coord.required),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn create_options_validation_rejects_empty_rank() {
+        let result = TensorFile::create(
+            "unused.tio",
+            CreateOptions::streaming(DType::F64, Vec::new(), 0),
+        );
+        let err = match result {
+            Ok(_) => panic!("empty-rank create unexpectedly succeeded"),
+            Err(err) => err,
+        };
+        assert_eq!(err.code(), ErrorCode::InvalidArgument);
+    }
+
+    #[test]
+    fn invalid_compression_mode_rejects_before_native_create() {
+        let mut options = CreateOptions::streaming(
+            DType::F64,
+            vec![DimSpec::new(AxisKind::Time, 0)],
+            0,
+        );
+        options.compression = Some(CompressionConfig {
+            mode: 99,
+            codec: sys::ARCADIA_TIO_COMPRESSION_CODEC_ZSTD,
+            min_payload_bytes: 0,
+            zstd_level: 3,
+        });
+        let path = std::env::temp_dir().join("arcadia_tio_wrapper_invalid_compression_mode.tio");
+        let _ = std::fs::remove_file(&path);
+        let err = match TensorFile::create(&path, options) {
+            Ok(_) => panic!("invalid mode unexpectedly succeeded"),
+            Err(err) => err,
+        };
+        assert_eq!(err.code(), ErrorCode::InvalidArgument);
+        assert!(!path.exists());
+    }
+
+    #[test]
+    fn dtype_sizes_match_first_slice() {
+        assert_eq!(DType::F32.size_bytes(), 4);
+        assert_eq!(DType::F64.size_bytes(), 8);
+        assert_eq!(DType::I32.size_bytes(), 4);
+        assert_eq!(DType::I64.size_bytes(), 8);
+    }
+}

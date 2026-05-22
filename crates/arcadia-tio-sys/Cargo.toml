@@ -1,0 +1,17 @@
+[package]
+name = "arcadia-tio-sys"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.92"
+license = "MIT"
+repository = "https://github.com/Jacobbishopxy/arcadia-tio-rs"
+homepage = "https://github.com/Jacobbishopxy/arcadia-tio-rs"
+description = "Unsafe Rust FFI declarations for the Arcadia TIO C ABI."
+links = "arcadia_tio_capi"
+build = "build.rs"
+
+[lib]
+path = "src/lib.rs"
+
+[dependencies]
+
