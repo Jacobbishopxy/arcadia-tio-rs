@@ -84,6 +84,8 @@ pub type ArcadiaTioV4RetainedHistoryPolicy = c_int;
 pub type ArcadiaTioSparseDetectorKind = c_int;
 /// Sparse-intent value predicate selector value.
 pub type ArcadiaTioSparseValuePredicateKind = c_int;
+/// Sparse-intent V2 value predicate selector value.
+pub type ArcadiaTioSparseValuePredicateKindV2 = c_int;
 /// Sparse-intent fallback policy selector value.
 pub type ArcadiaTioSparseFallbackPolicy = c_int;
 /// Sparse-append analysis outcome value.
@@ -210,6 +212,12 @@ raw_constant!(ARCADIA_TIO_SPARSE_PREDICATE_NAN: ArcadiaTioSparseValuePredicateKi
 raw_constant!(ARCADIA_TIO_SPARSE_PREDICATE_ZERO: ArcadiaTioSparseValuePredicateKind = 1);
 raw_constant!(ARCADIA_TIO_SPARSE_PREDICATE_EQUAL_F32: ArcadiaTioSparseValuePredicateKind = 2);
 raw_constant!(ARCADIA_TIO_SPARSE_PREDICATE_EQUAL_F64: ArcadiaTioSparseValuePredicateKind = 3);
+raw_constant!(ARCADIA_TIO_SPARSE_PREDICATE_V2_NAN: ArcadiaTioSparseValuePredicateKindV2 = 0);
+raw_constant!(ARCADIA_TIO_SPARSE_PREDICATE_V2_ZERO: ArcadiaTioSparseValuePredicateKindV2 = 1);
+raw_constant!(ARCADIA_TIO_SPARSE_PREDICATE_V2_EQUAL_F32: ArcadiaTioSparseValuePredicateKindV2 = 2);
+raw_constant!(ARCADIA_TIO_SPARSE_PREDICATE_V2_EQUAL_F64: ArcadiaTioSparseValuePredicateKindV2 = 3);
+raw_constant!(ARCADIA_TIO_SPARSE_PREDICATE_V2_EQUAL_I32: ArcadiaTioSparseValuePredicateKindV2 = 4);
+raw_constant!(ARCADIA_TIO_SPARSE_PREDICATE_V2_EQUAL_I64: ArcadiaTioSparseValuePredicateKindV2 = 5);
 raw_constant!(ARCADIA_TIO_SPARSE_FALLBACK_DENSE: ArcadiaTioSparseFallbackPolicy = 0);
 raw_constant!(ARCADIA_TIO_SPARSE_APPEND_SPARSE_REGULAR_CHUNKED: ArcadiaTioSparseAppendOutcome = 0);
 raw_constant!(ARCADIA_TIO_SPARSE_APPEND_DENSE_FALLBACK: ArcadiaTioSparseAppendOutcome = 1);
@@ -732,6 +740,40 @@ pub struct ArcadiaTioSparseRule {
     pub sparse_axes_len: usize,
     /// Predicate used by predicate detectors.
     pub predicate: ArcadiaTioSparseValuePredicate,
+    /// Minimum absent fraction required for sparse lowering.
+    pub min_absent_fraction: c_double,
+    /// Minimum absent subtensor count required for sparse lowering.
+    pub min_absent_subtensors: u64,
+    /// Dense fallback policy.
+    pub fallback: ArcadiaTioSparseFallbackPolicy,
+}
+
+/// V2 sparse-intent value predicate passed inside a sparse rule.
+#[repr(C)]
+#[derive(Debug, Copy, Clone)]
+pub struct ArcadiaTioSparseValuePredicateV2 {
+    /// Predicate kind.
+    pub kind: ArcadiaTioSparseValuePredicateKindV2,
+    /// Comparison value for floating equal predicates; ignored otherwise.
+    pub float_value: c_double,
+    /// Comparison value for integer equal predicates; ignored otherwise.
+    pub integer_value: i64,
+}
+
+/// V2 sparse-intent lowering rule borrowed by sparse append APIs.
+#[repr(C)]
+#[derive(Debug, Copy, Clone)]
+pub struct ArcadiaTioSparseRuleV2 {
+    /// Size of this struct in bytes.
+    pub struct_size: u32,
+    /// Detector kind.
+    pub detector_kind: ArcadiaTioSparseDetectorKind,
+    /// Borrowed sparse-axis indices.
+    pub sparse_axes: *const usize,
+    /// Number of sparse-axis indices.
+    pub sparse_axes_len: usize,
+    /// Predicate used by predicate detectors.
+    pub predicate: ArcadiaTioSparseValuePredicateV2,
     /// Minimum absent fraction required for sparse lowering.
     pub min_absent_fraction: c_double,
     /// Minimum absent subtensor count required for sparse lowering.
@@ -1491,6 +1533,30 @@ unsafe extern "C" {
         file_population: ArcadiaTioFilePopulation,
         metadata_stability: ArcadiaTioMetadataStability,
     ) -> *mut ArcadiaTioHandle;
+    /// Creates a V4 TensorFile using inferred layout-family selection, metadata overrides, and coordinate descriptors.
+    pub fn arcadia_tio_create_inferred_with_coordinates(
+        path: *const c_char,
+        dtype: ArcadiaTioDType,
+        dim_kinds: *const ArcadiaTioAxisKind,
+        dim_lens: *const u32,
+        rank: usize,
+        append_dim: usize,
+        dim_names: *const *const c_char,
+        dim_names_len: usize,
+        symbols: *const *const c_char,
+        symbols_len: usize,
+        channels: *const *const c_char,
+        channels_len: usize,
+        user_kv_keys: *const *const c_char,
+        user_kv_values: *const *const c_char,
+        user_kv_len: usize,
+        storage_access: ArcadiaTioStorageAccessKind,
+        open_pattern: ArcadiaTioOpenPattern,
+        file_population: ArcadiaTioFilePopulation,
+        metadata_stability: ArcadiaTioMetadataStability,
+        coordinates: *const ArcadiaTioAxisCoordinateInput,
+        coordinates_len: usize,
+    ) -> *mut ArcadiaTioHandle;
     /// Creates a RegularChunked V4 TensorFile with policy-based chunking.
     pub fn arcadia_tio_create_with_policy(
         path: *const c_char,
@@ -1527,6 +1593,31 @@ unsafe extern "C" {
         storage_profile: ArcadiaTioStorageProfile,
         typical_query_sizes: *const u32,
         typical_query_len: usize,
+    ) -> *mut ArcadiaTioHandle;
+    /// Creates a RegularChunked V4 TensorFile with policy-based chunking, metadata overrides, and coordinate descriptors.
+    pub fn arcadia_tio_create_with_policy_with_coordinates(
+        path: *const c_char,
+        dtype: ArcadiaTioDType,
+        dim_kinds: *const ArcadiaTioAxisKind,
+        dim_lens: *const u32,
+        rank: usize,
+        append_dim: usize,
+        dim_names: *const *const c_char,
+        dim_names_len: usize,
+        symbols: *const *const c_char,
+        symbols_len: usize,
+        channels: *const *const c_char,
+        channels_len: usize,
+        user_kv_keys: *const *const c_char,
+        user_kv_values: *const *const c_char,
+        user_kv_len: usize,
+        chunk_axes: *const usize,
+        chunk_axes_len: usize,
+        storage_profile: ArcadiaTioStorageProfile,
+        typical_query_sizes: *const u32,
+        typical_query_len: usize,
+        coordinates: *const ArcadiaTioAxisCoordinateInput,
+        coordinates_len: usize,
     ) -> *mut ArcadiaTioHandle;
     /// Creates a RegularChunked V4 TensorFile with policy-based chunking and universe options.
     pub fn arcadia_tio_create_with_policy_with_universe(
@@ -1888,6 +1979,114 @@ unsafe extern "C" {
         shape: *const u64,
         rank: usize,
         rule: *const ArcadiaTioSparseRule,
+        out_start_entry: *mut u32,
+        out_end_entry: *mut u32,
+    ) -> c_int;
+    /// Analyzes how sparse-intent f32 data would be appended using a V2 sparse rule.
+    pub fn arcadia_tio_analyze_sparse_append_f32_v2(
+        handle: *mut ArcadiaTioHandle,
+        data: *const c_float,
+        shape: *const u64,
+        rank: usize,
+        rule: *const ArcadiaTioSparseRuleV2,
+        out_analysis: *mut ArcadiaTioSparseAppendAnalysis,
+    ) -> c_int;
+    /// Analyzes how sparse-intent f64 data would be appended using a V2 sparse rule.
+    pub fn arcadia_tio_analyze_sparse_append_f64_v2(
+        handle: *mut ArcadiaTioHandle,
+        data: *const c_double,
+        shape: *const u64,
+        rank: usize,
+        rule: *const ArcadiaTioSparseRuleV2,
+        out_analysis: *mut ArcadiaTioSparseAppendAnalysis,
+    ) -> c_int;
+    /// Analyzes how sparse-intent i32 data would be appended using a V2 sparse rule.
+    pub fn arcadia_tio_analyze_sparse_append_i32_v2(
+        handle: *mut ArcadiaTioHandle,
+        data: *const i32,
+        shape: *const u64,
+        rank: usize,
+        rule: *const ArcadiaTioSparseRuleV2,
+        out_analysis: *mut ArcadiaTioSparseAppendAnalysis,
+    ) -> c_int;
+    /// Analyzes how sparse-intent i64 data would be appended using a V2 sparse rule.
+    pub fn arcadia_tio_analyze_sparse_append_i64_v2(
+        handle: *mut ArcadiaTioHandle,
+        data: *const i64,
+        shape: *const u64,
+        rank: usize,
+        rule: *const ArcadiaTioSparseRuleV2,
+        out_analysis: *mut ArcadiaTioSparseAppendAnalysis,
+    ) -> c_int;
+    /// Appends f32 data using sparse-intent V2 analysis.
+    pub fn arcadia_tio_append_sparse_f32_v2(
+        handle: *mut ArcadiaTioHandle,
+        data: *const c_float,
+        shape: *const u64,
+        rank: usize,
+        rule: *const ArcadiaTioSparseRuleV2,
+    ) -> c_int;
+    /// Appends f32 sparse-intent data using a V2 sparse rule and returns an optional range.
+    pub fn arcadia_tio_append_sparse_f32_with_range_v2(
+        handle: *mut ArcadiaTioHandle,
+        data: *const c_float,
+        shape: *const u64,
+        rank: usize,
+        rule: *const ArcadiaTioSparseRuleV2,
+        out_start_entry: *mut u32,
+        out_end_entry: *mut u32,
+    ) -> c_int;
+    /// Appends f64 data using sparse-intent V2 analysis.
+    pub fn arcadia_tio_append_sparse_f64_v2(
+        handle: *mut ArcadiaTioHandle,
+        data: *const c_double,
+        shape: *const u64,
+        rank: usize,
+        rule: *const ArcadiaTioSparseRuleV2,
+    ) -> c_int;
+    /// Appends f64 sparse-intent data using a V2 sparse rule and returns an optional range.
+    pub fn arcadia_tio_append_sparse_f64_with_range_v2(
+        handle: *mut ArcadiaTioHandle,
+        data: *const c_double,
+        shape: *const u64,
+        rank: usize,
+        rule: *const ArcadiaTioSparseRuleV2,
+        out_start_entry: *mut u32,
+        out_end_entry: *mut u32,
+    ) -> c_int;
+    /// Appends i32 data using sparse-intent V2 analysis.
+    pub fn arcadia_tio_append_sparse_i32_v2(
+        handle: *mut ArcadiaTioHandle,
+        data: *const i32,
+        shape: *const u64,
+        rank: usize,
+        rule: *const ArcadiaTioSparseRuleV2,
+    ) -> c_int;
+    /// Appends i32 sparse-intent data using a V2 sparse rule and returns an optional range.
+    pub fn arcadia_tio_append_sparse_i32_with_range_v2(
+        handle: *mut ArcadiaTioHandle,
+        data: *const i32,
+        shape: *const u64,
+        rank: usize,
+        rule: *const ArcadiaTioSparseRuleV2,
+        out_start_entry: *mut u32,
+        out_end_entry: *mut u32,
+    ) -> c_int;
+    /// Appends i64 data using sparse-intent V2 analysis.
+    pub fn arcadia_tio_append_sparse_i64_v2(
+        handle: *mut ArcadiaTioHandle,
+        data: *const i64,
+        shape: *const u64,
+        rank: usize,
+        rule: *const ArcadiaTioSparseRuleV2,
+    ) -> c_int;
+    /// Appends i64 sparse-intent data using a V2 sparse rule and returns an optional range.
+    pub fn arcadia_tio_append_sparse_i64_with_range_v2(
+        handle: *mut ArcadiaTioHandle,
+        data: *const i64,
+        shape: *const u64,
+        rank: usize,
+        rule: *const ArcadiaTioSparseRuleV2,
         out_start_entry: *mut u32,
         out_end_entry: *mut u32,
     ) -> c_int;

@@ -65,6 +65,12 @@ const _: () = {
     assert!(ARCADIA_TIO_SPARSE_PREDICATE_ZERO == 1);
     assert!(ARCADIA_TIO_SPARSE_PREDICATE_EQUAL_F32 == 2);
     assert!(ARCADIA_TIO_SPARSE_PREDICATE_EQUAL_F64 == 3);
+    assert!(ARCADIA_TIO_SPARSE_PREDICATE_V2_NAN == 0);
+    assert!(ARCADIA_TIO_SPARSE_PREDICATE_V2_ZERO == 1);
+    assert!(ARCADIA_TIO_SPARSE_PREDICATE_V2_EQUAL_F32 == 2);
+    assert!(ARCADIA_TIO_SPARSE_PREDICATE_V2_EQUAL_F64 == 3);
+    assert!(ARCADIA_TIO_SPARSE_PREDICATE_V2_EQUAL_I32 == 4);
+    assert!(ARCADIA_TIO_SPARSE_PREDICATE_V2_EQUAL_I64 == 5);
     assert!(ARCADIA_TIO_SPARSE_FALLBACK_DENSE == 0);
     assert!(ARCADIA_TIO_SPARSE_APPEND_SPARSE_REGULAR_CHUNKED == 0);
     assert!(ARCADIA_TIO_SPARSE_APPEND_DENSE_FALLBACK == 1);
@@ -297,6 +303,8 @@ fn representative_raw_layouts_are_pointer_compatible() {
         assert_eq!(size_of::<ArrowSchema>(), 72);
         assert_eq!(size_of::<ArcadiaTioSparseValuePredicate>(), 16);
         assert_eq!(size_of::<ArcadiaTioSparseRule>(), 64);
+        assert_eq!(size_of::<ArcadiaTioSparseValuePredicateV2>(), 24);
+        assert_eq!(size_of::<ArcadiaTioSparseRuleV2>(), 72);
         assert_eq!(size_of::<ArcadiaTioSparseAppendAnalysis>(), 48);
         assert_eq!(size_of::<ArcadiaTioQueryTraceContext>(), 80);
         assert_eq!(size_of::<ArcadiaTioQueryTraceJson>(), 24);

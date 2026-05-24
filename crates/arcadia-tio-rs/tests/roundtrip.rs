@@ -94,6 +94,36 @@ fn safe_wrapper_roundtrips_f64_with_metadata_and_coordinates() {
             .expect("partial i32 range"),
         1..2
     );
+    let exact_read = file
+        .read_at_coordinate_i32(1, 20)
+        .expect("read exact i32 coordinate");
+    assert_eq!(exact_read.dtype, DType::F64);
+    assert_eq!(exact_read.shape, vec![2, 1]);
+    assert_eq!(exact_read.data, TensorData::F64(vec![2.0, 4.0]));
+    let range_read = file
+        .read_coordinate_range_i32(1, 10, 20)
+        .expect("read i32 coordinate range");
+    assert_eq!(range_read.dtype, DType::F64);
+    assert_eq!(range_read.shape, vec![2, 2]);
+    assert_eq!(range_read.data, TensorData::F64(vec![1.0, 2.0, 3.0, 4.0]));
+    let missing_read = file
+        .read_at_coordinate_i32(1, 30)
+        .expect_err("missing i32 coordinate read should fail");
+    assert_eq!(missing_read.code(), ErrorCode::InvalidArgument);
+    assert!(
+        missing_read
+            .message()
+            .contains("coordinate value not found")
+    );
+    let no_overlap_read = file
+        .read_coordinate_range_i32(1, 30, 40)
+        .expect_err("non-overlapping i32 coordinate read should fail");
+    assert_eq!(no_overlap_read.code(), ErrorCode::InvalidArgument);
+    assert!(
+        no_overlap_read
+            .message()
+            .contains("coordinate range does not overlap coordinate values")
+    );
     let missing = file
         .coordinate_index_i32(1, 30)
         .expect_err("missing i32 coordinate should fail");
@@ -135,13 +165,48 @@ fn safe_wrapper_looks_up_i64_coordinate_ranges() {
         required: true,
     });
 
-    let file = TensorFile::create(&path, options).expect("create i64 coordinate file");
+    let mut file = TensorFile::create(&path, options).expect("create i64 coordinate file");
+    file.append_f32(&[10.0, 20.0, 30.0, 40.0, 50.0, 60.0], &[2, 3])
+        .expect("append i64 coordinate payload");
     assert_eq!(file.coordinate_index_i64(1, 1000).expect("exact i64"), 0);
     assert_eq!(file.coordinate_index_i64(1, 3000).expect("exact i64"), 2);
     assert_eq!(
         file.coordinate_range_i64(1, 1500, 3000)
             .expect("overlapping i64 range"),
         1..3
+    );
+    let exact_read = file
+        .read_at_coordinate_i64(1, 3000)
+        .expect("read exact i64 coordinate");
+    assert_eq!(exact_read.dtype, DType::F32);
+    assert_eq!(exact_read.shape, vec![2, 1]);
+    assert_eq!(exact_read.data, TensorData::F32(vec![30.0, 60.0]));
+    let range_read = file
+        .read_coordinate_range_i64(1, 1500, 3000)
+        .expect("read i64 coordinate range");
+    assert_eq!(range_read.dtype, DType::F32);
+    assert_eq!(range_read.shape, vec![2, 2]);
+    assert_eq!(
+        range_read.data,
+        TensorData::F32(vec![20.0, 30.0, 50.0, 60.0])
+    );
+    let missing_read = file
+        .read_at_coordinate_i64(1, 4000)
+        .expect_err("missing i64 coordinate read should fail");
+    assert_eq!(missing_read.code(), ErrorCode::InvalidArgument);
+    assert!(
+        missing_read
+            .message()
+            .contains("coordinate value not found")
+    );
+    let no_overlap_read = file
+        .read_coordinate_range_i64(1, 4000, 5000)
+        .expect_err("non-overlapping i64 coordinate read should fail");
+    assert_eq!(no_overlap_read.code(), ErrorCode::InvalidArgument);
+    assert!(
+        no_overlap_read
+            .message()
+            .contains("coordinate range does not overlap coordinate values")
     );
 
     let no_overlap = file
@@ -349,6 +414,30 @@ fn safe_wrapper_sparse_append_i32_i64_roundtrip_and_rejects() {
                 assert_eq!(dense.tensor.data, TensorData::I32(vec![11, 0, 13, 0]));
                 assert_eq!(dense.mask.as_deref(), Some(&[1, 0, 1, 0][..]));
 
+                let exact_values = [21, -7, 23, -7];
+                let exact_rule =
+                    SparseRule::predicate_subtensor(vec![1], SparseValuePredicate::EqualI32(-7));
+                let exact_analysis = file
+                    .analyze_sparse_append_i32(&exact_values, &[1, 4], &exact_rule)
+                    .expect("analyze i32 exact sparse append");
+                assert_eq!(exact_analysis.outcome, SparseAppendOutcome::SparseChunkTree);
+                assert_eq!(exact_analysis.absent_subtensor_count, 2);
+                let exact_range = file
+                    .append_sparse_i32(&exact_values, &[1, 4], &exact_rule)
+                    .expect("append i32 exact sparse values");
+                assert_eq!((exact_range.start, exact_range.end), (1, 2));
+
+                let mismatch_rule =
+                    SparseRule::predicate_subtensor(vec![1], SparseValuePredicate::EqualI64(-7));
+                let err = file
+                    .analyze_sparse_append_i32(&exact_values, &[1, 4], &mismatch_rule)
+                    .expect_err("i32/equal_i64 predicate should reject");
+                assert_eq!(err.code(), ErrorCode::InvalidArgument);
+                assert!(
+                    err.message()
+                        .contains("predicate does not match tensor dtype")
+                );
+
                 let null_rule = SparseRule::null_subtensor(vec![1]);
                 let null_analysis = file
                     .analyze_sparse_append_i32(&[21, 22, 23, 24], &[1, 4], &null_rule)
@@ -363,7 +452,7 @@ fn safe_wrapper_sparse_append_i32_i64_roundtrip_and_rejects() {
                 assert_eq!(err.code(), ErrorCode::InvalidArgument);
                 assert!(
                     err.message()
-                        .contains("integer sparse append supports only NullSubtensor or Zero")
+                        .contains("predicate does not match tensor dtype")
                 );
             }
             DType::I64 => {
@@ -384,6 +473,33 @@ fn safe_wrapper_sparse_append_i32_i64_roundtrip_and_rejects() {
                 assert_eq!(dense.tensor.data, TensorData::I64(vec![101, 0, 103, 0]));
                 assert_eq!(dense.mask.as_deref(), Some(&[1, 0, 1, 0][..]));
 
+                let exact_absent = 9_007_199_254_740_993_i64;
+                let exact_values = [201_i64, exact_absent, 203, exact_absent];
+                let exact_rule = SparseRule::predicate_subtensor(
+                    vec![1],
+                    SparseValuePredicate::EqualI64(exact_absent),
+                );
+                let exact_analysis = file
+                    .analyze_sparse_append_i64(&exact_values, &[1, 4], &exact_rule)
+                    .expect("analyze i64 exact sparse append");
+                assert_eq!(exact_analysis.outcome, SparseAppendOutcome::SparseChunkTree);
+                assert_eq!(exact_analysis.absent_subtensor_count, 2);
+                let exact_range = file
+                    .append_sparse_i64(&exact_values, &[1, 4], &exact_rule)
+                    .expect("append i64 exact sparse values");
+                assert_eq!((exact_range.start, exact_range.end), (1, 2));
+
+                let mismatch_rule =
+                    SparseRule::predicate_subtensor(vec![1], SparseValuePredicate::EqualI32(0));
+                let err = file
+                    .analyze_sparse_append_i64(&exact_values, &[1, 4], &mismatch_rule)
+                    .expect_err("i64/equal_i32 predicate should reject");
+                assert_eq!(err.code(), ErrorCode::InvalidArgument);
+                assert!(
+                    err.message()
+                        .contains("predicate does not match tensor dtype")
+                );
+
                 let unsupported =
                     SparseRule::predicate_subtensor(vec![1], SparseValuePredicate::EqualF64(0.0));
                 let err = file
@@ -392,7 +508,7 @@ fn safe_wrapper_sparse_append_i32_i64_roundtrip_and_rejects() {
                 assert_eq!(err.code(), ErrorCode::InvalidArgument);
                 assert!(
                     err.message()
-                        .contains("integer sparse append supports only NullSubtensor or Zero")
+                        .contains("predicate does not match tensor dtype")
                 );
             }
             _ => unreachable!("test matrix only includes integer dtypes"),
@@ -960,6 +1076,19 @@ fn safe_wrapper_read_options_policy_and_inferred_create_roundtrip() {
     let mut options = CreateOptions::streaming(DType::F32, dims, 0);
     options.symbols = vec!["AAPL".to_string(), "MSFT".to_string()];
     options.channels = vec!["open".to_string(), "close".to_string()];
+    options.coordinates.push(CoordinateSpec {
+        axis: 2,
+        name: Some("channel_id".to_string()),
+        kind: CoordinateKind::LabelId,
+        encoding: CoordinateEncoding::Plain,
+        storage: CoordinateStorage::Inline(CoordinateValues::I32(vec![10, 20])),
+        ordering: CoordinateOrdering {
+            sorted: arcadia_tio_rs::CoordinateSortedness::Ascending,
+            monotonicity: CoordinateMonotonicity::StrictlyIncreasing,
+            uniqueness: CoordinateUniqueness::Unique,
+        },
+        required: true,
+    });
     let policy = CreatePolicyOptions::new(vec![1, 2], vec![0, 2, 2]);
     {
         let mut file = TensorFile::create_with_policy(&path, options, policy)
@@ -978,6 +1107,20 @@ fn safe_wrapper_read_options_policy_and_inferred_create_roundtrip() {
         TensorData::F32(vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0])
     );
     assert_eq!(full.execution.query_max_threads, 2);
+    let policy_coordinates = file.coordinate_meta().expect("policy coordinate metadata");
+    assert_eq!(policy_coordinates.len(), 1);
+    assert_eq!(policy_coordinates[0].axis, 2);
+    assert_eq!(policy_coordinates[0].name.as_deref(), Some("channel_id"));
+    assert_eq!(policy_coordinates[0].dtype, CoordinateDType::I32);
+    assert_eq!(
+        policy_coordinates[0].storage_kind,
+        CoordinateStorageKind::Inline
+    );
+    let policy_coordinate_values = file
+        .read_axis_coordinates(2)
+        .expect("policy coordinate values");
+    assert_eq!(policy_coordinate_values.shape, vec![2]);
+    assert_eq!(policy_coordinate_values.data, TensorData::I32(vec![10, 20]));
 
     let dense = file
         .read_with_options_dense(
@@ -1005,7 +1148,7 @@ fn safe_wrapper_read_options_policy_and_inferred_create_roundtrip() {
     let _ = fs::remove_file(path);
 
     let inferred_path = unique_path("safe-wrapper-inferred-create.tio");
-    let inferred_options = CreateOptions::streaming(
+    let mut inferred_options = CreateOptions::streaming(
         DType::F32,
         vec![
             DimSpec::new(AxisKind::Time, 0),
@@ -1013,6 +1156,19 @@ fn safe_wrapper_read_options_policy_and_inferred_create_roundtrip() {
         ],
         0,
     );
+    inferred_options.coordinates.push(CoordinateSpec {
+        axis: 1,
+        name: Some("symbol_id".to_string()),
+        kind: CoordinateKind::LabelId,
+        encoding: CoordinateEncoding::Plain,
+        storage: CoordinateStorage::Inline(CoordinateValues::I64(vec![1000, 2000])),
+        ordering: CoordinateOrdering {
+            sorted: arcadia_tio_rs::CoordinateSortedness::Ascending,
+            monotonicity: CoordinateMonotonicity::StrictlyIncreasing,
+            uniqueness: CoordinateUniqueness::Unique,
+        },
+        required: true,
+    });
     let mut hints = CreateInferredOptions::new();
     hints.storage_access = StorageAccessKind::RemoteRangeRead;
     {
@@ -1025,6 +1181,25 @@ fn safe_wrapper_read_options_policy_and_inferred_create_roundtrip() {
     let tensor = file.read_all().expect("read inferred wrapper file");
     assert_eq!(tensor.shape, vec![1, 2]);
     assert_eq!(tensor.data, TensorData::F32(vec![9.0, 10.0]));
+    let inferred_coordinates = file
+        .coordinate_meta()
+        .expect("inferred coordinate metadata");
+    assert_eq!(inferred_coordinates.len(), 1);
+    assert_eq!(inferred_coordinates[0].axis, 1);
+    assert_eq!(inferred_coordinates[0].name.as_deref(), Some("symbol_id"));
+    assert_eq!(inferred_coordinates[0].dtype, CoordinateDType::I64);
+    assert_eq!(
+        inferred_coordinates[0].storage_kind,
+        CoordinateStorageKind::Inline
+    );
+    let inferred_coordinate_values = file
+        .read_axis_coordinates(1)
+        .expect("inferred coordinate values");
+    assert_eq!(inferred_coordinate_values.shape, vec![2]);
+    assert_eq!(
+        inferred_coordinate_values.data,
+        TensorData::I64(vec![1000, 2000])
+    );
     drop(file);
     let _ = fs::remove_file(inferred_path);
 }

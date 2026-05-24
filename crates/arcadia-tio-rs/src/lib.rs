@@ -460,6 +460,10 @@ pub enum SparseValuePredicate {
     EqualF32(f32),
     /// Match an exact `f64` value.
     EqualF64(f64),
+    /// Match an exact `i32` value.
+    EqualI32(i32),
+    /// Match an exact `i64` value.
+    EqualI64(i64),
 }
 
 impl SparseValuePredicate {
@@ -469,8 +473,33 @@ impl SparseValuePredicate {
             Self::Zero => (sys::ARCADIA_TIO_SPARSE_PREDICATE_ZERO, 0.0),
             Self::EqualF32(value) => (sys::ARCADIA_TIO_SPARSE_PREDICATE_EQUAL_F32, value as f64),
             Self::EqualF64(value) => (sys::ARCADIA_TIO_SPARSE_PREDICATE_EQUAL_F64, value),
+            Self::EqualI32(_) | Self::EqualI64(_) => (sys::ARCADIA_TIO_SPARSE_PREDICATE_ZERO, 0.0),
         };
         sys::ArcadiaTioSparseValuePredicate { kind, value }
+    }
+
+    fn to_raw_v2(self) -> sys::ArcadiaTioSparseValuePredicateV2 {
+        let (kind, float_value, integer_value) = match self {
+            Self::Nan => (sys::ARCADIA_TIO_SPARSE_PREDICATE_V2_NAN, 0.0, 0),
+            Self::Zero => (sys::ARCADIA_TIO_SPARSE_PREDICATE_V2_ZERO, 0.0, 0),
+            Self::EqualF32(value) => (
+                sys::ARCADIA_TIO_SPARSE_PREDICATE_V2_EQUAL_F32,
+                value as f64,
+                0,
+            ),
+            Self::EqualF64(value) => (sys::ARCADIA_TIO_SPARSE_PREDICATE_V2_EQUAL_F64, value, 0),
+            Self::EqualI32(value) => (
+                sys::ARCADIA_TIO_SPARSE_PREDICATE_V2_EQUAL_I32,
+                0.0,
+                value as i64,
+            ),
+            Self::EqualI64(value) => (sys::ARCADIA_TIO_SPARSE_PREDICATE_V2_EQUAL_I64, 0.0, value),
+        };
+        sys::ArcadiaTioSparseValuePredicateV2 {
+            kind,
+            float_value,
+            integer_value,
+        }
     }
 }
 
@@ -491,8 +520,8 @@ impl SparseFallbackPolicy {
 
 /// Safe sparse-intent rule used by f32/f64/i32/i64 sparse analysis and append helpers.
 ///
-/// Integer payloads currently support only [`SparseRule::null_subtensor`] and
-/// [`SparseValuePredicate::Zero`]; exact integer predicates remain deferred.
+/// Integer payloads support [`SparseRule::null_subtensor`], [`SparseValuePredicate::Zero`],
+/// and exact [`SparseValuePredicate::EqualI32`] / [`SparseValuePredicate::EqualI64`] predicates.
 ///
 /// A rule owns the sparse-axis list and threshold settings. The wrapper validates the owned
 /// axes against the open file before calling the C ABI so borrowed raw pointers only live for a
@@ -625,20 +654,31 @@ impl SparseRule {
         }
         if self.detector == SparseDetector::PredicateSubtensor {
             match (dtype, self.predicate) {
-                (DType::F32, SparseValuePredicate::EqualF64(_)) => {
+                (
+                    DType::F32,
+                    SparseValuePredicate::EqualF64(_)
+                    | SparseValuePredicate::EqualI32(_)
+                    | SparseValuePredicate::EqualI64(_),
+                ) => {
                     return Err(TioError::invalid_argument(
-                        "f32 sparse append cannot use an EqualF64 predicate",
+                        "f32 sparse append cannot use this predicate dtype",
                     ));
                 }
-                (DType::F64, SparseValuePredicate::EqualF32(_)) => {
+                (
+                    DType::F64,
+                    SparseValuePredicate::EqualF32(_)
+                    | SparseValuePredicate::EqualI32(_)
+                    | SparseValuePredicate::EqualI64(_),
+                ) => {
                     return Err(TioError::invalid_argument(
-                        "f64 sparse append cannot use an EqualF32 predicate",
+                        "f64 sparse append cannot use this predicate dtype",
                     ));
                 }
-                (DType::I32 | DType::I64, SparseValuePredicate::Zero) => {}
+                (DType::I32, SparseValuePredicate::Zero | SparseValuePredicate::EqualI32(_)) => {}
+                (DType::I64, SparseValuePredicate::Zero | SparseValuePredicate::EqualI64(_)) => {}
                 (DType::I32 | DType::I64, _) => {
                     return Err(TioError::invalid_argument(
-                        "integer sparse append supports only NullSubtensor or Zero absence detection",
+                        "integer sparse append predicate does not match tensor dtype",
                     ));
                 }
                 _ => {}
@@ -3156,26 +3196,22 @@ impl TensorFile {
 
     /// Creates a TensorFile using native inferred layout-family selection.
     ///
-    /// Coordinate descriptors cannot be combined with inferred create in this wrapper slice
-    /// because the current C ABI exposes no inferred+coordinate create family.
+    /// Inline coordinate descriptors are accepted for fixed non-append axes; external
+    /// coordinate storage and append-axis coordinate growth are rejected by the native API.
     pub fn create_inferred(
         path: impl AsRef<Path>,
         options: CreateOptions,
         inferred_options: CreateInferredOptions,
     ) -> Result<Self> {
-        if !options.coordinates.is_empty() {
-            return Err(TioError::invalid_argument(
-                "coordinate descriptors cannot be combined with inferred create options yet",
-            ));
-        }
         let prepared = PreparedCreate::new(path, &options)?;
         let compression = options
             .compression
             .map(CompressionConfig::validate)
             .transpose()?;
         // SAFETY: PreparedCreate owns all borrowed C strings/vectors for the duration of this call.
+        // Pointers and lengths match the owned Rust slices in `prepared` and `options`.
         let raw = unsafe {
-            sys::arcadia_tio_create_inferred_ex(
+            sys::arcadia_tio_create_inferred_with_coordinates(
                 prepared.path.as_ptr(),
                 options.dtype.to_raw(),
                 prepared.dim_kinds.as_ptr(),
@@ -3195,6 +3231,8 @@ impl TensorFile {
                 inferred_options.open_pattern.to_raw(),
                 inferred_options.file_population.to_raw(),
                 inferred_options.metadata_stability.to_raw(),
+                prepared.coordinate_ptr(),
+                prepared.coordinate_len(),
             )
         };
         let file = Self::from_raw_handle(raw, "failed to create inferred TensorFile")?;
@@ -3206,18 +3244,13 @@ impl TensorFile {
 
     /// Creates a RegularChunked TensorFile using native policy-based chunking.
     ///
-    /// Coordinate descriptors cannot be combined with policy create in this wrapper slice
-    /// because the current C ABI exposes no policy+coordinate create family.
+    /// Inline coordinate descriptors are accepted for fixed non-append axes; external
+    /// coordinate storage and append-axis coordinate growth are rejected by the native API.
     pub fn create_with_policy(
         path: impl AsRef<Path>,
         options: CreateOptions,
         policy_options: CreatePolicyOptions,
     ) -> Result<Self> {
-        if !options.coordinates.is_empty() {
-            return Err(TioError::invalid_argument(
-                "coordinate descriptors cannot be combined with policy create options yet",
-            ));
-        }
         validate_create_policy(&options, &policy_options)?;
         let prepared = PreparedCreate::new(path, &options)?;
         let compression = options
@@ -3225,8 +3258,9 @@ impl TensorFile {
             .map(CompressionConfig::validate)
             .transpose()?;
         // SAFETY: PreparedCreate owns all borrowed C strings/vectors for the duration of this call.
+        // Pointers and lengths match the owned Rust slices in `prepared` and `options`.
         let raw = unsafe {
-            sys::arcadia_tio_create_with_policy_ex(
+            sys::arcadia_tio_create_with_policy_with_coordinates(
                 prepared.path.as_ptr(),
                 options.dtype.to_raw(),
                 prepared.dim_kinds.as_ptr(),
@@ -3247,6 +3281,8 @@ impl TensorFile {
                 policy_options.storage_profile.to_raw(),
                 policy_options.typical_query_sizes.as_ptr(),
                 policy_options.typical_query_sizes.len(),
+                prepared.coordinate_ptr(),
+                prepared.coordinate_len(),
             )
         };
         let file = Self::from_raw_handle(raw, "failed to create policy TensorFile")?;
@@ -3596,16 +3632,13 @@ impl TensorFile {
     }
 
     /// Analyzes how a sparse-intent i32 append would be handled by the native writer.
-    ///
-    /// Integer sparse append currently supports null-subtensor rules and zero predicates only;
-    /// exact integer predicates remain deferred.
     pub fn analyze_sparse_append_i32(
         &self,
         data: &[i32],
         shape: &[u64],
         rule: &SparseRule,
     ) -> Result<SparseAppendAnalysis> {
-        self.analyze_sparse_append(
+        self.analyze_sparse_append_v2(
             DType::I32,
             data.len(),
             shape,
@@ -3614,7 +3647,7 @@ impl TensorFile {
                 // SAFETY: The wrapper validates dtype/shape/rule. Data, shape, rule, and output
                 // buffers are borrowed from Rust values that outlive this FFI call.
                 unsafe {
-                    sys::arcadia_tio_analyze_sparse_append_i32(
+                    sys::arcadia_tio_analyze_sparse_append_i32_v2(
                         handle,
                         data.as_ptr(),
                         shape.as_ptr(),
@@ -3628,16 +3661,13 @@ impl TensorFile {
     }
 
     /// Analyzes how a sparse-intent i64 append would be handled by the native writer.
-    ///
-    /// Integer sparse append currently supports null-subtensor rules and zero predicates only;
-    /// exact integer predicates remain deferred.
     pub fn analyze_sparse_append_i64(
         &self,
         data: &[i64],
         shape: &[u64],
         rule: &SparseRule,
     ) -> Result<SparseAppendAnalysis> {
-        self.analyze_sparse_append(
+        self.analyze_sparse_append_v2(
             DType::I64,
             data.len(),
             shape,
@@ -3646,7 +3676,7 @@ impl TensorFile {
                 // SAFETY: The wrapper validates dtype/shape/rule. Data, shape, rule, and output
                 // buffers are borrowed from Rust values that outlive this FFI call.
                 unsafe {
-                    sys::arcadia_tio_analyze_sparse_append_i64(
+                    sys::arcadia_tio_analyze_sparse_append_i64_v2(
                         handle,
                         data.as_ptr(),
                         shape.as_ptr(),
@@ -3792,16 +3822,13 @@ impl TensorFile {
     }
 
     /// Appends i32 data using sparse-intent analysis and returns the assigned entry range.
-    ///
-    /// Integer sparse append currently supports null-subtensor rules and zero predicates only;
-    /// exact integer predicates remain deferred.
     pub fn append_sparse_i32(
         &mut self,
         data: &[i32],
         shape: &[u64],
         rule: &SparseRule,
     ) -> Result<AppendRange> {
-        self.append_sparse_with_range(
+        self.append_sparse_with_range_v2(
             DType::I32,
             data.len(),
             shape,
@@ -3810,7 +3837,7 @@ impl TensorFile {
                 // SAFETY: The wrapper validates dtype/shape/rule. Data, shape, rule, and output
                 // pointers are borrowed from Rust values that outlive this FFI call.
                 unsafe {
-                    sys::arcadia_tio_append_sparse_i32_with_range(
+                    sys::arcadia_tio_append_sparse_i32_with_range_v2(
                         handle,
                         data.as_ptr(),
                         shape.as_ptr(),
@@ -3825,16 +3852,13 @@ impl TensorFile {
     }
 
     /// Appends i64 data using sparse-intent analysis and returns the assigned entry range.
-    ///
-    /// Integer sparse append currently supports null-subtensor rules and zero predicates only;
-    /// exact integer predicates remain deferred.
     pub fn append_sparse_i64(
         &mut self,
         data: &[i64],
         shape: &[u64],
         rule: &SparseRule,
     ) -> Result<AppendRange> {
-        self.append_sparse_with_range(
+        self.append_sparse_with_range_v2(
             DType::I64,
             data.len(),
             shape,
@@ -3843,7 +3867,7 @@ impl TensorFile {
                 // SAFETY: The wrapper validates dtype/shape/rule. Data, shape, rule, and output
                 // pointers are borrowed from Rust values that outlive this FFI call.
                 unsafe {
-                    sys::arcadia_tio_append_sparse_i64_with_range(
+                    sys::arcadia_tio_append_sparse_i64_with_range_v2(
                         handle,
                         data.as_ptr(),
                         shape.as_ptr(),
@@ -4758,6 +4782,52 @@ impl TensorFile {
         Ok(out_start..out_end)
     }
 
+    /// Reads the one-position axis slice for an inline validated i32 coordinate value.
+    ///
+    /// This is a convenience wrapper over [`Self::coordinate_index_i32`] plus
+    /// [`Self::read_axis_range`]. It does not use a coordinate index or change native read
+    /// planning semantics.
+    pub fn read_at_coordinate_i32(&self, axis: usize, value: i32) -> Result<Tensor> {
+        let index = self.coordinate_index_i32(axis, value)?;
+        let end = index.checked_add(1).ok_or_else(|| {
+            TioError::invalid_argument("coordinate index cannot be converted to a one-item range")
+        })?;
+        self.read_axis_range(axis, index, end)
+    }
+
+    /// Reads the one-position axis slice for an inline validated i64 coordinate value.
+    ///
+    /// This is a convenience wrapper over [`Self::coordinate_index_i64`] plus
+    /// [`Self::read_axis_range`]. It does not use a coordinate index or change native read
+    /// planning semantics.
+    pub fn read_at_coordinate_i64(&self, axis: usize, value: i64) -> Result<Tensor> {
+        let index = self.coordinate_index_i64(axis, value)?;
+        let end = index.checked_add(1).ok_or_else(|| {
+            TioError::invalid_argument("coordinate index cannot be converted to a one-item range")
+        })?;
+        self.read_axis_range(axis, index, end)
+    }
+
+    /// Reads the axis slice overlapping an inclusive i32 coordinate interval.
+    ///
+    /// This is a convenience wrapper over [`Self::coordinate_range_i32`] plus
+    /// [`Self::read_axis_range`]. It does not use a coordinate index or change native read
+    /// planning semantics.
+    pub fn read_coordinate_range_i32(&self, axis: usize, start: i32, end: i32) -> Result<Tensor> {
+        let range = self.coordinate_range_i32(axis, start, end)?;
+        self.read_axis_range(axis, range.start, range.end)
+    }
+
+    /// Reads the axis slice overlapping an inclusive i64 coordinate interval.
+    ///
+    /// This is a convenience wrapper over [`Self::coordinate_range_i64`] plus
+    /// [`Self::read_axis_range`]. It does not use a coordinate index or change native read
+    /// planning semantics.
+    pub fn read_coordinate_range_i64(&self, axis: usize, start: i64, end: i64) -> Result<Tensor> {
+        let range = self.coordinate_range_i64(axis, start, end)?;
+        self.read_axis_range(axis, range.start, range.end)
+    }
+
     /// Reads current selector data with execution options and metadata.
     pub fn read_with_options(
         &self,
@@ -5411,6 +5481,53 @@ impl TensorFile {
         self.validate_sparse_append(dtype, data_len, shape, rule)?;
         let prepared_rule = PreparedSparseRule::new(rule);
         let raw_rule = prepared_rule.raw();
+        self.append_with_range(shape, |handle, start, end| {
+            call(handle, &raw_rule, start, end)
+        })
+    }
+
+    fn analyze_sparse_append_v2(
+        &self,
+        dtype: DType,
+        data_len: usize,
+        shape: &[u64],
+        rule: &SparseRule,
+        call: impl FnOnce(
+            *mut sys::ArcadiaTioHandle,
+            *const sys::ArcadiaTioSparseRuleV2,
+            *mut sys::ArcadiaTioSparseAppendAnalysis,
+        ) -> i32,
+    ) -> Result<SparseAppendAnalysis> {
+        self.validate_sparse_append(dtype, data_len, shape, rule)?;
+        let prepared_rule = PreparedSparseRule::new(rule);
+        let raw_rule = prepared_rule.raw_v2();
+        let mut raw_analysis = empty_sparse_append_analysis();
+        let status = call(self.raw.as_ptr(), &raw_rule, &mut raw_analysis);
+        if status != sys::ARCADIA_TIO_ERROR_OK {
+            // SAFETY: `raw_analysis` was initialized to an empty native-compatible value before the
+            // call. If native populated reasons before returning an error, this releases them once.
+            unsafe { sys::arcadia_tio_sparse_append_analysis_free(&mut raw_analysis) };
+            return Err(TioError::from_last_error("failed to analyze sparse append"));
+        }
+        take_sparse_append_analysis(&mut raw_analysis)
+    }
+
+    fn append_sparse_with_range_v2(
+        &mut self,
+        dtype: DType,
+        data_len: usize,
+        shape: &[u64],
+        rule: &SparseRule,
+        call: impl FnOnce(
+            *mut sys::ArcadiaTioHandle,
+            *const sys::ArcadiaTioSparseRuleV2,
+            *mut u32,
+            *mut u32,
+        ) -> i32,
+    ) -> Result<AppendRange> {
+        self.validate_sparse_append(dtype, data_len, shape, rule)?;
+        let prepared_rule = PreparedSparseRule::new(rule);
+        let raw_rule = prepared_rule.raw_v2();
         self.append_with_range(shape, |handle, start, end| {
             call(handle, &raw_rule, start, end)
         })
@@ -6796,6 +6913,7 @@ struct PreparedSparseRule {
     sparse_axes: Vec<usize>,
     detector_kind: sys::ArcadiaTioSparseDetectorKind,
     predicate: sys::ArcadiaTioSparseValuePredicate,
+    predicate_v2: sys::ArcadiaTioSparseValuePredicateV2,
     min_absent_fraction: f64,
     min_absent_subtensors: u64,
     fallback: sys::ArcadiaTioSparseFallbackPolicy,
@@ -6807,6 +6925,7 @@ impl PreparedSparseRule {
             sparse_axes: rule.sparse_axes.clone(),
             detector_kind: rule.detector.to_raw(),
             predicate: rule.predicate.to_raw(),
+            predicate_v2: rule.predicate.to_raw_v2(),
             min_absent_fraction: rule.min_absent_fraction,
             min_absent_subtensors: rule.min_absent_subtensors,
             fallback: rule.fallback.to_raw(),
@@ -6823,6 +6942,23 @@ impl PreparedSparseRule {
             },
             sparse_axes_len: self.sparse_axes.len(),
             predicate: self.predicate,
+            min_absent_fraction: self.min_absent_fraction,
+            min_absent_subtensors: self.min_absent_subtensors,
+            fallback: self.fallback,
+        }
+    }
+
+    fn raw_v2(&self) -> sys::ArcadiaTioSparseRuleV2 {
+        sys::ArcadiaTioSparseRuleV2 {
+            struct_size: mem::size_of::<sys::ArcadiaTioSparseRuleV2>() as u32,
+            detector_kind: self.detector_kind,
+            sparse_axes: if self.sparse_axes.is_empty() {
+                ptr::null()
+            } else {
+                self.sparse_axes.as_ptr()
+            },
+            sparse_axes_len: self.sparse_axes.len(),
+            predicate: self.predicate_v2,
             min_absent_fraction: self.min_absent_fraction,
             min_absent_subtensors: self.min_absent_subtensors,
             fallback: self.fallback,

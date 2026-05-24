@@ -41,11 +41,19 @@ borrowed Arrow pointers are valid only while that owner is alive and are
 released exactly once when it is dropped. This slice does not expose generic
 zero-copy borrowed views over native buffers.
 
-Inline numeric coordinate lookup is exposed for validated `i32`/`i64` axis
-coordinates through `TensorFile::coordinate_index_i32/i64` and
-`TensorFile::coordinate_range_i32/i64`. Exact lookup returns an axis index;
-range lookup returns a half-open `Range<u32>` for an inclusive coordinate
-interval. External, string/dictionary, timezone/calendar interpretation, and
+Inline numeric coordinate authoring and lookup are exposed for validated
+`i32`/`i64` axis coordinates. `CreateOptions::coordinates` can be used with
+streaming/random-access create plus supported policy and inferred create helpers
+for fixed non-append axes; the native API validates coordinate lengths against
+the selected axis extent. `TensorFile::coordinate_index_i32/i64` and
+`TensorFile::coordinate_range_i32/i64` provide exact and monotonic range lookup;
+`TensorFile::read_at_coordinate_i32/i64` and
+`TensorFile::read_coordinate_range_i32/i64` compose those lookups with ordinary
+axis-range reads and return the same `Tensor` shapes as selector reads. Exact
+lookup returns an axis index; range lookup returns a half-open `Range<u32>` for
+an inclusive coordinate interval. The read conveniences are ergonomic helpers,
+not coordinate-index acceleration. External, string/dictionary,
+timezone/calendar interpretation, append-axis coordinate growth, and
 index-accelerated coordinate lookup remain deferred.
 
 ## Example
@@ -93,6 +101,8 @@ assert_eq!(tensor.shape, vec![1, 3]);
 assert_eq!(tensor.data, TensorData::F64(vec![1.0, 2.0, 3.0]));
 assert_eq!(file.coordinate_index_i32(1, 20260515)?, 1);
 assert_eq!(file.coordinate_range_i32(1, 20260514, 20260516)?, 0..3);
+assert_eq!(file.read_at_coordinate_i32(1, 20260515)?.data, TensorData::F64(vec![2.0]));
+assert_eq!(file.read_coordinate_range_i32(1, 20260514, 20260516)?.shape, vec![1, 3]);
 
 let indexed = file.read_index(&[
     arcadia_tio_rs::ReadIndexItem::all(),
@@ -118,13 +128,14 @@ drop(arrow); // releases the Arrow C Data callbacks exactly once.
 ## Sparse-intent analysis and append
 
 The safe wrapper exposes the native sparse-intent surface for f32/f64 payloads
-and the bounded i32/i64 zero/null first slice:
+and the bounded i32/i64 zero/null/exact-integer first slice:
 
 - `SparseRule::null_subtensor(...)` and
   `SparseRule::predicate_subtensor(..., SparseValuePredicate::Zero | Nan |
-  EqualF32(_) | EqualF64(_))` build owned rules. Integer payloads accept
-  `null_subtensor` and `Zero` only; integer `Nan`, floating exact predicates,
-  and arbitrary exact integer predicates are rejected/deferred.
+  EqualF32(_) | EqualF64(_) | EqualI32(_) | EqualI64(_))` build owned rules.
+  Integer payloads accept `null_subtensor`, `Zero`, and matching exact
+  `EqualI32`/`EqualI64` predicates; integer `Nan`, floating exact predicates,
+  and mismatched integer predicates are rejected.
 - `TensorFile::analyze_sparse_append_f32` / `analyze_sparse_append_f64` /
   `analyze_sparse_append_i32` / `analyze_sparse_append_i64` return a Rust-owned
   `SparseAppendAnalysis` with `SparseAppendOutcome` and `SparseAppendReason`
@@ -163,24 +174,26 @@ assert_eq!((range.start, range.end), (0, 2));
 # }
 ```
 
-Sparse-intent integer support remains deliberately narrow: i32/i64 wrappers are
-limited to zero/null first-slice behavior and do not add exact integer predicate
-carriers. Analysis outcomes are diagnostics for the current native lowering
-decision, and append helpers preserve native semantics only: they are not
-storage-efficiency, compression-ratio, physical-layout, capacity, or release
+Sparse-intent integer support remains deliberately bounded: i32/i64 wrappers
+support zero/null first-slice behavior plus exact `EqualI32`/`EqualI64`
+predicate carriers. Analysis outcomes are diagnostics for the current native
+lowering decision, and append helpers preserve native semantics only: they are
+not storage-efficiency, compression-ratio, physical-layout, capacity, or release
 readiness claims.
 
 ## Parity caveats
 
 Within the maintained API parity matrix, this crate reaches 17/17 source-visible
-public Rust capability families for the agreed beta workflow scope. TP-359's
-no-release handoff review reran the raw C-header/sys inventory, refreshed the
-generated API signature snapshots for recent coordinate lookup additions, and
-accepted no runtime ownership/parity blocker for this wrapper slice. This is not
-broad parity with every private Rust maintainer hook. It currently covers bulk
-create/open/append/read, f32/f64 sparse-intent analysis/append plus bounded
-i32/i64 zero/null sparse-intent analysis/append, RegularChunked policy create,
-inferred create, universe-aware authoring, current and historical read options, current and
+public Rust capability families for the agreed beta workflow scope. TP-370's
+source-only handoff review rechecked coordinate authoring, exact integer sparse
+predicates, coordinate read conveniences, generated signatures, and FFI
+ownership, and accepted no runtime ownership/parity blocker for this wrapper
+slice. This is not broad parity with every private Rust maintainer hook. It
+currently covers bulk create/open/append/read, f32/f64 sparse-intent
+analysis/append plus bounded i32/i64 zero/null/exact-integer sparse-intent
+analysis/append, RegularChunked policy create, inferred create, inline numeric
+coordinate-bearing policy/inferred create,
+universe-aware authoring, current and historical read options, current and
 historical read-shape policies, write-forward compression controls (default
 create options inherit the native persisted Auto/Zstd policy unless callers
 explicitly request uncompressed or zstd), metadata helpers, retained-history list/head helpers, scoped
@@ -192,10 +205,12 @@ query-attribution helpers are available as API-completeness access to native
 trace JSON, and bounded read-index/Arrow C Data helpers expose native interop
 vocabulary outside the original 17-family score. These remain outside
 benchmark/performance evidence. This crate does not expose generic zero-copy
-native views, exact integer sparse predicates, or compressed storage-accounting
-eligibility claims. Coordinate lookup remains inline numeric-only: external coordinate value
-resolution, string/dictionary coordinates, timezone/calendar interpretation, and
-lookup acceleration are deferred. Pop/revert, metadata setter, index
+native views or compressed storage-accounting eligibility claims. Coordinate authoring/lookup/read conveniences remain inline numeric-only for
+fixed axes: exact/range coordinate read helpers compose lookup with ordinary
+axis-range reads and do not imply coordinate-index acceleration; external
+coordinate value resolution, string/dictionary coordinates, timezone/calendar
+interpretation, append-axis coordinate growth, and lookup acceleration are
+deferred. Pop/revert, metadata setter, index
 checkpoint setter, clear-block, and unsupported auto-compaction calls
 intentionally surface native policy/layout support errors.
 
