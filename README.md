@@ -26,6 +26,16 @@ views, coordinate-index acceleration, generic/private native maintainer hooks,
 native artifact publication, release actions, and performance/storage/capacity
 claims are outside this source export.
 
+## Production integration checklist
+
+Before using the public Rust wrapper in an application build:
+
+1. Build or obtain the operator-approved `arcadia_tio_capi` native library for the target platform.
+2. Set `ARCADIA_TIO_CAPI_LIB_DIR` for link discovery and configure the platform runtime loader separately (`LD_LIBRARY_PATH`, `DYLD_LIBRARY_PATH`, rpath/install-name, `PATH`, or DLL colocation as appropriate).
+3. Run `cargo test --workspace` and `bash examples/tutorials/run/run_rust.sh` against that native library.
+4. Keep generated `.tio` files, native libraries, package archives, and local `native/` copies out of source control unless a separate release task approves them.
+5. Treat Coordinate v2 external references as metadata/status summaries only; this wrapper does not add dereference, variable-length string, broad calendar/session, append-time dictionary extension, lookup-acceleration, or release/performance claims.
+
 ## Local test flow
 
 Supply a locally built native C ABI library, either by setting

@@ -278,6 +278,16 @@ tiny `.tio` files under OS temp directories and clean them up; do not copy nativ
 libraries, Cargo build output, or generated `.tio` data into the tutorial tree
 or source-only public checkout.
 
+## Production integration checklist
+
+Before shipping an application that uses this crate:
+
+- Validate against the exact native `arcadia_tio_capi` library you intend to deploy.
+- Set `ARCADIA_TIO_CAPI_LIB_DIR` for link discovery and configure runtime loader lookup separately.
+- Run the workspace tests and tutorial examples with that library.
+- Keep generated `.tio` data and native/package artifacts out of this source-only checkout unless a separate release task approves them.
+- Preserve the documented API boundaries: Coordinate v2 external summaries are not dereferenced, optional indexes are not authoritative truth, and examples are not benchmark, storage, compression, capacity, or release-readiness evidence.
+
 ## Local test/runtime library setup
 
 Supply or copy the `arcadia_tio_capi` native shared library, then
