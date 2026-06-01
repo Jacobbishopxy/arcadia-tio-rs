@@ -44,6 +44,32 @@ pub type ArcadiaTioCoordinateStorageKind = c_int;
 pub type ArcadiaTioCoordinateSourceKind = c_int;
 /// Coordinate validation status value.
 pub type ArcadiaTioCoordinateValidationStatus = c_int;
+/// Coordinate v2 value-domain selector.
+pub type ArcadiaTioCoordinateValueDomainV2 = c_int;
+/// Coordinate v2 lookup-key domain selector.
+pub type ArcadiaTioCoordinateKeyDomainV2 = c_int;
+/// Coordinate v2 dictionary-code integer dtype selector.
+pub type ArcadiaTioCoordinateCodeDTypeV2 = c_int;
+/// Coordinate v2 fixed-text encoding selector.
+pub type ArcadiaTioCoordinateFixedTextEncodingV2 = c_int;
+/// Coordinate v2 fixed-text padding selector.
+pub type ArcadiaTioCoordinateFixedTextPaddingV2 = c_int;
+/// Coordinate v2 external-source kind selector.
+pub type ArcadiaTioCoordinateSourceKindV2 = c_int;
+/// Coordinate v2 availability status selector.
+pub type ArcadiaTioCoordinateAvailabilityV2 = c_int;
+/// Coordinate v2 status-category selector.
+pub type ArcadiaTioCoordinateStatusCategoryV2 = c_int;
+/// Coordinate v2 optional-index kind selector.
+pub type ArcadiaTioCoordinateIndexKindV2 = c_int;
+/// Coordinate v2 optional-index validation status selector.
+pub type ArcadiaTioCoordinateIndexValidationStatusV2 = c_int;
+/// Coordinate v2 optional-index fallback selector.
+pub type ArcadiaTioCoordinateIndexFallbackV2 = c_int;
+/// Coordinate v2 optional-index selected-use selector.
+pub type ArcadiaTioCoordinateIndexUseV2 = c_int;
+/// Coordinate v2 lookup-result status selector.
+pub type ArcadiaTioCoordinateLookupResultStatusV2 = c_int;
 /// Tensor axis kind value.
 pub type ArcadiaTioAxisKind = c_int;
 /// Storage profile selector value used by policy create helpers.
@@ -155,6 +181,72 @@ raw_constant!(ARCADIA_TIO_COORDINATE_SOURCE_ABSOLUTE_PATH: ArcadiaTioCoordinateS
 raw_constant!(ARCADIA_TIO_COORDINATE_SOURCE_URI: ArcadiaTioCoordinateSourceKind = 3);
 raw_constant!(ARCADIA_TIO_COORDINATE_VALIDATED: ArcadiaTioCoordinateValidationStatus = 0);
 raw_constant!(ARCADIA_TIO_COORDINATE_UNVALIDATED: ArcadiaTioCoordinateValidationStatus = 1);
+
+raw_constant!(ARCADIA_TIO_COORDINATE_V2_ABI_VERSION: u32 = 1);
+raw_constant!(ARCADIA_TIO_COORDINATE_VALUE_DOMAIN_V2_INLINE_NUMERIC: ArcadiaTioCoordinateValueDomainV2 = 0);
+raw_constant!(ARCADIA_TIO_COORDINATE_VALUE_DOMAIN_V2_FIXED_TEXT: ArcadiaTioCoordinateValueDomainV2 = 1);
+raw_constant!(ARCADIA_TIO_COORDINATE_VALUE_DOMAIN_V2_DICTIONARY_CODE: ArcadiaTioCoordinateValueDomainV2 = 2);
+raw_constant!(ARCADIA_TIO_COORDINATE_VALUE_DOMAIN_V2_APPEND_SEQUENCE: ArcadiaTioCoordinateValueDomainV2 = 3);
+raw_constant!(ARCADIA_TIO_COORDINATE_VALUE_DOMAIN_V2_EXTERNAL_REFERENCE: ArcadiaTioCoordinateValueDomainV2 = 4);
+raw_constant!(ARCADIA_TIO_COORDINATE_KEY_DOMAIN_V2_I32: ArcadiaTioCoordinateKeyDomainV2 = 0);
+raw_constant!(ARCADIA_TIO_COORDINATE_KEY_DOMAIN_V2_I64: ArcadiaTioCoordinateKeyDomainV2 = 1);
+raw_constant!(ARCADIA_TIO_COORDINATE_KEY_DOMAIN_V2_FIXED_TEXT: ArcadiaTioCoordinateKeyDomainV2 = 2);
+raw_constant!(ARCADIA_TIO_COORDINATE_KEY_DOMAIN_V2_DICTIONARY_CODE: ArcadiaTioCoordinateKeyDomainV2 = 3);
+raw_constant!(ARCADIA_TIO_COORDINATE_KEY_DOMAIN_V2_STABLE_ID: ArcadiaTioCoordinateKeyDomainV2 = 4);
+raw_constant!(ARCADIA_TIO_COORDINATE_KEY_DOMAIN_V2_DISPLAY_LABEL: ArcadiaTioCoordinateKeyDomainV2 = 5);
+raw_constant!(ARCADIA_TIO_COORDINATE_KEY_DOMAIN_V2_ALIAS: ArcadiaTioCoordinateKeyDomainV2 = 6);
+raw_constant!(ARCADIA_TIO_COORDINATE_KEY_DOMAIN_V2_RAW_TIME: ArcadiaTioCoordinateKeyDomainV2 = 7);
+raw_constant!(ARCADIA_TIO_COORDINATE_CODE_DTYPE_V2_U8: ArcadiaTioCoordinateCodeDTypeV2 = 0);
+raw_constant!(ARCADIA_TIO_COORDINATE_CODE_DTYPE_V2_U16: ArcadiaTioCoordinateCodeDTypeV2 = 1);
+raw_constant!(ARCADIA_TIO_COORDINATE_CODE_DTYPE_V2_U32: ArcadiaTioCoordinateCodeDTypeV2 = 2);
+raw_constant!(ARCADIA_TIO_COORDINATE_CODE_DTYPE_V2_U64: ArcadiaTioCoordinateCodeDTypeV2 = 3);
+raw_constant!(ARCADIA_TIO_COORDINATE_FIXED_TEXT_ENCODING_V2_ASCII: ArcadiaTioCoordinateFixedTextEncodingV2 = 0);
+raw_constant!(ARCADIA_TIO_COORDINATE_FIXED_TEXT_PADDING_V2_RIGHT_SPACE: ArcadiaTioCoordinateFixedTextPaddingV2 = 0);
+raw_constant!(ARCADIA_TIO_COORDINATE_SOURCE_V2_SAME_FILE_OBJECT: ArcadiaTioCoordinateSourceKindV2 = 0);
+raw_constant!(ARCADIA_TIO_COORDINATE_SOURCE_V2_RELATIVE_PATH: ArcadiaTioCoordinateSourceKindV2 = 1);
+raw_constant!(ARCADIA_TIO_COORDINATE_SOURCE_V2_ABSOLUTE_PATH: ArcadiaTioCoordinateSourceKindV2 = 2);
+raw_constant!(ARCADIA_TIO_COORDINATE_SOURCE_V2_URI: ArcadiaTioCoordinateSourceKindV2 = 3);
+raw_constant!(ARCADIA_TIO_COORDINATE_SOURCE_V2_APPLICATION_REGISTRY: ArcadiaTioCoordinateSourceKindV2 = 4);
+raw_constant!(ARCADIA_TIO_COORDINATE_AVAILABILITY_V2_AVAILABLE: ArcadiaTioCoordinateAvailabilityV2 = 0);
+raw_constant!(ARCADIA_TIO_COORDINATE_AVAILABILITY_V2_ABSENT: ArcadiaTioCoordinateAvailabilityV2 = 1);
+raw_constant!(ARCADIA_TIO_COORDINATE_AVAILABILITY_V2_UNKNOWN: ArcadiaTioCoordinateAvailabilityV2 = 2);
+raw_constant!(ARCADIA_TIO_COORDINATE_AVAILABILITY_V2_INVALID: ArcadiaTioCoordinateAvailabilityV2 = 3);
+raw_constant!(ARCADIA_TIO_COORDINATE_AVAILABILITY_V2_UNAVAILABLE: ArcadiaTioCoordinateAvailabilityV2 = 4);
+raw_constant!(ARCADIA_TIO_COORDINATE_AVAILABILITY_V2_UNSUPPORTED: ArcadiaTioCoordinateAvailabilityV2 = 5);
+raw_constant!(ARCADIA_TIO_COORDINATE_STATUS_V2_OK: ArcadiaTioCoordinateStatusCategoryV2 = 0);
+raw_constant!(ARCADIA_TIO_COORDINATE_STATUS_V2_INVALID_ARGUMENT: ArcadiaTioCoordinateStatusCategoryV2 = 1);
+raw_constant!(ARCADIA_TIO_COORDINATE_STATUS_V2_UNSUPPORTED_DOMAIN: ArcadiaTioCoordinateStatusCategoryV2 = 2);
+raw_constant!(ARCADIA_TIO_COORDINATE_STATUS_V2_UNKNOWN_REQUIRED_VERSION: ArcadiaTioCoordinateStatusCategoryV2 = 3);
+raw_constant!(ARCADIA_TIO_COORDINATE_STATUS_V2_REQUIRED_UNAVAILABLE: ArcadiaTioCoordinateStatusCategoryV2 = 4);
+raw_constant!(ARCADIA_TIO_COORDINATE_STATUS_V2_STALE_EXTERNAL_BINDING: ArcadiaTioCoordinateStatusCategoryV2 = 5);
+raw_constant!(ARCADIA_TIO_COORDINATE_STATUS_V2_DUPLICATE_UNIQUE_LOOKUP: ArcadiaTioCoordinateStatusCategoryV2 = 6);
+raw_constant!(ARCADIA_TIO_COORDINATE_STATUS_V2_LOOKUP_DOMAIN_MISMATCH: ArcadiaTioCoordinateStatusCategoryV2 = 7);
+raw_constant!(ARCADIA_TIO_COORDINATE_STATUS_V2_INVALID_INDEX: ArcadiaTioCoordinateStatusCategoryV2 = 8);
+raw_constant!(ARCADIA_TIO_COORDINATE_STATUS_V2_STALE_INDEX: ArcadiaTioCoordinateStatusCategoryV2 = 9);
+raw_constant!(ARCADIA_TIO_COORDINATE_STATUS_V2_UNSUPPORTED_INDEX: ArcadiaTioCoordinateStatusCategoryV2 = 10);
+raw_constant!(ARCADIA_TIO_COORDINATE_INDEX_KIND_V2_EXACT: ArcadiaTioCoordinateIndexKindV2 = 0);
+raw_constant!(ARCADIA_TIO_COORDINATE_INDEX_KIND_V2_RANGE: ArcadiaTioCoordinateIndexKindV2 = 1);
+raw_constant!(ARCADIA_TIO_COORDINATE_INDEX_KIND_V2_DICTIONARY_KEY: ArcadiaTioCoordinateIndexKindV2 = 2);
+raw_constant!(ARCADIA_TIO_COORDINATE_INDEX_STATUS_V2_VALIDATED: ArcadiaTioCoordinateIndexValidationStatusV2 = 0);
+raw_constant!(ARCADIA_TIO_COORDINATE_INDEX_STATUS_V2_MISSING: ArcadiaTioCoordinateIndexValidationStatusV2 = 1);
+raw_constant!(ARCADIA_TIO_COORDINATE_INDEX_STATUS_V2_STALE: ArcadiaTioCoordinateIndexValidationStatusV2 = 2);
+raw_constant!(ARCADIA_TIO_COORDINATE_INDEX_STATUS_V2_INVALID: ArcadiaTioCoordinateIndexValidationStatusV2 = 3);
+raw_constant!(ARCADIA_TIO_COORDINATE_INDEX_STATUS_V2_UNSUPPORTED: ArcadiaTioCoordinateIndexValidationStatusV2 = 4);
+raw_constant!(ARCADIA_TIO_COORDINATE_INDEX_FALLBACK_V2_AUTHORITATIVE_SCAN: ArcadiaTioCoordinateIndexFallbackV2 = 0);
+raw_constant!(ARCADIA_TIO_COORDINATE_INDEX_FALLBACK_V2_REBUILD: ArcadiaTioCoordinateIndexFallbackV2 = 1);
+raw_constant!(ARCADIA_TIO_COORDINATE_INDEX_FALLBACK_V2_REJECT_INDEX_DEPENDENT_OPERATION: ArcadiaTioCoordinateIndexFallbackV2 = 2);
+raw_constant!(ARCADIA_TIO_COORDINATE_INDEX_USE_V2_USE_INDEX: ArcadiaTioCoordinateIndexUseV2 = 0);
+raw_constant!(ARCADIA_TIO_COORDINATE_INDEX_USE_V2_AUTHORITATIVE_SCAN: ArcadiaTioCoordinateIndexUseV2 = 1);
+raw_constant!(ARCADIA_TIO_COORDINATE_INDEX_USE_V2_REBUILD: ArcadiaTioCoordinateIndexUseV2 = 2);
+raw_constant!(ARCADIA_TIO_COORDINATE_INDEX_USE_V2_UNAVAILABLE: ArcadiaTioCoordinateIndexUseV2 = 3);
+raw_constant!(ARCADIA_TIO_COORDINATE_LOOKUP_RESULT_V2_UNIQUE: ArcadiaTioCoordinateLookupResultStatusV2 = 0);
+raw_constant!(ARCADIA_TIO_COORDINATE_LOOKUP_RESULT_V2_RANGE: ArcadiaTioCoordinateLookupResultStatusV2 = 1);
+raw_constant!(ARCADIA_TIO_COORDINATE_LOOKUP_RESULT_V2_MANY: ArcadiaTioCoordinateLookupResultStatusV2 = 2);
+raw_constant!(ARCADIA_TIO_COORDINATE_LOOKUP_RESULT_V2_MISSING: ArcadiaTioCoordinateLookupResultStatusV2 = 3);
+raw_constant!(ARCADIA_TIO_COORDINATE_LOOKUP_RESULT_V2_UNAVAILABLE: ArcadiaTioCoordinateLookupResultStatusV2 = 4);
+raw_constant!(ARCADIA_TIO_COORDINATE_LOOKUP_RESULT_V2_DUPLICATE: ArcadiaTioCoordinateLookupResultStatusV2 = 5);
+raw_constant!(ARCADIA_TIO_COORDINATE_LOOKUP_RESULT_V2_UNSUPPORTED: ArcadiaTioCoordinateLookupResultStatusV2 = 6);
+raw_constant!(ARCADIA_TIO_COORDINATE_LOOKUP_RESULT_V2_ERROR: ArcadiaTioCoordinateLookupResultStatusV2 = 7);
 
 raw_constant!(ARCADIA_TIO_AXIS_TIME: ArcadiaTioAxisKind = 0);
 raw_constant!(ARCADIA_TIO_AXIS_SYMBOL: ArcadiaTioAxisKind = 1);
@@ -1382,6 +1474,498 @@ pub struct ArcadiaTioAxisCoordinateMeta {
     pub validation_status: ArcadiaTioCoordinateValidationStatus,
 }
 
+/// Fixed-width text layout for Coordinate v2 descriptors and carriers.
+#[repr(C)]
+#[derive(Debug, Copy, Clone, Default)]
+pub struct ArcadiaTioCoordinateFixedTextLayoutV2 {
+    /// Structure version.
+    pub version: u32,
+    /// Structure size in bytes.
+    pub struct_size: usize,
+    /// Fixed text width in bytes.
+    pub width: usize,
+    /// Fixed text byte encoding.
+    pub encoding: ArcadiaTioCoordinateFixedTextEncodingV2,
+    /// Fixed text padding policy.
+    pub padding: ArcadiaTioCoordinateFixedTextPaddingV2,
+    /// Nonzero rejects values wider than `width`.
+    pub reject_over_width: u8,
+    /// Nonzero rejects non-ASCII bytes.
+    pub reject_non_ascii: u8,
+    /// Reserved bytes; callers set to zero.
+    pub reserved_u8: [u8; 6],
+    /// Reserved words; callers set to zero.
+    pub reserved: [u64; 2],
+}
+
+/// Coordinate v2 dictionary identity and cardinality summary.
+#[repr(C)]
+#[derive(Debug, Copy, Clone, Default)]
+pub struct ArcadiaTioCoordinateDictionarySummaryV2 {
+    /// Structure version.
+    pub version: u32,
+    /// Structure size in bytes.
+    pub struct_size: usize,
+    /// Borrowed or library-owned dictionary identifier.
+    pub dictionary_id: *const c_char,
+    /// Dictionary revision bound to the selected root.
+    pub revision: u64,
+    /// Dictionary code integer dtype.
+    pub code_dtype: ArcadiaTioCoordinateCodeDTypeV2,
+    /// Number of dictionary entries.
+    pub entry_count: u64,
+    /// Nonzero when stable IDs are unique.
+    pub stable_ids_unique: u8,
+    /// Nonzero when display labels are unique.
+    pub display_labels_unique: u8,
+    /// Nonzero when aliases are unique.
+    pub aliases_unique: u8,
+    /// Nonzero when codes remain stable across revisions.
+    pub codes_stable_across_revisions: u8,
+    /// Reserved bytes; callers set to zero.
+    pub reserved_u8: [u8; 4],
+    /// Borrowed or library-owned content identifier.
+    pub content_id: *const c_char,
+    /// Reserved words; callers set to zero.
+    pub reserved: [u64; 2],
+}
+
+/// Coordinate v2 external binding summary without arbitrary dereference semantics.
+#[repr(C)]
+#[derive(Debug, Copy, Clone, Default)]
+pub struct ArcadiaTioCoordinateExternalBindingV2 {
+    /// Structure version.
+    pub version: u32,
+    /// Structure size in bytes.
+    pub struct_size: usize,
+    /// External source kind.
+    pub source_kind: ArcadiaTioCoordinateSourceKindV2,
+    /// Borrowed or library-owned logical identifier.
+    pub logical_id: *const c_char,
+    /// Borrowed or library-owned privacy-safe display text.
+    pub privacy_safe_display: *const c_char,
+    /// Borrowed or library-owned content identifier.
+    pub content_id: *const c_char,
+    /// External value domain.
+    pub value_domain: ArcadiaTioCoordinateValueDomainV2,
+    /// Declared external coordinate length.
+    pub length: u64,
+    /// External binding availability.
+    pub availability: ArcadiaTioCoordinateAvailabilityV2,
+    /// External binding status category.
+    pub status_category: ArcadiaTioCoordinateStatusCategoryV2,
+    /// Nonzero when the external coordinate is required.
+    pub required: u8,
+    /// Reserved bytes; callers set to zero.
+    pub reserved_u8: [u8; 7],
+    /// Reserved words; callers set to zero.
+    pub reserved: [u64; 2],
+}
+
+/// Coordinate v2 source binding recorded for optional index summaries.
+#[repr(C)]
+#[derive(Debug, Copy, Clone, Default)]
+pub struct ArcadiaTioCoordinateIndexSourceBindingV2 {
+    /// Structure version.
+    pub version: u32,
+    /// Structure size in bytes.
+    pub struct_size: usize,
+    /// Library-owned descriptor identifier.
+    pub descriptor_id: *const c_char,
+    /// Descriptor revision bound to the selected root.
+    pub descriptor_revision: u64,
+    /// Value domain indexed by the optional index.
+    pub value_domain: ArcadiaTioCoordinateValueDomainV2,
+    /// Library-owned value-object identifier.
+    pub value_object_id: *const c_char,
+    /// Library-owned dictionary identifier.
+    pub dictionary_id: *const c_char,
+    /// Dictionary revision used by the index.
+    pub dictionary_revision: u64,
+    /// Library-owned dictionary content identifier.
+    pub dictionary_content_id: *const c_char,
+    /// External source kind used by the index, if any.
+    pub external_source_kind: ArcadiaTioCoordinateSourceKindV2,
+    /// Library-owned external logical identifier.
+    pub external_logical_id: *const c_char,
+    /// Library-owned external content identifier.
+    pub external_content_id: *const c_char,
+    /// Library-owned selected-root identifier.
+    pub root_id: *const c_char,
+    /// Axis index covered by the index.
+    pub axis: usize,
+    /// Root extent covered by the index.
+    pub root_extent: u64,
+    /// First append entry covered by the index.
+    pub append_start: u64,
+    /// Number of append entries covered by the index.
+    pub append_count: u64,
+    /// Reserved words; callers set to zero.
+    pub reserved: [u64; 4],
+}
+
+/// Coordinate v2 optional index summary.
+#[repr(C)]
+#[derive(Debug, Copy, Clone, Default)]
+pub struct ArcadiaTioCoordinateIndexSummaryV2 {
+    /// Structure version.
+    pub version: u32,
+    /// Structure size in bytes.
+    pub struct_size: usize,
+    /// Library-owned index identifier.
+    pub index_id: *const c_char,
+    /// Optional index kind.
+    pub index_kind: ArcadiaTioCoordinateIndexKindV2,
+    /// Lookup key domain covered by the index.
+    pub key_domain: ArcadiaTioCoordinateKeyDomainV2,
+    /// Selected-root source binding for the index.
+    pub source_binding: ArcadiaTioCoordinateIndexSourceBindingV2,
+    /// Sortedness declaration.
+    pub sorted: ArcadiaTioCoordinateSortedness,
+    /// Monotonicity declaration.
+    pub monotonicity: ArcadiaTioCoordinateMonotonicity,
+    /// Uniqueness declaration.
+    pub uniqueness: ArcadiaTioCoordinateUniqueness,
+    /// Index format version.
+    pub format_version: u32,
+    /// Index build version.
+    pub build_version: u32,
+    /// Validation status for the index.
+    pub validation_status: ArcadiaTioCoordinateIndexValidationStatusV2,
+    /// Fallback policy when the index is not usable.
+    pub fallback: ArcadiaTioCoordinateIndexFallbackV2,
+    /// Selected use for the current operation.
+    pub selected_use: ArcadiaTioCoordinateIndexUseV2,
+    /// Nonzero when the index is required.
+    pub required: u8,
+    /// Reserved bytes; callers set to zero.
+    pub reserved_u8: [u8; 7],
+    /// Library-owned status reason.
+    pub reason: *const c_char,
+    /// Reserved words; callers set to zero.
+    pub reserved: [u64; 2],
+}
+
+/// Coordinate v2 dictionary entry with owned strings in returned dictionaries.
+#[repr(C)]
+#[derive(Debug, Copy, Clone, Default)]
+pub struct ArcadiaTioCoordinateDictionaryEntryV2 {
+    /// Structure version.
+    pub version: u32,
+    /// Structure size in bytes.
+    pub struct_size: usize,
+    /// Dictionary code value.
+    pub code: u64,
+    /// Native-owned or borrowed stable identifier.
+    pub stable_id: *mut c_char,
+    /// Native-owned or borrowed display label.
+    pub display_label: *mut c_char,
+    /// Native-owned or borrowed alias string array.
+    pub aliases: *mut *mut c_char,
+    /// Number of alias strings.
+    pub aliases_len: usize,
+    /// Reserved words; callers set to zero.
+    pub reserved: [u64; 2],
+}
+
+/// Coordinate v2 dictionary result carrier.
+#[repr(C)]
+#[derive(Debug, Copy, Clone, Default)]
+pub struct ArcadiaTioCoordinateDictionaryV2 {
+    /// Structure version.
+    pub version: u32,
+    /// Structure size in bytes.
+    pub struct_size: usize,
+    /// Dictionary summary.
+    pub summary: ArcadiaTioCoordinateDictionarySummaryV2,
+    /// Native-owned dictionary entry array.
+    pub entries: *mut ArcadiaTioCoordinateDictionaryEntryV2,
+    /// Number of dictionary entries.
+    pub entries_len: usize,
+    /// Dictionary read status category.
+    pub status_category: ArcadiaTioCoordinateStatusCategoryV2,
+    /// Native-owned status reason.
+    pub reason: *mut c_char,
+    /// Reserved words; callers set to zero.
+    pub reserved: [u64; 4],
+}
+
+/// Coordinate v2 owned value-slice result carrier.
+#[repr(C)]
+#[derive(Debug, Copy, Clone, Default)]
+pub struct ArcadiaTioCoordinateValueSliceV2 {
+    /// Structure version.
+    pub version: u32,
+    /// Structure size in bytes.
+    pub struct_size: usize,
+    /// Value domain for the returned carrier.
+    pub value_domain: ArcadiaTioCoordinateValueDomainV2,
+    /// Numeric dtype for inline numeric values.
+    pub numeric_dtype: ArcadiaTioCoordinateDType,
+    /// Numeric encoding for inline numeric values.
+    pub numeric_encoding: ArcadiaTioCoordinateEncoding,
+    /// Dictionary code dtype for dictionary-coded values.
+    pub code_dtype: ArcadiaTioCoordinateCodeDTypeV2,
+    /// Native-owned value buffer.
+    pub data: *mut c_void,
+    /// Number of logical values.
+    pub len: usize,
+    /// Element size in bytes.
+    pub element_size: usize,
+    /// Fixed text width in bytes.
+    pub fixed_text_width: usize,
+    /// Availability for the returned values.
+    pub availability: ArcadiaTioCoordinateAvailabilityV2,
+    /// Status category for the read.
+    pub status_category: ArcadiaTioCoordinateStatusCategoryV2,
+    /// Native-owned status reason.
+    pub reason: *mut c_char,
+    /// Reserved words; callers set to zero.
+    pub reserved: [u64; 4],
+}
+
+/// Coordinate v2 typed lookup key.
+#[repr(C)]
+#[derive(Debug, Copy, Clone, Default)]
+pub struct ArcadiaTioCoordinateLookupKeyV2 {
+    /// Structure version.
+    pub version: u32,
+    /// Structure size in bytes.
+    pub struct_size: usize,
+    /// Lookup key domain.
+    pub key_domain: ArcadiaTioCoordinateKeyDomainV2,
+    /// Signed 32-bit key value.
+    pub i32_value: i32,
+    /// Signed 64-bit key value.
+    pub i64_value: i64,
+    /// Dictionary code key value.
+    pub code_value: u64,
+    /// Borrowed byte key pointer.
+    pub bytes: *const u8,
+    /// Number of key bytes.
+    pub bytes_len: usize,
+    /// Fixed text width in bytes.
+    pub fixed_text_width: usize,
+    /// Borrowed text key pointer.
+    pub text: *const c_char,
+    /// Reserved words; callers set to zero.
+    pub reserved: [u64; 4],
+}
+
+/// Coordinate v2 lookup result carrier.
+#[repr(C)]
+#[derive(Debug, Copy, Clone, Default)]
+pub struct ArcadiaTioCoordinateLookupResultV2 {
+    /// Structure version.
+    pub version: u32,
+    /// Structure size in bytes.
+    pub struct_size: usize,
+    /// Lookup result status.
+    pub status: ArcadiaTioCoordinateLookupResultStatusV2,
+    /// Lookup status category.
+    pub status_category: ArcadiaTioCoordinateStatusCategoryV2,
+    /// Unique result position when status is unique.
+    pub unique_position: u32,
+    /// Half-open result range start when status is range.
+    pub range_start: u32,
+    /// Half-open result range end when status is range.
+    pub range_end: u32,
+    /// Native-owned positions array for many-result lookups.
+    pub positions: *mut u32,
+    /// Number of positions.
+    pub positions_len: usize,
+    /// Availability for the lookup result.
+    pub availability: ArcadiaTioCoordinateAvailabilityV2,
+    /// Native-owned status reason.
+    pub reason: *mut c_char,
+    /// Reserved words; callers set to zero.
+    pub reserved: [u64; 4],
+}
+
+/// Coordinate v2 append-axis coordinate entry.
+#[repr(C)]
+#[derive(Debug, Copy, Clone, Default)]
+pub struct ArcadiaTioAppendCoordinateEntryV2 {
+    /// Structure version.
+    pub version: u32,
+    /// Structure size in bytes.
+    pub struct_size: usize,
+    /// Axis index.
+    pub axis: usize,
+    /// Borrowed descriptor identifier.
+    pub descriptor_id: *const c_char,
+    /// Borrowed coordinate name.
+    pub name: *const c_char,
+    /// Coordinate value domain.
+    pub value_domain: ArcadiaTioCoordinateValueDomainV2,
+    /// Numeric dtype for inline numeric values.
+    pub numeric_dtype: ArcadiaTioCoordinateDType,
+    /// Numeric encoding for inline numeric values.
+    pub numeric_encoding: ArcadiaTioCoordinateEncoding,
+    /// Dictionary code dtype for dictionary-coded values.
+    pub code_dtype: ArcadiaTioCoordinateCodeDTypeV2,
+    /// Borrowed append-coordinate value buffer.
+    pub values: *const c_void,
+    /// Number of coordinate values.
+    pub count: usize,
+    /// Element size in bytes.
+    pub element_size: usize,
+    /// Fixed text width in bytes.
+    pub fixed_text_width: usize,
+    /// Reserved words; callers set to zero.
+    pub reserved: [u64; 4],
+}
+
+/// Coordinate v2 append-axis coordinate batch.
+#[repr(C)]
+#[derive(Debug, Copy, Clone, Default)]
+pub struct ArcadiaTioAppendCoordinateBatchV2 {
+    /// Structure version.
+    pub version: u32,
+    /// Structure size in bytes.
+    pub struct_size: usize,
+    /// Borrowed append-coordinate entries.
+    pub entries: *const ArcadiaTioAppendCoordinateEntryV2,
+    /// Number of append-coordinate entries.
+    pub entries_len: usize,
+    /// Reserved words; callers set to zero.
+    pub reserved: [u64; 4],
+}
+
+/// Coordinate v2 operation options.
+#[repr(C)]
+#[derive(Debug, Copy, Clone, Default)]
+pub struct ArcadiaTioCoordinateV2Options {
+    /// Structure version.
+    pub version: u32,
+    /// Structure size in bytes.
+    pub struct_size: usize,
+    /// Nonzero allows authoritative scans when indexes are absent or unusable.
+    pub allow_authoritative_scan: u8,
+    /// Nonzero includes dictionary entries in dictionary reads.
+    pub include_dictionary_entries: u8,
+    /// Nonzero includes optional index summaries in metadata reads.
+    pub include_index_summaries: u8,
+    /// Nonzero allows external resolution where supported.
+    pub allow_external_resolution: u8,
+    /// Reserved bytes; callers set to zero.
+    pub reserved_u8: [u8; 4],
+    /// Reserved words; callers set to zero.
+    pub reserved: [u64; 4],
+}
+
+/// Borrowed Coordinate v2 input descriptor for create APIs.
+#[repr(C)]
+#[derive(Debug, Copy, Clone, Default)]
+pub struct ArcadiaTioAxisCoordinateInputV2 {
+    /// Structure version.
+    pub version: u32,
+    /// Structure size in bytes.
+    pub struct_size: usize,
+    /// Axis index.
+    pub axis: usize,
+    /// Borrowed descriptor identifier.
+    pub descriptor_id: *const c_char,
+    /// Borrowed coordinate name.
+    pub name: *const c_char,
+    /// Coordinate semantic kind.
+    pub kind: ArcadiaTioCoordinateKind,
+    /// Coordinate value domain.
+    pub value_domain: ArcadiaTioCoordinateValueDomainV2,
+    /// Numeric dtype for inline numeric values.
+    pub numeric_dtype: ArcadiaTioCoordinateDType,
+    /// Numeric encoding for inline numeric values.
+    pub numeric_encoding: ArcadiaTioCoordinateEncoding,
+    /// Fixed-text layout for fixed-text domains.
+    pub fixed_text: ArcadiaTioCoordinateFixedTextLayoutV2,
+    /// Dictionary code dtype.
+    pub code_dtype: ArcadiaTioCoordinateCodeDTypeV2,
+    /// Borrowed value buffer.
+    pub values: *const c_void,
+    /// Number of values.
+    pub values_len: usize,
+    /// Borrowed dictionary summary.
+    pub dictionary: *const ArcadiaTioCoordinateDictionarySummaryV2,
+    /// Borrowed dictionary entries.
+    pub dictionary_entries: *const ArcadiaTioCoordinateDictionaryEntryV2,
+    /// Number of dictionary entries.
+    pub dictionary_entries_len: usize,
+    /// Borrowed external binding summary.
+    pub external_binding: *const ArcadiaTioCoordinateExternalBindingV2,
+    /// Sortedness declaration.
+    pub sorted: ArcadiaTioCoordinateSortedness,
+    /// Monotonicity declaration.
+    pub monotonicity: ArcadiaTioCoordinateMonotonicity,
+    /// Uniqueness declaration.
+    pub uniqueness: ArcadiaTioCoordinateUniqueness,
+    /// Nonzero when coordinate is required.
+    pub required: u8,
+    /// Reserved bytes; callers set to zero.
+    pub reserved_u8: [u8; 7],
+    /// Reserved words; callers set to zero.
+    pub reserved: [u64; 4],
+}
+
+/// Owned Coordinate v2 metadata returned by metadata APIs.
+#[repr(C)]
+#[derive(Debug, Copy, Clone, Default)]
+pub struct ArcadiaTioAxisCoordinateMetaV2 {
+    /// Structure version.
+    pub version: u32,
+    /// Structure size in bytes.
+    pub struct_size: usize,
+    /// Axis index.
+    pub axis: usize,
+    /// Native-owned axis name snapshot pointer.
+    pub axis_name_snapshot: *mut c_char,
+    /// Native-owned descriptor identifier.
+    pub descriptor_id: *mut c_char,
+    /// Descriptor revision bound to the selected root.
+    pub descriptor_revision: u64,
+    /// Native-owned coordinate name pointer.
+    pub name: *mut c_char,
+    /// Coordinate semantic kind.
+    pub kind: ArcadiaTioCoordinateKind,
+    /// Coordinate value domain.
+    pub value_domain: ArcadiaTioCoordinateValueDomainV2,
+    /// Numeric dtype for inline numeric values.
+    pub numeric_dtype: ArcadiaTioCoordinateDType,
+    /// Numeric encoding for inline numeric values.
+    pub numeric_encoding: ArcadiaTioCoordinateEncoding,
+    /// Fixed-text layout for fixed-text domains.
+    pub fixed_text: ArcadiaTioCoordinateFixedTextLayoutV2,
+    /// Dictionary code dtype.
+    pub code_dtype: ArcadiaTioCoordinateCodeDTypeV2,
+    /// Coordinate length.
+    pub length: u64,
+    /// Sortedness declaration.
+    pub sorted: ArcadiaTioCoordinateSortedness,
+    /// Monotonicity declaration.
+    pub monotonicity: ArcadiaTioCoordinateMonotonicity,
+    /// Uniqueness declaration.
+    pub uniqueness: ArcadiaTioCoordinateUniqueness,
+    /// Nonzero when coordinate is required.
+    pub required: u8,
+    /// Reserved bytes; callers set to zero.
+    pub reserved_u8: [u8; 7],
+    /// Coordinate availability.
+    pub availability: ArcadiaTioCoordinateAvailabilityV2,
+    /// Coordinate status category.
+    pub status_category: ArcadiaTioCoordinateStatusCategoryV2,
+    /// Native-owned status reason.
+    pub reason: *mut c_char,
+    /// Dictionary summary.
+    pub dictionary: ArcadiaTioCoordinateDictionarySummaryV2,
+    /// External binding summary.
+    pub external_binding: ArcadiaTioCoordinateExternalBindingV2,
+    /// Native-owned optional index summaries.
+    pub index_summaries: *mut ArcadiaTioCoordinateIndexSummaryV2,
+    /// Number of optional index summaries.
+    pub index_summaries_len: usize,
+    /// Reserved words; callers set to zero.
+    pub reserved: [u64; 4],
+}
+
 // Safety: these declarations are raw FFI bindings to `arcadia_tio_capi`. Callers must
 // uphold the pointer, ownership, lifetime, shape, dtype, and thread-local-error contracts
 // documented by the C headers. Functions returning owned buffers require the matching
@@ -1683,6 +2267,99 @@ unsafe extern "C" {
         coordinates: *const ArcadiaTioAxisCoordinateInput,
         coordinates_len: usize,
     ) -> *mut ArcadiaTioHandle;
+    /// Creates a RegularChunked V4 TensorFile with Coordinate v2 descriptors.
+    pub fn arcadia_tio_create_with_policy_with_coordinates_v2(
+        path: *const c_char,
+        dtype: ArcadiaTioDType,
+        dim_kinds: *const ArcadiaTioAxisKind,
+        dim_lens: *const u32,
+        rank: usize,
+        append_dim: usize,
+        dim_names: *const *const c_char,
+        dim_names_len: usize,
+        symbols: *const *const c_char,
+        symbols_len: usize,
+        channels: *const *const c_char,
+        channels_len: usize,
+        user_kv_keys: *const *const c_char,
+        user_kv_values: *const *const c_char,
+        user_kv_len: usize,
+        chunk_axes: *const usize,
+        chunk_axes_len: usize,
+        storage_profile: ArcadiaTioStorageProfile,
+        typical_query_sizes: *const u32,
+        typical_query_len: usize,
+        coordinates: *const ArcadiaTioAxisCoordinateInputV2,
+        coordinates_len: usize,
+        options: *const ArcadiaTioCoordinateV2Options,
+    ) -> *mut ArcadiaTioHandle;
+    /// Creates a V4 TensorFile with inferred layout selection and Coordinate v2 descriptors.
+    pub fn arcadia_tio_create_inferred_with_coordinates_v2(
+        path: *const c_char,
+        dtype: ArcadiaTioDType,
+        dim_kinds: *const ArcadiaTioAxisKind,
+        dim_lens: *const u32,
+        rank: usize,
+        append_dim: usize,
+        dim_names: *const *const c_char,
+        dim_names_len: usize,
+        symbols: *const *const c_char,
+        symbols_len: usize,
+        channels: *const *const c_char,
+        channels_len: usize,
+        user_kv_keys: *const *const c_char,
+        user_kv_values: *const *const c_char,
+        user_kv_len: usize,
+        storage_access: ArcadiaTioStorageAccessKind,
+        open_pattern: ArcadiaTioOpenPattern,
+        file_population: ArcadiaTioFilePopulation,
+        metadata_stability: ArcadiaTioMetadataStability,
+        coordinates: *const ArcadiaTioAxisCoordinateInputV2,
+        coordinates_len: usize,
+        options: *const ArcadiaTioCoordinateV2Options,
+    ) -> *mut ArcadiaTioHandle;
+    /// Creates a random-access V4 TensorFile with Coordinate v2 descriptors.
+    pub fn arcadia_tio_create_random_access_with_coordinates_v2(
+        path: *const c_char,
+        dtype: ArcadiaTioDType,
+        dim_kinds: *const ArcadiaTioAxisKind,
+        dim_lens: *const u32,
+        rank: usize,
+        append_dim: usize,
+        dim_names: *const *const c_char,
+        dim_names_len: usize,
+        symbols: *const *const c_char,
+        symbols_len: usize,
+        channels: *const *const c_char,
+        channels_len: usize,
+        user_kv_keys: *const *const c_char,
+        user_kv_values: *const *const c_char,
+        user_kv_len: usize,
+        coordinates: *const ArcadiaTioAxisCoordinateInputV2,
+        coordinates_len: usize,
+        options: *const ArcadiaTioCoordinateV2Options,
+    ) -> *mut ArcadiaTioHandle;
+    /// Creates a streaming V4 TensorFile with Coordinate v2 descriptors.
+    pub fn arcadia_tio_create_streaming_with_coordinates_v2(
+        path: *const c_char,
+        dtype: ArcadiaTioDType,
+        dim_kinds: *const ArcadiaTioAxisKind,
+        dim_lens: *const u32,
+        rank: usize,
+        append_dim: usize,
+        dim_names: *const *const c_char,
+        dim_names_len: usize,
+        symbols: *const *const c_char,
+        symbols_len: usize,
+        channels: *const *const c_char,
+        channels_len: usize,
+        user_kv_keys: *const *const c_char,
+        user_kv_values: *const *const c_char,
+        user_kv_len: usize,
+        coordinates: *const ArcadiaTioAxisCoordinateInputV2,
+        coordinates_len: usize,
+        options: *const ArcadiaTioCoordinateV2Options,
+    ) -> *mut ArcadiaTioHandle;
     /// Opens an existing TensorFile.
     pub fn arcadia_tio_open(path: *const c_char) -> *mut ArcadiaTioHandle;
     /// Closes a handle returned by create/open functions.
@@ -1745,6 +2422,67 @@ unsafe extern "C" {
         out_start: *mut u32,
         out_end: *mut u32,
     ) -> c_int;
+
+    /// Reads Coordinate v2 descriptors from an open handle.
+    pub fn arcadia_tio_coordinate_meta_v2(
+        handle: *mut ArcadiaTioHandle,
+        out_meta: *mut *mut ArcadiaTioAxisCoordinateMetaV2,
+        out_len: *mut usize,
+    ) -> c_int;
+    /// Loads Coordinate v2 descriptors without opening a handle.
+    pub fn arcadia_tio_load_coordinate_meta_v2(
+        path: *const c_char,
+        out_meta: *mut *mut ArcadiaTioAxisCoordinateMetaV2,
+        out_len: *mut usize,
+    ) -> c_int;
+    /// Frees Coordinate v2 metadata arrays returned by metadata APIs.
+    pub fn arcadia_tio_axis_coordinate_meta_v2_free(
+        meta: *mut ArcadiaTioAxisCoordinateMetaV2,
+        len: usize,
+    );
+    /// Reads Coordinate v2 values for one axis into an owned value carrier.
+    pub fn arcadia_tio_read_axis_coordinates_v2(
+        handle: *mut ArcadiaTioHandle,
+        axis: usize,
+        options: *const ArcadiaTioCoordinateV2Options,
+        out_values: *mut ArcadiaTioCoordinateValueSliceV2,
+    ) -> c_int;
+    /// Frees an owned Coordinate v2 value slice.
+    pub fn arcadia_tio_coordinate_value_slice_v2_free(
+        values: *mut ArcadiaTioCoordinateValueSliceV2,
+    );
+    /// Reads Coordinate v2 dictionary metadata and entries.
+    pub fn arcadia_tio_coordinate_dictionary_v2(
+        handle: *mut ArcadiaTioHandle,
+        axis: usize,
+        options: *const ArcadiaTioCoordinateV2Options,
+        out_dictionary: *mut ArcadiaTioCoordinateDictionaryV2,
+    ) -> c_int;
+    /// Frees an owned Coordinate v2 dictionary result.
+    pub fn arcadia_tio_coordinate_dictionary_v2_free(
+        dictionary: *mut ArcadiaTioCoordinateDictionaryV2,
+    );
+    /// Performs an exact Coordinate v2 lookup.
+    pub fn arcadia_tio_coordinate_lookup_v2(
+        handle: *mut ArcadiaTioHandle,
+        axis: usize,
+        key: *const ArcadiaTioCoordinateLookupKeyV2,
+        options: *const ArcadiaTioCoordinateV2Options,
+        out_result: *mut ArcadiaTioCoordinateLookupResultV2,
+    ) -> c_int;
+    /// Performs a half-open range Coordinate v2 lookup.
+    pub fn arcadia_tio_coordinate_lookup_range_v2(
+        handle: *mut ArcadiaTioHandle,
+        axis: usize,
+        lower: *const ArcadiaTioCoordinateLookupKeyV2,
+        upper: *const ArcadiaTioCoordinateLookupKeyV2,
+        options: *const ArcadiaTioCoordinateV2Options,
+        out_result: *mut ArcadiaTioCoordinateLookupResultV2,
+    ) -> c_int;
+    /// Frees an owned Coordinate v2 lookup result.
+    pub fn arcadia_tio_coordinate_lookup_result_v2_free(
+        result: *mut ArcadiaTioCoordinateLookupResultV2,
+    );
 
     /// Reads the full tensor into a native-owned raw tensor.
     pub fn arcadia_tio_read_all(
@@ -1870,6 +2608,46 @@ unsafe extern "C" {
         shape: *const u64,
         rank: usize,
         options: *const ArcadiaTioAppendWithUniverseOptions,
+        out_start_entry: *mut u32,
+        out_end_entry: *mut u32,
+    ) -> c_int;
+    /// Appends f32 payload data with Coordinate v2 append-axis batches.
+    pub fn arcadia_tio_append_f32_with_coordinates_v2(
+        handle: *mut ArcadiaTioHandle,
+        data: *const c_float,
+        shape: *const u64,
+        rank: usize,
+        coordinates: *const ArcadiaTioAppendCoordinateBatchV2,
+        out_start_entry: *mut u32,
+        out_end_entry: *mut u32,
+    ) -> c_int;
+    /// Appends f64 payload data with Coordinate v2 append-axis batches.
+    pub fn arcadia_tio_append_f64_with_coordinates_v2(
+        handle: *mut ArcadiaTioHandle,
+        data: *const c_double,
+        shape: *const u64,
+        rank: usize,
+        coordinates: *const ArcadiaTioAppendCoordinateBatchV2,
+        out_start_entry: *mut u32,
+        out_end_entry: *mut u32,
+    ) -> c_int;
+    /// Appends i32 payload data with Coordinate v2 append-axis batches.
+    pub fn arcadia_tio_append_i32_with_coordinates_v2(
+        handle: *mut ArcadiaTioHandle,
+        data: *const i32,
+        shape: *const u64,
+        rank: usize,
+        coordinates: *const ArcadiaTioAppendCoordinateBatchV2,
+        out_start_entry: *mut u32,
+        out_end_entry: *mut u32,
+    ) -> c_int;
+    /// Appends i64 payload data with Coordinate v2 append-axis batches.
+    pub fn arcadia_tio_append_i64_with_coordinates_v2(
+        handle: *mut ArcadiaTioHandle,
+        data: *const i64,
+        shape: *const u64,
+        rank: usize,
+        coordinates: *const ArcadiaTioAppendCoordinateBatchV2,
         out_start_entry: *mut u32,
         out_end_entry: *mut u32,
     ) -> c_int;

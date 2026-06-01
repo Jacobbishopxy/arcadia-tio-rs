@@ -5,6 +5,7 @@ use std::ffi::{CStr, CString};
 use std::fmt;
 use std::marker::PhantomData;
 use std::mem::{self, MaybeUninit};
+use std::ops::Range;
 use std::os::raw::{c_char, c_void};
 use std::path::Path;
 use std::ptr::{self, NonNull};
@@ -3053,6 +3054,2959 @@ pub struct CoordinateMeta {
     pub validation_status: CoordinateValidationStatus,
 }
 
+/// Coordinate v2 value-domain selector for the public Rust source-only contract.
+///
+/// This first public Rust slice mirrors the raw C ABI domains that already exist in
+/// `arcadia-tio-capi`. It does not add variable-length strings, locale/collation,
+/// calendar interpretation, arbitrary external dereference, or authoritative index semantics.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CoordinateValueDomainV2 {
+    /// Inline numeric i32/i64 coordinate values.
+    InlineNumeric,
+    /// Fixed-width byte/text coordinate values.
+    FixedText,
+    /// Dictionary-code coordinate values bound to a dictionary revision.
+    DictionaryCode,
+    /// Append-axis sequence whose values arrive with payload appends.
+    AppendSequence,
+    /// External reference metadata only; this wrapper does not dereference it.
+    ExternalReference,
+}
+
+impl CoordinateValueDomainV2 {
+    fn to_raw(self) -> sys::ArcadiaTioCoordinateValueDomainV2 {
+        match self {
+            Self::InlineNumeric => sys::ARCADIA_TIO_COORDINATE_VALUE_DOMAIN_V2_INLINE_NUMERIC,
+            Self::FixedText => sys::ARCADIA_TIO_COORDINATE_VALUE_DOMAIN_V2_FIXED_TEXT,
+            Self::DictionaryCode => sys::ARCADIA_TIO_COORDINATE_VALUE_DOMAIN_V2_DICTIONARY_CODE,
+            Self::AppendSequence => sys::ARCADIA_TIO_COORDINATE_VALUE_DOMAIN_V2_APPEND_SEQUENCE,
+            Self::ExternalReference => {
+                sys::ARCADIA_TIO_COORDINATE_VALUE_DOMAIN_V2_EXTERNAL_REFERENCE
+            }
+        }
+    }
+
+    fn from_raw(value: sys::ArcadiaTioCoordinateValueDomainV2) -> Result<Self> {
+        match value {
+            sys::ARCADIA_TIO_COORDINATE_VALUE_DOMAIN_V2_INLINE_NUMERIC => Ok(Self::InlineNumeric),
+            sys::ARCADIA_TIO_COORDINATE_VALUE_DOMAIN_V2_FIXED_TEXT => Ok(Self::FixedText),
+            sys::ARCADIA_TIO_COORDINATE_VALUE_DOMAIN_V2_DICTIONARY_CODE => Ok(Self::DictionaryCode),
+            sys::ARCADIA_TIO_COORDINATE_VALUE_DOMAIN_V2_APPEND_SEQUENCE => Ok(Self::AppendSequence),
+            sys::ARCADIA_TIO_COORDINATE_VALUE_DOMAIN_V2_EXTERNAL_REFERENCE => {
+                Ok(Self::ExternalReference)
+            }
+            other => Err(TioError::conversion(format!(
+                "unknown Coordinate v2 value-domain value {other}"
+            ))),
+        }
+    }
+}
+
+/// Coordinate v2 lookup-key domain selector.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CoordinateKeyDomainV2 {
+    /// Signed 32-bit integer key.
+    I32,
+    /// Signed 64-bit integer key.
+    I64,
+    /// Fixed-width byte/text key.
+    FixedText,
+    /// Dictionary code key.
+    DictionaryCode,
+    /// Dictionary stable-id key.
+    StableId,
+    /// Dictionary display-label key.
+    DisplayLabel,
+    /// Dictionary alias key.
+    Alias,
+    /// Raw integer time key; broad calendar interpretation is deferred.
+    RawTime,
+}
+
+impl CoordinateKeyDomainV2 {
+    fn to_raw(self) -> sys::ArcadiaTioCoordinateKeyDomainV2 {
+        match self {
+            Self::I32 => sys::ARCADIA_TIO_COORDINATE_KEY_DOMAIN_V2_I32,
+            Self::I64 => sys::ARCADIA_TIO_COORDINATE_KEY_DOMAIN_V2_I64,
+            Self::FixedText => sys::ARCADIA_TIO_COORDINATE_KEY_DOMAIN_V2_FIXED_TEXT,
+            Self::DictionaryCode => sys::ARCADIA_TIO_COORDINATE_KEY_DOMAIN_V2_DICTIONARY_CODE,
+            Self::StableId => sys::ARCADIA_TIO_COORDINATE_KEY_DOMAIN_V2_STABLE_ID,
+            Self::DisplayLabel => sys::ARCADIA_TIO_COORDINATE_KEY_DOMAIN_V2_DISPLAY_LABEL,
+            Self::Alias => sys::ARCADIA_TIO_COORDINATE_KEY_DOMAIN_V2_ALIAS,
+            Self::RawTime => sys::ARCADIA_TIO_COORDINATE_KEY_DOMAIN_V2_RAW_TIME,
+        }
+    }
+
+    fn from_raw(value: sys::ArcadiaTioCoordinateKeyDomainV2) -> Result<Self> {
+        match value {
+            sys::ARCADIA_TIO_COORDINATE_KEY_DOMAIN_V2_I32 => Ok(Self::I32),
+            sys::ARCADIA_TIO_COORDINATE_KEY_DOMAIN_V2_I64 => Ok(Self::I64),
+            sys::ARCADIA_TIO_COORDINATE_KEY_DOMAIN_V2_FIXED_TEXT => Ok(Self::FixedText),
+            sys::ARCADIA_TIO_COORDINATE_KEY_DOMAIN_V2_DICTIONARY_CODE => Ok(Self::DictionaryCode),
+            sys::ARCADIA_TIO_COORDINATE_KEY_DOMAIN_V2_STABLE_ID => Ok(Self::StableId),
+            sys::ARCADIA_TIO_COORDINATE_KEY_DOMAIN_V2_DISPLAY_LABEL => Ok(Self::DisplayLabel),
+            sys::ARCADIA_TIO_COORDINATE_KEY_DOMAIN_V2_ALIAS => Ok(Self::Alias),
+            sys::ARCADIA_TIO_COORDINATE_KEY_DOMAIN_V2_RAW_TIME => Ok(Self::RawTime),
+            other => Err(TioError::conversion(format!(
+                "unknown Coordinate v2 key-domain value {other}"
+            ))),
+        }
+    }
+}
+
+/// Coordinate v2 dictionary-code integer dtype.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CoordinateCodeDTypeV2 {
+    /// Unsigned 8-bit dictionary code.
+    U8,
+    /// Unsigned 16-bit dictionary code.
+    U16,
+    /// Unsigned 32-bit dictionary code.
+    U32,
+    /// Unsigned 64-bit dictionary code.
+    U64,
+}
+
+impl CoordinateCodeDTypeV2 {
+    fn to_raw(self) -> sys::ArcadiaTioCoordinateCodeDTypeV2 {
+        match self {
+            Self::U8 => sys::ARCADIA_TIO_COORDINATE_CODE_DTYPE_V2_U8,
+            Self::U16 => sys::ARCADIA_TIO_COORDINATE_CODE_DTYPE_V2_U16,
+            Self::U32 => sys::ARCADIA_TIO_COORDINATE_CODE_DTYPE_V2_U32,
+            Self::U64 => sys::ARCADIA_TIO_COORDINATE_CODE_DTYPE_V2_U64,
+        }
+    }
+
+    fn from_raw(value: sys::ArcadiaTioCoordinateCodeDTypeV2) -> Result<Self> {
+        match value {
+            sys::ARCADIA_TIO_COORDINATE_CODE_DTYPE_V2_U8 => Ok(Self::U8),
+            sys::ARCADIA_TIO_COORDINATE_CODE_DTYPE_V2_U16 => Ok(Self::U16),
+            sys::ARCADIA_TIO_COORDINATE_CODE_DTYPE_V2_U32 => Ok(Self::U32),
+            sys::ARCADIA_TIO_COORDINATE_CODE_DTYPE_V2_U64 => Ok(Self::U64),
+            other => Err(TioError::conversion(format!(
+                "unknown Coordinate v2 code-dtype value {other}"
+            ))),
+        }
+    }
+
+    fn size_bytes(self) -> usize {
+        match self {
+            Self::U8 => 1,
+            Self::U16 => 2,
+            Self::U32 => 4,
+            Self::U64 => 8,
+        }
+    }
+}
+
+/// Coordinate v2 fixed-text byte encoding.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CoordinateFixedTextEncodingV2 {
+    /// ASCII bytes only.
+    Ascii,
+}
+
+impl CoordinateFixedTextEncodingV2 {
+    fn to_raw(self) -> sys::ArcadiaTioCoordinateFixedTextEncodingV2 {
+        match self {
+            Self::Ascii => sys::ARCADIA_TIO_COORDINATE_FIXED_TEXT_ENCODING_V2_ASCII,
+        }
+    }
+
+    fn from_raw(value: sys::ArcadiaTioCoordinateFixedTextEncodingV2) -> Result<Self> {
+        match value {
+            sys::ARCADIA_TIO_COORDINATE_FIXED_TEXT_ENCODING_V2_ASCII => Ok(Self::Ascii),
+            other => Err(TioError::conversion(format!(
+                "unknown Coordinate v2 fixed-text encoding value {other}"
+            ))),
+        }
+    }
+}
+
+/// Coordinate v2 fixed-text padding policy.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CoordinateFixedTextPaddingV2 {
+    /// Right-pad with spaces.
+    RightSpace,
+}
+
+impl CoordinateFixedTextPaddingV2 {
+    fn to_raw(self) -> sys::ArcadiaTioCoordinateFixedTextPaddingV2 {
+        match self {
+            Self::RightSpace => sys::ARCADIA_TIO_COORDINATE_FIXED_TEXT_PADDING_V2_RIGHT_SPACE,
+        }
+    }
+
+    fn from_raw(value: sys::ArcadiaTioCoordinateFixedTextPaddingV2) -> Result<Self> {
+        match value {
+            sys::ARCADIA_TIO_COORDINATE_FIXED_TEXT_PADDING_V2_RIGHT_SPACE => Ok(Self::RightSpace),
+            other => Err(TioError::conversion(format!(
+                "unknown Coordinate v2 fixed-text padding value {other}"
+            ))),
+        }
+    }
+}
+
+/// Coordinate v2 external source kind.
+///
+/// These values are metadata only in this public Rust foundation. The wrapper does not resolve,
+/// dereference, fetch, or authorize arbitrary paths, URIs, or application registries.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CoordinateSourceKindV2 {
+    /// Same-file object reference.
+    SameFileObject,
+    /// Relative path reference metadata.
+    RelativePath,
+    /// Absolute path reference metadata.
+    AbsolutePath,
+    /// URI reference metadata.
+    Uri,
+    /// Application-registry reference metadata.
+    ApplicationRegistry,
+}
+
+impl CoordinateSourceKindV2 {
+    fn to_raw(self) -> sys::ArcadiaTioCoordinateSourceKindV2 {
+        match self {
+            Self::SameFileObject => sys::ARCADIA_TIO_COORDINATE_SOURCE_V2_SAME_FILE_OBJECT,
+            Self::RelativePath => sys::ARCADIA_TIO_COORDINATE_SOURCE_V2_RELATIVE_PATH,
+            Self::AbsolutePath => sys::ARCADIA_TIO_COORDINATE_SOURCE_V2_ABSOLUTE_PATH,
+            Self::Uri => sys::ARCADIA_TIO_COORDINATE_SOURCE_V2_URI,
+            Self::ApplicationRegistry => sys::ARCADIA_TIO_COORDINATE_SOURCE_V2_APPLICATION_REGISTRY,
+        }
+    }
+
+    fn from_raw(value: sys::ArcadiaTioCoordinateSourceKindV2) -> Result<Self> {
+        match value {
+            sys::ARCADIA_TIO_COORDINATE_SOURCE_V2_SAME_FILE_OBJECT => Ok(Self::SameFileObject),
+            sys::ARCADIA_TIO_COORDINATE_SOURCE_V2_RELATIVE_PATH => Ok(Self::RelativePath),
+            sys::ARCADIA_TIO_COORDINATE_SOURCE_V2_ABSOLUTE_PATH => Ok(Self::AbsolutePath),
+            sys::ARCADIA_TIO_COORDINATE_SOURCE_V2_URI => Ok(Self::Uri),
+            sys::ARCADIA_TIO_COORDINATE_SOURCE_V2_APPLICATION_REGISTRY => {
+                Ok(Self::ApplicationRegistry)
+            }
+            other => Err(TioError::conversion(format!(
+                "unknown Coordinate v2 source-kind value {other}"
+            ))),
+        }
+    }
+}
+
+/// Coordinate v2 availability status.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CoordinateAvailabilityV2 {
+    /// Coordinate values are available.
+    Available,
+    /// Coordinate is absent.
+    Absent,
+    /// Coordinate availability is unknown.
+    Unknown,
+    /// Coordinate binding is invalid.
+    Invalid,
+    /// Coordinate is unavailable.
+    Unavailable,
+    /// Coordinate domain or operation is unsupported.
+    Unsupported,
+}
+
+impl CoordinateAvailabilityV2 {
+    fn to_raw(self) -> sys::ArcadiaTioCoordinateAvailabilityV2 {
+        match self {
+            Self::Available => sys::ARCADIA_TIO_COORDINATE_AVAILABILITY_V2_AVAILABLE,
+            Self::Absent => sys::ARCADIA_TIO_COORDINATE_AVAILABILITY_V2_ABSENT,
+            Self::Unknown => sys::ARCADIA_TIO_COORDINATE_AVAILABILITY_V2_UNKNOWN,
+            Self::Invalid => sys::ARCADIA_TIO_COORDINATE_AVAILABILITY_V2_INVALID,
+            Self::Unavailable => sys::ARCADIA_TIO_COORDINATE_AVAILABILITY_V2_UNAVAILABLE,
+            Self::Unsupported => sys::ARCADIA_TIO_COORDINATE_AVAILABILITY_V2_UNSUPPORTED,
+        }
+    }
+
+    fn from_raw(value: sys::ArcadiaTioCoordinateAvailabilityV2) -> Result<Self> {
+        match value {
+            sys::ARCADIA_TIO_COORDINATE_AVAILABILITY_V2_AVAILABLE => Ok(Self::Available),
+            sys::ARCADIA_TIO_COORDINATE_AVAILABILITY_V2_ABSENT => Ok(Self::Absent),
+            sys::ARCADIA_TIO_COORDINATE_AVAILABILITY_V2_UNKNOWN => Ok(Self::Unknown),
+            sys::ARCADIA_TIO_COORDINATE_AVAILABILITY_V2_INVALID => Ok(Self::Invalid),
+            sys::ARCADIA_TIO_COORDINATE_AVAILABILITY_V2_UNAVAILABLE => Ok(Self::Unavailable),
+            sys::ARCADIA_TIO_COORDINATE_AVAILABILITY_V2_UNSUPPORTED => Ok(Self::Unsupported),
+            other => Err(TioError::conversion(format!(
+                "unknown Coordinate v2 availability value {other}"
+            ))),
+        }
+    }
+}
+
+/// Coordinate v2 status category.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CoordinateStatusCategoryV2 {
+    /// Operation succeeded.
+    Ok,
+    /// Invalid argument.
+    InvalidArgument,
+    /// Unsupported coordinate domain.
+    UnsupportedDomain,
+    /// Unknown required version.
+    UnknownRequiredVersion,
+    /// Required coordinate is unavailable.
+    RequiredUnavailable,
+    /// External binding is stale.
+    StaleExternalBinding,
+    /// Lookup requested uniqueness but found duplicates.
+    DuplicateUniqueLookup,
+    /// Lookup key domain does not match coordinate domain.
+    LookupDomainMismatch,
+    /// Optional index is invalid.
+    InvalidIndex,
+    /// Optional index is stale.
+    StaleIndex,
+    /// Optional index kind is unsupported.
+    UnsupportedIndex,
+}
+
+impl CoordinateStatusCategoryV2 {
+    fn to_raw(self) -> sys::ArcadiaTioCoordinateStatusCategoryV2 {
+        match self {
+            Self::Ok => sys::ARCADIA_TIO_COORDINATE_STATUS_V2_OK,
+            Self::InvalidArgument => sys::ARCADIA_TIO_COORDINATE_STATUS_V2_INVALID_ARGUMENT,
+            Self::UnsupportedDomain => sys::ARCADIA_TIO_COORDINATE_STATUS_V2_UNSUPPORTED_DOMAIN,
+            Self::UnknownRequiredVersion => {
+                sys::ARCADIA_TIO_COORDINATE_STATUS_V2_UNKNOWN_REQUIRED_VERSION
+            }
+            Self::RequiredUnavailable => sys::ARCADIA_TIO_COORDINATE_STATUS_V2_REQUIRED_UNAVAILABLE,
+            Self::StaleExternalBinding => {
+                sys::ARCADIA_TIO_COORDINATE_STATUS_V2_STALE_EXTERNAL_BINDING
+            }
+            Self::DuplicateUniqueLookup => {
+                sys::ARCADIA_TIO_COORDINATE_STATUS_V2_DUPLICATE_UNIQUE_LOOKUP
+            }
+            Self::LookupDomainMismatch => {
+                sys::ARCADIA_TIO_COORDINATE_STATUS_V2_LOOKUP_DOMAIN_MISMATCH
+            }
+            Self::InvalidIndex => sys::ARCADIA_TIO_COORDINATE_STATUS_V2_INVALID_INDEX,
+            Self::StaleIndex => sys::ARCADIA_TIO_COORDINATE_STATUS_V2_STALE_INDEX,
+            Self::UnsupportedIndex => sys::ARCADIA_TIO_COORDINATE_STATUS_V2_UNSUPPORTED_INDEX,
+        }
+    }
+
+    fn from_raw(value: sys::ArcadiaTioCoordinateStatusCategoryV2) -> Result<Self> {
+        match value {
+            sys::ARCADIA_TIO_COORDINATE_STATUS_V2_OK => Ok(Self::Ok),
+            sys::ARCADIA_TIO_COORDINATE_STATUS_V2_INVALID_ARGUMENT => Ok(Self::InvalidArgument),
+            sys::ARCADIA_TIO_COORDINATE_STATUS_V2_UNSUPPORTED_DOMAIN => Ok(Self::UnsupportedDomain),
+            sys::ARCADIA_TIO_COORDINATE_STATUS_V2_UNKNOWN_REQUIRED_VERSION => {
+                Ok(Self::UnknownRequiredVersion)
+            }
+            sys::ARCADIA_TIO_COORDINATE_STATUS_V2_REQUIRED_UNAVAILABLE => {
+                Ok(Self::RequiredUnavailable)
+            }
+            sys::ARCADIA_TIO_COORDINATE_STATUS_V2_STALE_EXTERNAL_BINDING => {
+                Ok(Self::StaleExternalBinding)
+            }
+            sys::ARCADIA_TIO_COORDINATE_STATUS_V2_DUPLICATE_UNIQUE_LOOKUP => {
+                Ok(Self::DuplicateUniqueLookup)
+            }
+            sys::ARCADIA_TIO_COORDINATE_STATUS_V2_LOOKUP_DOMAIN_MISMATCH => {
+                Ok(Self::LookupDomainMismatch)
+            }
+            sys::ARCADIA_TIO_COORDINATE_STATUS_V2_INVALID_INDEX => Ok(Self::InvalidIndex),
+            sys::ARCADIA_TIO_COORDINATE_STATUS_V2_STALE_INDEX => Ok(Self::StaleIndex),
+            sys::ARCADIA_TIO_COORDINATE_STATUS_V2_UNSUPPORTED_INDEX => Ok(Self::UnsupportedIndex),
+            other => Err(TioError::conversion(format!(
+                "unknown Coordinate v2 status-category value {other}"
+            ))),
+        }
+    }
+}
+
+/// Coordinate v2 optional index kind.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CoordinateIndexKindV2 {
+    /// Exact lookup index.
+    Exact,
+    /// Range lookup index.
+    Range,
+    /// Dictionary-key lookup index.
+    DictionaryKey,
+}
+
+impl CoordinateIndexKindV2 {
+    fn from_raw(value: sys::ArcadiaTioCoordinateIndexKindV2) -> Result<Self> {
+        match value {
+            sys::ARCADIA_TIO_COORDINATE_INDEX_KIND_V2_EXACT => Ok(Self::Exact),
+            sys::ARCADIA_TIO_COORDINATE_INDEX_KIND_V2_RANGE => Ok(Self::Range),
+            sys::ARCADIA_TIO_COORDINATE_INDEX_KIND_V2_DICTIONARY_KEY => Ok(Self::DictionaryKey),
+            other => Err(TioError::conversion(format!(
+                "unknown Coordinate v2 index-kind value {other}"
+            ))),
+        }
+    }
+}
+
+/// Coordinate v2 optional-index validation status.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CoordinateIndexValidationStatusV2 {
+    /// Index is validated for the selected root.
+    Validated,
+    /// Index is missing.
+    Missing,
+    /// Index is stale.
+    Stale,
+    /// Index is invalid.
+    Invalid,
+    /// Index is unsupported.
+    Unsupported,
+}
+
+impl CoordinateIndexValidationStatusV2 {
+    fn from_raw(value: sys::ArcadiaTioCoordinateIndexValidationStatusV2) -> Result<Self> {
+        match value {
+            sys::ARCADIA_TIO_COORDINATE_INDEX_STATUS_V2_VALIDATED => Ok(Self::Validated),
+            sys::ARCADIA_TIO_COORDINATE_INDEX_STATUS_V2_MISSING => Ok(Self::Missing),
+            sys::ARCADIA_TIO_COORDINATE_INDEX_STATUS_V2_STALE => Ok(Self::Stale),
+            sys::ARCADIA_TIO_COORDINATE_INDEX_STATUS_V2_INVALID => Ok(Self::Invalid),
+            sys::ARCADIA_TIO_COORDINATE_INDEX_STATUS_V2_UNSUPPORTED => Ok(Self::Unsupported),
+            other => Err(TioError::conversion(format!(
+                "unknown Coordinate v2 index-validation value {other}"
+            ))),
+        }
+    }
+}
+
+/// Coordinate v2 optional-index fallback policy.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CoordinateIndexFallbackV2 {
+    /// Fall back to authoritative coordinate scan.
+    AuthoritativeScan,
+    /// Rebuild the optional index.
+    Rebuild,
+    /// Reject operations that depend on an index.
+    RejectIndexDependentOperation,
+}
+
+impl CoordinateIndexFallbackV2 {
+    fn from_raw(value: sys::ArcadiaTioCoordinateIndexFallbackV2) -> Result<Self> {
+        match value {
+            sys::ARCADIA_TIO_COORDINATE_INDEX_FALLBACK_V2_AUTHORITATIVE_SCAN => {
+                Ok(Self::AuthoritativeScan)
+            }
+            sys::ARCADIA_TIO_COORDINATE_INDEX_FALLBACK_V2_REBUILD => Ok(Self::Rebuild),
+            sys::ARCADIA_TIO_COORDINATE_INDEX_FALLBACK_V2_REJECT_INDEX_DEPENDENT_OPERATION => {
+                Ok(Self::RejectIndexDependentOperation)
+            }
+            other => Err(TioError::conversion(format!(
+                "unknown Coordinate v2 index-fallback value {other}"
+            ))),
+        }
+    }
+}
+
+/// Coordinate v2 optional-index selected use.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CoordinateIndexUseV2 {
+    /// Use optional index.
+    UseIndex,
+    /// Authoritative coordinate scan is selected.
+    AuthoritativeScan,
+    /// Rebuild is selected.
+    Rebuild,
+    /// Index is unavailable.
+    Unavailable,
+}
+
+impl CoordinateIndexUseV2 {
+    fn from_raw(value: sys::ArcadiaTioCoordinateIndexUseV2) -> Result<Self> {
+        match value {
+            sys::ARCADIA_TIO_COORDINATE_INDEX_USE_V2_USE_INDEX => Ok(Self::UseIndex),
+            sys::ARCADIA_TIO_COORDINATE_INDEX_USE_V2_AUTHORITATIVE_SCAN => {
+                Ok(Self::AuthoritativeScan)
+            }
+            sys::ARCADIA_TIO_COORDINATE_INDEX_USE_V2_REBUILD => Ok(Self::Rebuild),
+            sys::ARCADIA_TIO_COORDINATE_INDEX_USE_V2_UNAVAILABLE => Ok(Self::Unavailable),
+            other => Err(TioError::conversion(format!(
+                "unknown Coordinate v2 index-use value {other}"
+            ))),
+        }
+    }
+}
+
+/// Coordinate v2 lookup-result status.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CoordinateLookupResultStatusV2 {
+    /// Unique position result.
+    Unique,
+    /// Half-open range result.
+    Range,
+    /// Many positions result.
+    Many,
+    /// Missing result.
+    Missing,
+    /// Coordinate is unavailable.
+    Unavailable,
+    /// Duplicate result for a unique lookup.
+    Duplicate,
+    /// Lookup is unsupported.
+    Unsupported,
+    /// Lookup failed.
+    Error,
+}
+
+impl CoordinateLookupResultStatusV2 {
+    fn from_raw(value: sys::ArcadiaTioCoordinateLookupResultStatusV2) -> Result<Self> {
+        match value {
+            sys::ARCADIA_TIO_COORDINATE_LOOKUP_RESULT_V2_UNIQUE => Ok(Self::Unique),
+            sys::ARCADIA_TIO_COORDINATE_LOOKUP_RESULT_V2_RANGE => Ok(Self::Range),
+            sys::ARCADIA_TIO_COORDINATE_LOOKUP_RESULT_V2_MANY => Ok(Self::Many),
+            sys::ARCADIA_TIO_COORDINATE_LOOKUP_RESULT_V2_MISSING => Ok(Self::Missing),
+            sys::ARCADIA_TIO_COORDINATE_LOOKUP_RESULT_V2_UNAVAILABLE => Ok(Self::Unavailable),
+            sys::ARCADIA_TIO_COORDINATE_LOOKUP_RESULT_V2_DUPLICATE => Ok(Self::Duplicate),
+            sys::ARCADIA_TIO_COORDINATE_LOOKUP_RESULT_V2_UNSUPPORTED => Ok(Self::Unsupported),
+            sys::ARCADIA_TIO_COORDINATE_LOOKUP_RESULT_V2_ERROR => Ok(Self::Error),
+            other => Err(TioError::conversion(format!(
+                "unknown Coordinate v2 lookup-result status value {other}"
+            ))),
+        }
+    }
+}
+
+/// Coordinate v2 fixed-text layout.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct CoordinateFixedTextLayoutV2 {
+    /// Fixed text width in bytes.
+    pub width: usize,
+    /// Fixed text byte encoding.
+    pub encoding: CoordinateFixedTextEncodingV2,
+    /// Fixed text padding policy.
+    pub padding: CoordinateFixedTextPaddingV2,
+    /// Reject values wider than `width`.
+    pub reject_over_width: bool,
+    /// Reject non-ASCII bytes.
+    pub reject_non_ascii: bool,
+}
+
+impl Default for CoordinateFixedTextLayoutV2 {
+    fn default() -> Self {
+        Self {
+            width: 0,
+            encoding: CoordinateFixedTextEncodingV2::Ascii,
+            padding: CoordinateFixedTextPaddingV2::RightSpace,
+            reject_over_width: true,
+            reject_non_ascii: true,
+        }
+    }
+}
+
+impl CoordinateFixedTextLayoutV2 {
+    /// Builds the implemented fixed-width ASCII/right-space-padded layout.
+    pub fn ascii_right_space_padded(width: usize) -> Result<Self> {
+        if width == 0 {
+            return Err(TioError::invalid_argument(
+                "Coordinate v2 fixed-text width must be > 0",
+            ));
+        }
+        Ok(Self {
+            width,
+            encoding: CoordinateFixedTextEncodingV2::Ascii,
+            padding: CoordinateFixedTextPaddingV2::RightSpace,
+            reject_over_width: true,
+            reject_non_ascii: true,
+        })
+    }
+
+    /// Converts this safe layout to a raw C ABI layout with version, size, and reserved fields set.
+    pub fn to_raw(self) -> sys::ArcadiaTioCoordinateFixedTextLayoutV2 {
+        sys::ArcadiaTioCoordinateFixedTextLayoutV2 {
+            version: sys::ARCADIA_TIO_COORDINATE_V2_ABI_VERSION,
+            struct_size: mem::size_of::<sys::ArcadiaTioCoordinateFixedTextLayoutV2>(),
+            width: self.width,
+            encoding: self.encoding.to_raw(),
+            padding: self.padding.to_raw(),
+            reject_over_width: u8::from(self.reject_over_width),
+            reject_non_ascii: u8::from(self.reject_non_ascii),
+            reserved_u8: [0; 6],
+            reserved: [0; 2],
+        }
+    }
+
+    fn from_raw(raw: sys::ArcadiaTioCoordinateFixedTextLayoutV2) -> Result<Self> {
+        Ok(Self {
+            width: raw.width,
+            encoding: CoordinateFixedTextEncodingV2::from_raw(raw.encoding)?,
+            padding: CoordinateFixedTextPaddingV2::from_raw(raw.padding)?,
+            reject_over_width: raw.reject_over_width != 0,
+            reject_non_ascii: raw.reject_non_ascii != 0,
+        })
+    }
+}
+
+/// Coordinate v2 dictionary summary.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CoordinateDictionarySummaryV2 {
+    /// Dictionary identifier.
+    pub dictionary_id: Option<String>,
+    /// Dictionary revision bound to the selected root.
+    pub revision: u64,
+    /// Dictionary code dtype.
+    pub code_dtype: CoordinateCodeDTypeV2,
+    /// Number of dictionary entries.
+    pub entry_count: u64,
+    /// Whether stable IDs are unique.
+    pub stable_ids_unique: bool,
+    /// Whether display labels are unique.
+    pub display_labels_unique: bool,
+    /// Whether aliases are unique.
+    pub aliases_unique: bool,
+    /// Whether codes remain stable across revisions.
+    pub codes_stable_across_revisions: bool,
+    /// Content identifier for the dictionary revision.
+    pub content_id: Option<String>,
+}
+
+impl CoordinateDictionarySummaryV2 {
+    /// Builds a dictionary summary for create-time Coordinate v2 descriptors.
+    pub fn new(code_dtype: CoordinateCodeDTypeV2) -> Self {
+        Self {
+            dictionary_id: None,
+            revision: 0,
+            code_dtype,
+            entry_count: 0,
+            stable_ids_unique: true,
+            display_labels_unique: true,
+            aliases_unique: true,
+            codes_stable_across_revisions: true,
+            content_id: None,
+        }
+    }
+
+    /// Sets the optional dictionary identifier.
+    pub fn with_dictionary_id(mut self, dictionary_id: impl Into<String>) -> Self {
+        self.dictionary_id = Some(dictionary_id.into());
+        self
+    }
+
+    /// Sets the selected-root dictionary revision.
+    pub fn with_revision(mut self, revision: u64) -> Self {
+        self.revision = revision;
+        self
+    }
+
+    /// Sets the optional dictionary content identifier.
+    pub fn with_content_id(mut self, content_id: impl Into<String>) -> Self {
+        self.content_id = Some(content_id.into());
+        self
+    }
+
+    fn from_raw(raw: &sys::ArcadiaTioCoordinateDictionarySummaryV2) -> Result<Self> {
+        Ok(Self {
+            dictionary_id: optional_c_string(raw.dictionary_id),
+            revision: raw.revision,
+            code_dtype: CoordinateCodeDTypeV2::from_raw(raw.code_dtype)?,
+            entry_count: raw.entry_count,
+            stable_ids_unique: raw.stable_ids_unique != 0,
+            display_labels_unique: raw.display_labels_unique != 0,
+            aliases_unique: raw.aliases_unique != 0,
+            codes_stable_across_revisions: raw.codes_stable_across_revisions != 0,
+            content_id: optional_c_string(raw.content_id),
+        })
+    }
+
+    fn prepare(&self) -> Result<PreparedCoordinateDictionarySummaryV2> {
+        PreparedCoordinateDictionarySummaryV2::new(self)
+    }
+}
+
+/// Coordinate v2 dictionary entry.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CoordinateDictionaryEntryV2 {
+    /// Dictionary code value.
+    pub code: u64,
+    /// Stable identifier.
+    pub stable_id: Option<String>,
+    /// Display label.
+    pub display_label: Option<String>,
+    /// Alias labels.
+    pub aliases: Vec<String>,
+}
+
+impl CoordinateDictionaryEntryV2 {
+    /// Builds a dictionary entry with optional stable identifier and display label.
+    pub fn new(
+        code: u64,
+        stable_id: impl Into<Option<String>>,
+        display_label: impl Into<Option<String>>,
+    ) -> Self {
+        Self {
+            code,
+            stable_id: stable_id.into(),
+            display_label: display_label.into(),
+            aliases: Vec::new(),
+        }
+    }
+
+    /// Sets alias labels for this dictionary entry.
+    pub fn with_aliases<I, S>(mut self, aliases: I) -> Self
+    where
+        I: IntoIterator<Item = S>,
+        S: Into<String>,
+    {
+        self.aliases = aliases.into_iter().map(Into::into).collect();
+        self
+    }
+
+    fn from_raw(raw: &sys::ArcadiaTioCoordinateDictionaryEntryV2) -> Self {
+        let aliases = if raw.aliases.is_null() || raw.aliases_len == 0 {
+            Vec::new()
+        } else {
+            // SAFETY: Native dictionary entry aliases are valid for `aliases_len` until the parent is freed.
+            unsafe { slice::from_raw_parts(raw.aliases.cast_const(), raw.aliases_len) }
+                .iter()
+                .filter_map(|alias| optional_c_string((*alias).cast_const()))
+                .collect()
+        };
+        Self {
+            code: raw.code,
+            stable_id: optional_c_string(raw.stable_id.cast_const()),
+            display_label: optional_c_string(raw.display_label.cast_const()),
+            aliases,
+        }
+    }
+}
+
+/// Coordinate v2 dictionary result.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CoordinateDictionaryV2 {
+    /// Dictionary summary.
+    pub summary: CoordinateDictionarySummaryV2,
+    /// Dictionary entries.
+    pub entries: Vec<CoordinateDictionaryEntryV2>,
+    /// Status category.
+    pub status_category: CoordinateStatusCategoryV2,
+    /// Status reason.
+    pub reason: Option<String>,
+}
+
+impl CoordinateDictionaryV2 {
+    /// Copies a raw dictionary result into safe Rust values.
+    ///
+    /// # Safety
+    ///
+    /// `raw.entries` and nested string pointers must be valid according to the C ABI until the
+    /// caller releases the parent raw dictionary with the matching free function.
+    pub unsafe fn from_raw_borrowed(raw: &sys::ArcadiaTioCoordinateDictionaryV2) -> Result<Self> {
+        let entries = if raw.entries.is_null() || raw.entries_len == 0 {
+            Vec::new()
+        } else {
+            // SAFETY: Caller guarantees the native entry array is valid for `entries_len`.
+            unsafe { slice::from_raw_parts(raw.entries, raw.entries_len) }
+                .iter()
+                .map(CoordinateDictionaryEntryV2::from_raw)
+                .collect()
+        };
+        Ok(Self {
+            summary: CoordinateDictionarySummaryV2::from_raw(&raw.summary)?,
+            entries,
+            status_category: CoordinateStatusCategoryV2::from_raw(raw.status_category)?,
+            reason: optional_c_string(raw.reason.cast_const()),
+        })
+    }
+}
+
+/// Coordinate v2 external binding metadata.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CoordinateExternalBindingV2 {
+    /// External source kind.
+    pub source_kind: CoordinateSourceKindV2,
+    /// Logical identifier.
+    pub logical_id: Option<String>,
+    /// Privacy-safe display string.
+    pub privacy_safe_display: Option<String>,
+    /// Content identifier.
+    pub content_id: Option<String>,
+    /// Value domain carried externally.
+    pub value_domain: CoordinateValueDomainV2,
+    /// Declared coordinate length.
+    pub length: u64,
+    /// Availability status.
+    pub availability: CoordinateAvailabilityV2,
+    /// Status category.
+    pub status_category: CoordinateStatusCategoryV2,
+    /// Whether this binding is required.
+    pub required: bool,
+}
+
+impl CoordinateExternalBindingV2 {
+    /// Builds a descriptor-only external-reference summary. The wrapper does not dereference it.
+    pub fn metadata_only(
+        source_kind: CoordinateSourceKindV2,
+        logical_id: impl Into<Option<String>>,
+        privacy_safe_display: impl Into<Option<String>>,
+        value_domain: CoordinateValueDomainV2,
+        length: u64,
+    ) -> Self {
+        Self {
+            source_kind,
+            logical_id: logical_id.into(),
+            privacy_safe_display: privacy_safe_display.into(),
+            content_id: None,
+            value_domain,
+            length,
+            availability: CoordinateAvailabilityV2::Unavailable,
+            status_category: CoordinateStatusCategoryV2::Ok,
+            required: false,
+        }
+    }
+
+    /// Sets the optional external content identifier.
+    pub fn with_content_id(mut self, content_id: impl Into<String>) -> Self {
+        self.content_id = Some(content_id.into());
+        self
+    }
+
+    /// Sets availability and status category for a descriptor-only external summary.
+    pub fn with_status(
+        mut self,
+        availability: CoordinateAvailabilityV2,
+        status_category: CoordinateStatusCategoryV2,
+    ) -> Self {
+        self.availability = availability;
+        self.status_category = status_category;
+        self
+    }
+
+    /// Marks the external binding required or optional.
+    pub fn with_required(mut self, required: bool) -> Self {
+        self.required = required;
+        self
+    }
+
+    fn from_raw(raw: &sys::ArcadiaTioCoordinateExternalBindingV2) -> Result<Self> {
+        Ok(Self {
+            source_kind: CoordinateSourceKindV2::from_raw(raw.source_kind)?,
+            logical_id: optional_c_string(raw.logical_id),
+            privacy_safe_display: optional_c_string(raw.privacy_safe_display),
+            content_id: optional_c_string(raw.content_id),
+            value_domain: CoordinateValueDomainV2::from_raw(raw.value_domain)?,
+            length: raw.length,
+            availability: CoordinateAvailabilityV2::from_raw(raw.availability)?,
+            status_category: CoordinateStatusCategoryV2::from_raw(raw.status_category)?,
+            required: raw.required != 0,
+        })
+    }
+
+    fn prepare(&self) -> Result<PreparedCoordinateExternalBindingV2> {
+        PreparedCoordinateExternalBindingV2::new(self)
+    }
+}
+
+/// Coordinate v2 selected-root source binding for optional index summaries.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CoordinateIndexSourceBindingV2 {
+    /// Descriptor identifier.
+    pub descriptor_id: Option<String>,
+    /// Descriptor revision.
+    pub descriptor_revision: u64,
+    /// Value domain.
+    pub value_domain: CoordinateValueDomainV2,
+    /// Value-object identifier.
+    pub value_object_id: Option<String>,
+    /// Dictionary identifier.
+    pub dictionary_id: Option<String>,
+    /// Dictionary revision.
+    pub dictionary_revision: u64,
+    /// Dictionary content identifier.
+    pub dictionary_content_id: Option<String>,
+    /// External source kind.
+    pub external_source_kind: CoordinateSourceKindV2,
+    /// External logical identifier.
+    pub external_logical_id: Option<String>,
+    /// External content identifier.
+    pub external_content_id: Option<String>,
+    /// Selected-root identifier.
+    pub root_id: Option<String>,
+    /// Axis index.
+    pub axis: usize,
+    /// Root extent.
+    pub root_extent: u64,
+    /// Append start.
+    pub append_start: u64,
+    /// Append count.
+    pub append_count: u64,
+}
+
+impl CoordinateIndexSourceBindingV2 {
+    fn from_raw(raw: &sys::ArcadiaTioCoordinateIndexSourceBindingV2) -> Result<Self> {
+        Ok(Self {
+            descriptor_id: optional_c_string(raw.descriptor_id),
+            descriptor_revision: raw.descriptor_revision,
+            value_domain: CoordinateValueDomainV2::from_raw(raw.value_domain)?,
+            value_object_id: optional_c_string(raw.value_object_id),
+            dictionary_id: optional_c_string(raw.dictionary_id),
+            dictionary_revision: raw.dictionary_revision,
+            dictionary_content_id: optional_c_string(raw.dictionary_content_id),
+            external_source_kind: CoordinateSourceKindV2::from_raw(raw.external_source_kind)?,
+            external_logical_id: optional_c_string(raw.external_logical_id),
+            external_content_id: optional_c_string(raw.external_content_id),
+            root_id: optional_c_string(raw.root_id),
+            axis: raw.axis,
+            root_extent: raw.root_extent,
+            append_start: raw.append_start,
+            append_count: raw.append_count,
+        })
+    }
+}
+
+/// Coordinate v2 optional index summary.
+///
+/// Optional indexes are descriptive acceleration metadata only. Public Rust v2 contract types keep
+/// authoritative coordinate values/dictionaries/external bindings selected-root-bound.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CoordinateIndexSummaryV2 {
+    /// Index identifier.
+    pub index_id: Option<String>,
+    /// Index kind.
+    pub index_kind: CoordinateIndexKindV2,
+    /// Key domain covered by the index.
+    pub key_domain: CoordinateKeyDomainV2,
+    /// Source binding.
+    pub source_binding: CoordinateIndexSourceBindingV2,
+    /// Ordering hints.
+    pub ordering: CoordinateOrdering,
+    /// Index format version.
+    pub format_version: u32,
+    /// Index build version.
+    pub build_version: u32,
+    /// Validation status.
+    pub validation_status: CoordinateIndexValidationStatusV2,
+    /// Fallback policy.
+    pub fallback: CoordinateIndexFallbackV2,
+    /// Selected use.
+    pub selected_use: CoordinateIndexUseV2,
+    /// Whether the index is required.
+    pub required: bool,
+    /// Status reason.
+    pub reason: Option<String>,
+}
+
+impl CoordinateIndexSummaryV2 {
+    fn from_raw(raw: &sys::ArcadiaTioCoordinateIndexSummaryV2) -> Result<Self> {
+        Ok(Self {
+            index_id: optional_c_string(raw.index_id),
+            index_kind: CoordinateIndexKindV2::from_raw(raw.index_kind)?,
+            key_domain: CoordinateKeyDomainV2::from_raw(raw.key_domain)?,
+            source_binding: CoordinateIndexSourceBindingV2::from_raw(&raw.source_binding)?,
+            ordering: CoordinateOrdering {
+                sorted: CoordinateSortedness::from_raw(raw.sorted)?,
+                monotonicity: CoordinateMonotonicity::from_raw(raw.monotonicity)?,
+                uniqueness: CoordinateUniqueness::from_raw(raw.uniqueness)?,
+            },
+            format_version: raw.format_version,
+            build_version: raw.build_version,
+            validation_status: CoordinateIndexValidationStatusV2::from_raw(raw.validation_status)?,
+            fallback: CoordinateIndexFallbackV2::from_raw(raw.fallback)?,
+            selected_use: CoordinateIndexUseV2::from_raw(raw.selected_use)?,
+            required: raw.required != 0,
+            reason: optional_c_string(raw.reason),
+        })
+    }
+}
+
+/// Coordinate v2 operation options.
+///
+/// Optional indexes are never coordinate truth. These options only choose whether lookup calls may
+/// fall back to selected-root authoritative values/dictionaries when optional indexes are absent,
+/// invalid, stale, or unsupported.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct CoordinateV2Options {
+    /// Allow selected-root authoritative scans when optional indexes are absent or unusable.
+    pub allow_authoritative_scan: bool,
+    /// Include dictionary entries in dictionary reads.
+    pub include_dictionary_entries: bool,
+    /// Include optional index summaries in metadata reads.
+    pub include_index_summaries: bool,
+    /// Allow external resolution where a future implementation explicitly supports it.
+    pub allow_external_resolution: bool,
+}
+
+impl CoordinateV2Options {
+    /// Returns options that allow explicit authoritative coordinate scans.
+    pub fn authoritative_scan() -> Self {
+        Self {
+            allow_authoritative_scan: true,
+            ..Self::default()
+        }
+    }
+
+    /// Converts this safe option set to raw C ABI options with reserved fields zeroed.
+    pub fn to_raw(self) -> sys::ArcadiaTioCoordinateV2Options {
+        sys::ArcadiaTioCoordinateV2Options {
+            version: sys::ARCADIA_TIO_COORDINATE_V2_ABI_VERSION,
+            struct_size: mem::size_of::<sys::ArcadiaTioCoordinateV2Options>(),
+            allow_authoritative_scan: u8::from(self.allow_authoritative_scan),
+            include_dictionary_entries: u8::from(self.include_dictionary_entries),
+            include_index_summaries: u8::from(self.include_index_summaries),
+            allow_external_resolution: u8::from(self.allow_external_resolution),
+            reserved_u8: [0; 4],
+            reserved: [0; 4],
+        }
+    }
+}
+
+/// Coordinate v2 owned/buffered input values for descriptor and append conversions.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum CoordinateInputValuesV2 {
+    /// No immediate value buffer; used for append-sequence declarations and external references.
+    None,
+    /// Inline i32 numeric values.
+    I32(Vec<i32>),
+    /// Inline i64 numeric values.
+    I64(Vec<i64>),
+    /// Fixed-width text bytes, stored as `len * fixed_text.width` contiguous bytes.
+    FixedText(Vec<u8>),
+    /// Unsigned 8-bit dictionary codes.
+    CodesU8(Vec<u8>),
+    /// Unsigned 16-bit dictionary codes.
+    CodesU16(Vec<u16>),
+    /// Unsigned 32-bit dictionary codes.
+    CodesU32(Vec<u32>),
+    /// Unsigned 64-bit dictionary codes.
+    CodesU64(Vec<u64>),
+}
+
+impl Default for CoordinateInputValuesV2 {
+    fn default() -> Self {
+        Self::None
+    }
+}
+
+impl CoordinateInputValuesV2 {
+    fn pointer_len_for_axis(&self, fixed_text_width: usize) -> Result<(*const c_void, usize)> {
+        match self {
+            Self::None => Ok((ptr::null(), 0)),
+            Self::I32(values) => Ok(buffer_ptr_len(values)),
+            Self::I64(values) => Ok(buffer_ptr_len(values)),
+            Self::FixedText(bytes) => {
+                let len = fixed_text_value_count(bytes.len(), fixed_text_width)?;
+                Ok((buffer_ptr_for_count(bytes, len), len))
+            }
+            Self::CodesU8(values) => Ok(buffer_ptr_len(values)),
+            Self::CodesU16(values) => Ok(buffer_ptr_len(values)),
+            Self::CodesU32(values) => Ok(buffer_ptr_len(values)),
+            Self::CodesU64(values) => Ok(buffer_ptr_len(values)),
+        }
+    }
+
+    fn pointer_count_element_size(
+        &self,
+        fixed_text_width: usize,
+    ) -> Result<(*const c_void, usize, usize)> {
+        match self {
+            Self::None => Ok((ptr::null(), 0, 0)),
+            Self::I32(values) => Ok(buffer_ptr_count_element_size(values)),
+            Self::I64(values) => Ok(buffer_ptr_count_element_size(values)),
+            Self::FixedText(bytes) => {
+                let count = fixed_text_value_count(bytes.len(), fixed_text_width)?;
+                Ok((
+                    buffer_ptr_for_count(bytes, count),
+                    count,
+                    mem::size_of::<u8>(),
+                ))
+            }
+            Self::CodesU8(values) => Ok(buffer_ptr_count_element_size(values)),
+            Self::CodesU16(values) => Ok(buffer_ptr_count_element_size(values)),
+            Self::CodesU32(values) => Ok(buffer_ptr_count_element_size(values)),
+            Self::CodesU64(values) => Ok(buffer_ptr_count_element_size(values)),
+        }
+    }
+}
+
+fn buffer_ptr_len<T>(values: &[T]) -> (*const c_void, usize) {
+    (buffer_ptr_for_count(values, values.len()), values.len())
+}
+
+fn buffer_ptr_count_element_size<T>(values: &[T]) -> (*const c_void, usize, usize) {
+    (
+        buffer_ptr_for_count(values, values.len()),
+        values.len(),
+        mem::size_of::<T>(),
+    )
+}
+
+fn buffer_ptr_for_count<T>(values: &[T], count: usize) -> *const c_void {
+    if count == 0 {
+        ptr::null()
+    } else {
+        values.as_ptr().cast()
+    }
+}
+
+fn validate_fixed_text_lookup_key(bytes_len: usize, width: usize) -> Result<()> {
+    if width == 0 {
+        return Err(TioError::invalid_argument(
+            "fixed-text Coordinate v2 lookup width must be > 0",
+        ));
+    }
+    if bytes_len > width {
+        return Err(TioError::invalid_argument(
+            "fixed-text Coordinate v2 lookup key must be no wider than width",
+        ));
+    }
+    Ok(())
+}
+
+fn fixed_text_value_count(bytes_len: usize, width: usize) -> Result<usize> {
+    if width == 0 {
+        return Err(TioError::invalid_argument(
+            "fixed-text Coordinate v2 width must be > 0 when values are present",
+        ));
+    }
+    if bytes_len % width != 0 {
+        return Err(TioError::invalid_argument(
+            "fixed-text Coordinate v2 values length must be a multiple of width",
+        ));
+    }
+    Ok(bytes_len / width)
+}
+
+/// Coordinate v2 input descriptor for future create APIs.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AxisCoordinateInputV2 {
+    /// Axis index.
+    pub axis: usize,
+    /// Optional descriptor identifier.
+    pub descriptor_id: Option<String>,
+    /// Optional coordinate name.
+    pub name: Option<String>,
+    /// Coordinate semantic kind.
+    pub kind: CoordinateKind,
+    /// Coordinate value domain.
+    pub value_domain: CoordinateValueDomainV2,
+    /// Numeric dtype for inline numeric values.
+    pub numeric_dtype: CoordinateDType,
+    /// Numeric encoding for inline numeric values.
+    pub numeric_encoding: CoordinateEncoding,
+    /// Fixed-text layout for fixed-text domains.
+    pub fixed_text: CoordinateFixedTextLayoutV2,
+    /// Dictionary code dtype.
+    pub code_dtype: CoordinateCodeDTypeV2,
+    /// Immediate create-time values, if this is a fixed-axis value domain.
+    pub values: CoordinateInputValuesV2,
+    /// Dictionary summary for dictionary-code domains.
+    pub dictionary: Option<CoordinateDictionarySummaryV2>,
+    /// Dictionary entries for dictionary-code domains.
+    pub dictionary_entries: Vec<CoordinateDictionaryEntryV2>,
+    /// External binding for external-reference domains.
+    pub external_binding: Option<CoordinateExternalBindingV2>,
+    /// Ordering hints.
+    pub ordering: CoordinateOrdering,
+    /// Whether this coordinate is required.
+    pub required: bool,
+}
+
+impl AxisCoordinateInputV2 {
+    /// Creates an inline i32 Coordinate v2 descriptor.
+    pub fn inline_i32(axis: usize, values: Vec<i32>) -> Self {
+        Self {
+            axis,
+            descriptor_id: Some(default_coordinate_v2_descriptor_id(axis, "inline-i32")),
+            name: None,
+            kind: CoordinateKind::DomainValue,
+            value_domain: CoordinateValueDomainV2::InlineNumeric,
+            numeric_dtype: CoordinateDType::I32,
+            numeric_encoding: CoordinateEncoding::Plain,
+            fixed_text: CoordinateFixedTextLayoutV2::default(),
+            code_dtype: CoordinateCodeDTypeV2::U32,
+            values: CoordinateInputValuesV2::I32(values),
+            dictionary: None,
+            dictionary_entries: Vec::new(),
+            external_binding: None,
+            ordering: CoordinateOrdering::default(),
+            required: false,
+        }
+    }
+
+    /// Creates an inline i64 Coordinate v2 descriptor.
+    pub fn inline_i64(axis: usize, values: Vec<i64>) -> Self {
+        Self {
+            descriptor_id: Some(default_coordinate_v2_descriptor_id(axis, "inline-i64")),
+            numeric_dtype: CoordinateDType::I64,
+            values: CoordinateInputValuesV2::I64(values),
+            ..Self::inline_i32(axis, Vec::new())
+        }
+    }
+
+    /// Creates an inline fixed-text descriptor from already padded fixed-width bytes.
+    pub fn fixed_text_bytes(
+        axis: usize,
+        layout: CoordinateFixedTextLayoutV2,
+        bytes: Vec<u8>,
+    ) -> Result<Self> {
+        validate_fixed_text_layout_v2(layout)?;
+        validate_fixed_text_bytes_v2(&bytes, layout)?;
+        Ok(Self {
+            axis,
+            descriptor_id: Some(default_coordinate_v2_descriptor_id(axis, "fixed-text")),
+            name: None,
+            kind: CoordinateKind::DomainValue,
+            value_domain: CoordinateValueDomainV2::FixedText,
+            numeric_dtype: CoordinateDType::I32,
+            numeric_encoding: CoordinateEncoding::Plain,
+            fixed_text: layout,
+            code_dtype: CoordinateCodeDTypeV2::U32,
+            values: CoordinateInputValuesV2::FixedText(bytes),
+            dictionary: None,
+            dictionary_entries: Vec::new(),
+            external_binding: None,
+            ordering: CoordinateOrdering::default(),
+            required: false,
+        })
+    }
+
+    /// Creates an inline fixed-width ASCII descriptor, right-padding each value with spaces.
+    pub fn fixed_text_ascii<I, S>(axis: usize, width: usize, values: I) -> Result<Self>
+    where
+        I: IntoIterator<Item = S>,
+        S: AsRef<str>,
+    {
+        let layout = CoordinateFixedTextLayoutV2::ascii_right_space_padded(width)?;
+        let bytes = encode_fixed_text_ascii_values(width, values)?;
+        Self::fixed_text_bytes(axis, layout, bytes)
+    }
+
+    /// Creates a dictionary-code descriptor from owned code values and dictionary metadata.
+    pub fn dictionary_codes(
+        axis: usize,
+        code_dtype: CoordinateCodeDTypeV2,
+        values: CoordinateInputValuesV2,
+        label_layout: CoordinateFixedTextLayoutV2,
+        mut dictionary: CoordinateDictionarySummaryV2,
+        dictionary_entries: Vec<CoordinateDictionaryEntryV2>,
+    ) -> Result<Self> {
+        validate_dictionary_values_v2(&values, code_dtype)?;
+        validate_fixed_text_layout_v2(label_layout)?;
+        if dictionary.code_dtype != code_dtype {
+            return Err(TioError::invalid_argument(
+                "Coordinate v2 dictionary summary code_dtype must match descriptor code_dtype",
+            ));
+        }
+        if dictionary.entry_count == 0 && !dictionary_entries.is_empty() {
+            dictionary.entry_count = dictionary_entries.len() as u64;
+        }
+        Ok(Self {
+            axis,
+            descriptor_id: Some(default_coordinate_v2_descriptor_id(axis, "dictionary-code")),
+            name: None,
+            kind: CoordinateKind::LabelId,
+            value_domain: CoordinateValueDomainV2::DictionaryCode,
+            numeric_dtype: CoordinateDType::I32,
+            numeric_encoding: CoordinateEncoding::Plain,
+            fixed_text: label_layout,
+            code_dtype,
+            values,
+            dictionary: Some(dictionary),
+            dictionary_entries,
+            external_binding: None,
+            ordering: CoordinateOrdering::default(),
+            required: false,
+        })
+    }
+
+    /// Creates a dictionary-code descriptor with `u8` code values.
+    pub fn dictionary_codes_u8(
+        axis: usize,
+        values: Vec<u8>,
+        label_layout: CoordinateFixedTextLayoutV2,
+        dictionary: CoordinateDictionarySummaryV2,
+        dictionary_entries: Vec<CoordinateDictionaryEntryV2>,
+    ) -> Result<Self> {
+        Self::dictionary_codes(
+            axis,
+            CoordinateCodeDTypeV2::U8,
+            CoordinateInputValuesV2::CodesU8(values),
+            label_layout,
+            dictionary,
+            dictionary_entries,
+        )
+    }
+
+    /// Creates a dictionary-code descriptor with `u16` code values.
+    pub fn dictionary_codes_u16(
+        axis: usize,
+        values: Vec<u16>,
+        label_layout: CoordinateFixedTextLayoutV2,
+        dictionary: CoordinateDictionarySummaryV2,
+        dictionary_entries: Vec<CoordinateDictionaryEntryV2>,
+    ) -> Result<Self> {
+        Self::dictionary_codes(
+            axis,
+            CoordinateCodeDTypeV2::U16,
+            CoordinateInputValuesV2::CodesU16(values),
+            label_layout,
+            dictionary,
+            dictionary_entries,
+        )
+    }
+
+    /// Creates a dictionary-code descriptor with `u32` code values.
+    pub fn dictionary_codes_u32(
+        axis: usize,
+        values: Vec<u32>,
+        label_layout: CoordinateFixedTextLayoutV2,
+        dictionary: CoordinateDictionarySummaryV2,
+        dictionary_entries: Vec<CoordinateDictionaryEntryV2>,
+    ) -> Result<Self> {
+        Self::dictionary_codes(
+            axis,
+            CoordinateCodeDTypeV2::U32,
+            CoordinateInputValuesV2::CodesU32(values),
+            label_layout,
+            dictionary,
+            dictionary_entries,
+        )
+    }
+
+    /// Creates a dictionary-code descriptor with `u64` code values.
+    pub fn dictionary_codes_u64(
+        axis: usize,
+        values: Vec<u64>,
+        label_layout: CoordinateFixedTextLayoutV2,
+        dictionary: CoordinateDictionarySummaryV2,
+        dictionary_entries: Vec<CoordinateDictionaryEntryV2>,
+    ) -> Result<Self> {
+        Self::dictionary_codes(
+            axis,
+            CoordinateCodeDTypeV2::U64,
+            CoordinateInputValuesV2::CodesU64(values),
+            label_layout,
+            dictionary,
+            dictionary_entries,
+        )
+    }
+
+    /// Creates an append-axis numeric i32 declaration; append values arrive with payload appends.
+    pub fn append_numeric_i32(axis: usize) -> Self {
+        Self {
+            descriptor_id: Some(default_coordinate_v2_descriptor_id(axis, "append-i32")),
+            value_domain: CoordinateValueDomainV2::AppendSequence,
+            values: CoordinateInputValuesV2::None,
+            ..Self::inline_i32(axis, Vec::new())
+        }
+    }
+
+    /// Creates an append-axis numeric i64 declaration; append values arrive with payload appends.
+    pub fn append_numeric_i64(axis: usize) -> Self {
+        Self {
+            descriptor_id: Some(default_coordinate_v2_descriptor_id(axis, "append-i64")),
+            numeric_dtype: CoordinateDType::I64,
+            value_domain: CoordinateValueDomainV2::AppendSequence,
+            values: CoordinateInputValuesV2::None,
+            ..Self::inline_i32(axis, Vec::new())
+        }
+    }
+
+    /// Creates an append-axis fixed-text declaration; append values arrive with payload appends.
+    pub fn append_fixed_text(axis: usize, layout: CoordinateFixedTextLayoutV2) -> Result<Self> {
+        validate_fixed_text_layout_v2(layout)?;
+        Ok(Self {
+            axis,
+            descriptor_id: Some(default_coordinate_v2_descriptor_id(
+                axis,
+                "append-fixed-text",
+            )),
+            name: None,
+            kind: CoordinateKind::DomainValue,
+            value_domain: CoordinateValueDomainV2::AppendSequence,
+            numeric_dtype: CoordinateDType::I32,
+            numeric_encoding: CoordinateEncoding::Plain,
+            fixed_text: layout,
+            code_dtype: CoordinateCodeDTypeV2::U32,
+            values: CoordinateInputValuesV2::None,
+            dictionary: None,
+            dictionary_entries: Vec::new(),
+            external_binding: None,
+            ordering: CoordinateOrdering::default(),
+            required: false,
+        })
+    }
+
+    /// Creates an append-axis dictionary-code declaration; append codes arrive with payload appends.
+    pub fn append_dictionary_codes(
+        axis: usize,
+        code_dtype: CoordinateCodeDTypeV2,
+        label_layout: CoordinateFixedTextLayoutV2,
+        mut dictionary: CoordinateDictionarySummaryV2,
+        dictionary_entries: Vec<CoordinateDictionaryEntryV2>,
+    ) -> Result<Self> {
+        validate_fixed_text_layout_v2(label_layout)?;
+        if dictionary.code_dtype != code_dtype {
+            return Err(TioError::invalid_argument(
+                "Coordinate v2 append dictionary summary code_dtype must match descriptor code_dtype",
+            ));
+        }
+        if dictionary.entry_count == 0 && !dictionary_entries.is_empty() {
+            dictionary.entry_count = dictionary_entries.len() as u64;
+        }
+        Ok(Self {
+            axis,
+            descriptor_id: Some(default_coordinate_v2_descriptor_id(
+                axis,
+                "append-dictionary-code",
+            )),
+            name: None,
+            kind: CoordinateKind::LabelId,
+            value_domain: CoordinateValueDomainV2::AppendSequence,
+            numeric_dtype: CoordinateDType::I32,
+            numeric_encoding: CoordinateEncoding::Plain,
+            fixed_text: label_layout,
+            code_dtype,
+            values: CoordinateInputValuesV2::None,
+            dictionary: Some(dictionary),
+            dictionary_entries,
+            external_binding: None,
+            ordering: CoordinateOrdering::default(),
+            required: false,
+        })
+    }
+
+    /// Creates a numeric external-reference descriptor summary. The public Rust wrapper never dereferences it.
+    pub fn external_reference(axis: usize, external_binding: CoordinateExternalBindingV2) -> Self {
+        Self {
+            axis,
+            descriptor_id: Some(default_coordinate_v2_descriptor_id(
+                axis,
+                "external-reference",
+            )),
+            name: None,
+            kind: CoordinateKind::DomainValue,
+            value_domain: CoordinateValueDomainV2::ExternalReference,
+            numeric_dtype: CoordinateDType::I32,
+            numeric_encoding: CoordinateEncoding::Plain,
+            fixed_text: CoordinateFixedTextLayoutV2::default(),
+            code_dtype: CoordinateCodeDTypeV2::U32,
+            values: CoordinateInputValuesV2::None,
+            dictionary: None,
+            dictionary_entries: Vec::new(),
+            required: external_binding.required,
+            external_binding: Some(external_binding),
+            ordering: CoordinateOrdering::default(),
+        }
+    }
+
+    /// Creates a numeric external-reference descriptor with explicit numeric metadata.
+    pub fn external_reference_numeric(
+        axis: usize,
+        external_binding: CoordinateExternalBindingV2,
+        numeric_dtype: CoordinateDType,
+        numeric_encoding: CoordinateEncoding,
+    ) -> Result<Self> {
+        if external_binding.value_domain != CoordinateValueDomainV2::InlineNumeric {
+            return Err(TioError::invalid_argument(
+                "Coordinate v2 numeric external references require InlineNumeric binding metadata",
+            ));
+        }
+        let mut input = Self::external_reference(axis, external_binding);
+        input.numeric_dtype = numeric_dtype;
+        input.numeric_encoding = numeric_encoding;
+        Ok(input)
+    }
+
+    /// Creates a fixed-text external-reference descriptor with explicit fixed-text metadata.
+    pub fn external_reference_fixed_text(
+        axis: usize,
+        external_binding: CoordinateExternalBindingV2,
+        layout: CoordinateFixedTextLayoutV2,
+    ) -> Result<Self> {
+        if external_binding.value_domain != CoordinateValueDomainV2::FixedText {
+            return Err(TioError::invalid_argument(
+                "Coordinate v2 fixed-text external references require FixedText binding metadata",
+            ));
+        }
+        validate_fixed_text_layout_v2(layout)?;
+        let mut input = Self::external_reference(axis, external_binding);
+        input.fixed_text = layout;
+        Ok(input)
+    }
+
+    /// Creates a dictionary-code external-reference descriptor with persisted code-dtype metadata only.
+    ///
+    /// The current C ABI create path ignores dictionary summaries on external references, so this
+    /// helper deliberately accepts only the code dtype that native create persists.
+    pub fn external_reference_dictionary_codes(
+        axis: usize,
+        external_binding: CoordinateExternalBindingV2,
+        code_dtype: CoordinateCodeDTypeV2,
+    ) -> Result<Self> {
+        if external_binding.value_domain != CoordinateValueDomainV2::DictionaryCode {
+            return Err(TioError::invalid_argument(
+                "Coordinate v2 dictionary external references require DictionaryCode binding metadata",
+            ));
+        }
+        let mut input = Self::external_reference(axis, external_binding);
+        input.kind = CoordinateKind::LabelId;
+        input.code_dtype = code_dtype;
+        Ok(input)
+    }
+
+    /// Sets the optional descriptor identifier and returns the modified descriptor.
+    pub fn with_descriptor_id(mut self, descriptor_id: impl Into<String>) -> Self {
+        self.descriptor_id = Some(descriptor_id.into());
+        self
+    }
+
+    /// Sets the optional coordinate name and returns the modified descriptor.
+    pub fn with_name(mut self, name: impl Into<String>) -> Self {
+        self.name = Some(name.into());
+        self
+    }
+
+    /// Sets the coordinate semantic kind and returns the modified descriptor.
+    pub fn with_kind(mut self, kind: CoordinateKind) -> Self {
+        self.kind = kind;
+        self
+    }
+
+    /// Sets numeric encoding metadata and returns the modified descriptor.
+    pub fn with_numeric_encoding(mut self, encoding: CoordinateEncoding) -> Self {
+        self.numeric_encoding = encoding;
+        self
+    }
+
+    /// Sets ordering hints and returns the modified descriptor.
+    pub fn with_ordering(mut self, ordering: CoordinateOrdering) -> Self {
+        self.ordering = ordering;
+        self
+    }
+
+    /// Marks the coordinate required or optional and returns the modified descriptor.
+    pub fn with_required(mut self, required: bool) -> Self {
+        self.required = required;
+        if let Some(binding) = &mut self.external_binding {
+            binding.required = required;
+        }
+        self
+    }
+
+    /// Prepares a raw C ABI Coordinate v2 input descriptor with borrowed pointers.
+    pub fn prepare(&self) -> Result<PreparedAxisCoordinateInputV2<'_>> {
+        PreparedAxisCoordinateInputV2::new(self)
+    }
+
+    fn raw_fixed_text_layout(&self) -> sys::ArcadiaTioCoordinateFixedTextLayoutV2 {
+        if self.value_domain == CoordinateValueDomainV2::FixedText || self.fixed_text.width > 0 {
+            self.fixed_text.to_raw()
+        } else {
+            sys::ArcadiaTioCoordinateFixedTextLayoutV2::default()
+        }
+    }
+}
+
+/// Prepared Coordinate v2 input descriptor whose raw pointers borrow from owned Rust storage.
+pub struct PreparedAxisCoordinateInputV2<'a> {
+    descriptor_id: Option<CString>,
+    name: Option<CString>,
+    dictionary: Option<PreparedCoordinateDictionarySummaryV2>,
+    dictionary_entries: PreparedCoordinateDictionaryEntriesV2,
+    external_binding: Option<PreparedCoordinateExternalBindingV2>,
+    raw: sys::ArcadiaTioAxisCoordinateInputV2,
+    _values: PhantomData<&'a AxisCoordinateInputV2>,
+}
+
+impl<'a> PreparedAxisCoordinateInputV2<'a> {
+    fn new(input: &'a AxisCoordinateInputV2) -> Result<Self> {
+        validate_coordinate_input_v2(input)?;
+        let descriptor_id =
+            optional_owned_cstring(&input.descriptor_id, "Coordinate v2 descriptor_id")?;
+        let name = optional_owned_cstring(&input.name, "Coordinate v2 name")?;
+        let dictionary = input
+            .dictionary
+            .as_ref()
+            .map(CoordinateDictionarySummaryV2::prepare)
+            .transpose()?;
+        let dictionary_entries =
+            PreparedCoordinateDictionaryEntriesV2::new(&input.dictionary_entries)?;
+        let external_binding = input
+            .external_binding
+            .as_ref()
+            .map(CoordinateExternalBindingV2::prepare)
+            .transpose()?;
+        let (values, values_len) = input.values.pointer_len_for_axis(input.fixed_text.width)?;
+        let raw = sys::ArcadiaTioAxisCoordinateInputV2 {
+            version: sys::ARCADIA_TIO_COORDINATE_V2_ABI_VERSION,
+            struct_size: mem::size_of::<sys::ArcadiaTioAxisCoordinateInputV2>(),
+            axis: input.axis,
+            descriptor_id: opt_cstring_ptr(&descriptor_id),
+            name: opt_cstring_ptr(&name),
+            kind: input.kind.to_raw(),
+            value_domain: input.value_domain.to_raw(),
+            numeric_dtype: input.numeric_dtype.to_raw(),
+            numeric_encoding: input.numeric_encoding.to_raw(),
+            fixed_text: input.raw_fixed_text_layout(),
+            code_dtype: input.code_dtype.to_raw(),
+            values,
+            values_len,
+            dictionary: dictionary
+                .as_ref()
+                .map_or(ptr::null(), |value| value.raw_ptr()),
+            dictionary_entries: dictionary_entries.ptr(),
+            dictionary_entries_len: dictionary_entries.len(),
+            external_binding: external_binding
+                .as_ref()
+                .map_or(ptr::null(), |value| value.raw_ptr()),
+            sorted: input.ordering.sorted.to_raw(),
+            monotonicity: input.ordering.monotonicity.to_raw(),
+            uniqueness: input.ordering.uniqueness.to_raw(),
+            required: u8::from(input.required),
+            reserved_u8: [0; 7],
+            reserved: [0; 4],
+        };
+        Ok(Self {
+            descriptor_id,
+            name,
+            dictionary,
+            dictionary_entries,
+            external_binding,
+            raw,
+            _values: PhantomData,
+        })
+    }
+
+    /// Returns the raw C ABI input descriptor. Pointers remain valid while `self` is alive.
+    pub fn raw(&self) -> &sys::ArcadiaTioAxisCoordinateInputV2 {
+        &self.raw
+    }
+}
+
+struct PreparedAxisCoordinateInputsV2<'a> {
+    prepared: Vec<PreparedAxisCoordinateInputV2<'a>>,
+    raw: Vec<sys::ArcadiaTioAxisCoordinateInputV2>,
+}
+
+impl<'a> PreparedAxisCoordinateInputsV2<'a> {
+    fn new(inputs: &'a [AxisCoordinateInputV2], rank: usize) -> Result<Self> {
+        for (idx, input) in inputs.iter().enumerate() {
+            if input.axis >= rank {
+                return Err(TioError::invalid_argument(format!(
+                    "Coordinate v2 descriptor {idx} axis out of range"
+                )));
+            }
+        }
+        let prepared = inputs
+            .iter()
+            .map(PreparedAxisCoordinateInputV2::new)
+            .collect::<Result<Vec<_>>>()?;
+        let raw = prepared.iter().map(|item| *item.raw()).collect::<Vec<_>>();
+        Ok(Self { prepared, raw })
+    }
+
+    fn ptr(&self) -> *const sys::ArcadiaTioAxisCoordinateInputV2 {
+        let _keep_alive = &self.prepared;
+        if self.raw.is_empty() {
+            ptr::null()
+        } else {
+            self.raw.as_ptr()
+        }
+    }
+
+    fn len(&self) -> usize {
+        self.raw.len()
+    }
+}
+
+/// Coordinate v2 metadata snapshot copied from native-owned descriptors.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AxisCoordinateMetaV2 {
+    /// Axis index.
+    pub axis: usize,
+    /// Optional axis name snapshot.
+    pub axis_name_snapshot: Option<String>,
+    /// Descriptor identifier.
+    pub descriptor_id: Option<String>,
+    /// Descriptor revision.
+    pub descriptor_revision: u64,
+    /// Optional coordinate name.
+    pub name: Option<String>,
+    /// Coordinate semantic kind.
+    pub kind: CoordinateKind,
+    /// Coordinate value domain.
+    pub value_domain: CoordinateValueDomainV2,
+    /// Numeric dtype.
+    pub numeric_dtype: CoordinateDType,
+    /// Numeric encoding.
+    pub numeric_encoding: CoordinateEncoding,
+    /// Fixed-text layout.
+    pub fixed_text: CoordinateFixedTextLayoutV2,
+    /// Dictionary code dtype.
+    pub code_dtype: CoordinateCodeDTypeV2,
+    /// Coordinate length.
+    pub length: u64,
+    /// Ordering hints.
+    pub ordering: CoordinateOrdering,
+    /// Whether the coordinate is required.
+    pub required: bool,
+    /// Availability status.
+    pub availability: CoordinateAvailabilityV2,
+    /// Status category.
+    pub status_category: CoordinateStatusCategoryV2,
+    /// Status reason.
+    pub reason: Option<String>,
+    /// Dictionary summary.
+    pub dictionary: CoordinateDictionarySummaryV2,
+    /// External binding summary.
+    pub external_binding: CoordinateExternalBindingV2,
+    /// Optional index summaries.
+    pub index_summaries: Vec<CoordinateIndexSummaryV2>,
+}
+
+impl AxisCoordinateMetaV2 {
+    fn from_raw(raw: &sys::ArcadiaTioAxisCoordinateMetaV2) -> Result<Self> {
+        Ok(Self {
+            axis: raw.axis,
+            axis_name_snapshot: optional_c_string(raw.axis_name_snapshot.cast_const()),
+            descriptor_id: optional_c_string(raw.descriptor_id.cast_const()),
+            descriptor_revision: raw.descriptor_revision,
+            name: optional_c_string(raw.name.cast_const()),
+            kind: CoordinateKind::from_raw(raw.kind)?,
+            value_domain: CoordinateValueDomainV2::from_raw(raw.value_domain)?,
+            numeric_dtype: CoordinateDType::from_raw(raw.numeric_dtype)?,
+            numeric_encoding: CoordinateEncoding::from_raw(raw.numeric_encoding)?,
+            fixed_text: CoordinateFixedTextLayoutV2::from_raw(raw.fixed_text)?,
+            code_dtype: CoordinateCodeDTypeV2::from_raw(raw.code_dtype)?,
+            length: raw.length,
+            ordering: CoordinateOrdering {
+                sorted: CoordinateSortedness::from_raw(raw.sorted)?,
+                monotonicity: CoordinateMonotonicity::from_raw(raw.monotonicity)?,
+                uniqueness: CoordinateUniqueness::from_raw(raw.uniqueness)?,
+            },
+            required: raw.required != 0,
+            availability: CoordinateAvailabilityV2::from_raw(raw.availability)?,
+            status_category: CoordinateStatusCategoryV2::from_raw(raw.status_category)?,
+            reason: optional_c_string(raw.reason.cast_const()),
+            dictionary: CoordinateDictionarySummaryV2::from_raw(&raw.dictionary)?,
+            external_binding: CoordinateExternalBindingV2::from_raw(&raw.external_binding)?,
+            index_summaries: copy_coordinate_index_summaries_v2(
+                raw.index_summaries,
+                raw.index_summaries_len,
+            )?,
+        })
+    }
+}
+
+/// Coordinate v2 value-slice result copied into Rust-owned bytes.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CoordinateValueSliceV2 {
+    /// Value domain.
+    pub value_domain: CoordinateValueDomainV2,
+    /// Numeric dtype.
+    pub numeric_dtype: CoordinateDType,
+    /// Numeric encoding.
+    pub numeric_encoding: CoordinateEncoding,
+    /// Dictionary code dtype.
+    pub code_dtype: CoordinateCodeDTypeV2,
+    /// Rust-owned raw value bytes.
+    pub data: Vec<u8>,
+    /// Number of logical values.
+    pub len: usize,
+    /// Element size in bytes.
+    pub element_size: usize,
+    /// Fixed-text width.
+    pub fixed_text_width: usize,
+    /// Availability.
+    pub availability: CoordinateAvailabilityV2,
+    /// Status category.
+    pub status_category: CoordinateStatusCategoryV2,
+    /// Status reason.
+    pub reason: Option<String>,
+}
+
+impl CoordinateValueSliceV2 {
+    /// Copies a raw value-slice carrier into safe Rust-owned bytes.
+    ///
+    /// # Safety
+    ///
+    /// `raw.data` must be valid for `raw.len * raw.element_size` bytes when non-null according to
+    /// the C ABI, and the caller must later release the raw carrier with the matching free function.
+    pub unsafe fn from_raw_borrowed(raw: &sys::ArcadiaTioCoordinateValueSliceV2) -> Result<Self> {
+        let byte_len = raw.len.checked_mul(raw.element_size).ok_or_else(|| {
+            TioError::conversion("Coordinate v2 value slice byte length overflow")
+        })?;
+        let data = if raw.data.is_null() || byte_len == 0 {
+            Vec::new()
+        } else {
+            // SAFETY: Caller guarantees the C ABI value buffer is valid for `byte_len` bytes.
+            unsafe { slice::from_raw_parts(raw.data.cast::<u8>(), byte_len) }.to_vec()
+        };
+        Ok(Self {
+            value_domain: CoordinateValueDomainV2::from_raw(raw.value_domain)?,
+            numeric_dtype: CoordinateDType::from_raw(raw.numeric_dtype)?,
+            numeric_encoding: CoordinateEncoding::from_raw(raw.numeric_encoding)?,
+            code_dtype: CoordinateCodeDTypeV2::from_raw(raw.code_dtype)?,
+            data,
+            len: raw.len,
+            element_size: raw.element_size,
+            fixed_text_width: raw.fixed_text_width,
+            availability: CoordinateAvailabilityV2::from_raw(raw.availability)?,
+            status_category: CoordinateStatusCategoryV2::from_raw(raw.status_category)?,
+            reason: optional_c_string(raw.reason.cast_const()),
+        })
+    }
+}
+
+/// Coordinate v2 typed lookup key.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum CoordinateLookupKeyV2 {
+    /// Signed 32-bit integer key.
+    I32(i32),
+    /// Signed 64-bit integer key.
+    I64(i64),
+    /// Fixed-width byte key.
+    FixedText { bytes: Vec<u8>, width: usize },
+    /// Dictionary code key.
+    DictionaryCode(u64),
+    /// Dictionary stable-id key.
+    StableId(String),
+    /// Dictionary display-label key.
+    DisplayLabel(String),
+    /// Dictionary alias key.
+    Alias(String),
+    /// Raw integer time key.
+    RawTime(i64),
+}
+
+impl CoordinateLookupKeyV2 {
+    /// Builds a signed 32-bit integer lookup key.
+    pub fn i32(value: i32) -> Self {
+        Self::I32(value)
+    }
+
+    /// Builds a signed 64-bit integer lookup key.
+    pub fn i64(value: i64) -> Self {
+        Self::I64(value)
+    }
+
+    /// Builds a fixed-width ASCII byte lookup key with an explicit descriptor width.
+    ///
+    /// The bytes are logical fixed-text bytes; the native Coordinate v2 lookup normalizes them
+    /// against the selected descriptor width and right-space padding. Variable-length string,
+    /// collation, and case-folding semantics are intentionally not inferred here.
+    pub fn fixed_text_bytes(bytes: impl Into<Vec<u8>>, width: usize) -> Result<Self> {
+        let bytes = bytes.into();
+        validate_fixed_text_lookup_key(bytes.len(), width)?;
+        if !bytes.is_ascii() {
+            return Err(TioError::invalid_argument(
+                "Coordinate v2 fixed-text lookup keys must be ASCII bytes",
+            ));
+        }
+        Ok(Self::FixedText { bytes, width })
+    }
+
+    /// Builds a fixed-width ASCII text lookup key with an explicit descriptor width.
+    ///
+    /// This accepts only raw ASCII logical text. Variable-length strings, Unicode
+    /// normalization, locale/collation, and case folding remain deferred.
+    pub fn fixed_text_ascii(value: impl AsRef<str>, width: usize) -> Result<Self> {
+        Self::fixed_text_bytes(value.as_ref().as_bytes().to_vec(), width)
+    }
+
+    /// Builds a dictionary-code lookup key.
+    pub fn dictionary_code(code: u64) -> Self {
+        Self::DictionaryCode(code)
+    }
+
+    /// Builds a dictionary stable-id lookup key.
+    pub fn stable_id(value: impl Into<String>) -> Self {
+        Self::StableId(value.into())
+    }
+
+    /// Builds a dictionary display-label lookup key.
+    pub fn display_label(value: impl Into<String>) -> Self {
+        Self::DisplayLabel(value.into())
+    }
+
+    /// Builds a dictionary alias lookup key.
+    ///
+    /// Alias lookup is represented because the raw C ABI has a stable key domain for it; current
+    /// native implementations may return an ordinary unsupported lookup result for descriptors that
+    /// do not support alias lookup.
+    pub fn alias(value: impl Into<String>) -> Self {
+        Self::Alias(value.into())
+    }
+
+    /// Builds a raw encoded time lookup key.
+    ///
+    /// The value is passed as an integer key only. Calendar/session/timezone/leap-second
+    /// interpretation is deliberately not implemented by the public Rust wrapper.
+    pub fn raw_time_i64(raw_encoded_value: i64) -> Self {
+        Self::RawTime(raw_encoded_value)
+    }
+
+    /// Rejects unsupported variable-string lookup semantics explicitly.
+    pub fn variable_string(_value: impl AsRef<str>) -> Result<Self> {
+        Err(TioError::unimplemented(
+            "Coordinate v2 variable-length string lookup semantics are not supported by the public Rust wrapper",
+        ))
+    }
+
+    /// Rejects unsupported calendar-aware lookup semantics explicitly.
+    pub fn calendar_time(_value: impl AsRef<str>) -> Result<Self> {
+        Err(TioError::unimplemented(
+            "Coordinate v2 calendar-aware lookup semantics are not supported; use raw_time_i64 for raw encoded values",
+        ))
+    }
+
+    /// Rejects unsupported external resolver lookup semantics explicitly.
+    pub fn external_resolver(_value: impl AsRef<str>) -> Result<Self> {
+        Err(TioError::unimplemented(
+            "Coordinate v2 external resolver lookup semantics are not supported by the public Rust wrapper",
+        ))
+    }
+
+    /// Prepares a raw lookup key with pointer fields borrowing from this prepared object.
+    pub fn prepare(&self) -> Result<PreparedCoordinateLookupKeyV2<'_>> {
+        PreparedCoordinateLookupKeyV2::new(self)
+    }
+}
+
+/// Prepared Coordinate v2 lookup key.
+pub struct PreparedCoordinateLookupKeyV2<'a> {
+    text: Option<CString>,
+    raw: sys::ArcadiaTioCoordinateLookupKeyV2,
+    _bytes: PhantomData<&'a CoordinateLookupKeyV2>,
+}
+
+impl<'a> PreparedCoordinateLookupKeyV2<'a> {
+    fn new(key: &'a CoordinateLookupKeyV2) -> Result<Self> {
+        let mut raw = sys::ArcadiaTioCoordinateLookupKeyV2 {
+            version: sys::ARCADIA_TIO_COORDINATE_V2_ABI_VERSION,
+            struct_size: mem::size_of::<sys::ArcadiaTioCoordinateLookupKeyV2>(),
+            key_domain: sys::ARCADIA_TIO_COORDINATE_KEY_DOMAIN_V2_I32,
+            i32_value: 0,
+            i64_value: 0,
+            code_value: 0,
+            bytes: ptr::null(),
+            bytes_len: 0,
+            fixed_text_width: 0,
+            text: ptr::null(),
+            reserved: [0; 4],
+        };
+        let text = match key {
+            CoordinateLookupKeyV2::I32(value) => {
+                raw.key_domain = CoordinateKeyDomainV2::I32.to_raw();
+                raw.i32_value = *value;
+                None
+            }
+            CoordinateLookupKeyV2::I64(value) => {
+                raw.key_domain = CoordinateKeyDomainV2::I64.to_raw();
+                raw.i64_value = *value;
+                None
+            }
+            CoordinateLookupKeyV2::FixedText { bytes, width } => {
+                validate_fixed_text_lookup_key(bytes.len(), *width)?;
+                raw.key_domain = CoordinateKeyDomainV2::FixedText.to_raw();
+                raw.bytes = buffer_ptr_for_count(bytes, bytes.len()).cast::<u8>();
+                raw.bytes_len = bytes.len();
+                raw.fixed_text_width = *width;
+                None
+            }
+            CoordinateLookupKeyV2::DictionaryCode(value) => {
+                raw.key_domain = CoordinateKeyDomainV2::DictionaryCode.to_raw();
+                raw.code_value = *value;
+                None
+            }
+            CoordinateLookupKeyV2::StableId(value) => {
+                let cstr = string_to_cstring(value, "Coordinate v2 stable-id lookup key")?;
+                raw.key_domain = CoordinateKeyDomainV2::StableId.to_raw();
+                raw.text = cstr.as_ptr();
+                Some(cstr)
+            }
+            CoordinateLookupKeyV2::DisplayLabel(value) => {
+                let cstr = string_to_cstring(value, "Coordinate v2 display-label lookup key")?;
+                raw.key_domain = CoordinateKeyDomainV2::DisplayLabel.to_raw();
+                raw.text = cstr.as_ptr();
+                Some(cstr)
+            }
+            CoordinateLookupKeyV2::Alias(value) => {
+                let cstr = string_to_cstring(value, "Coordinate v2 alias lookup key")?;
+                raw.key_domain = CoordinateKeyDomainV2::Alias.to_raw();
+                raw.text = cstr.as_ptr();
+                Some(cstr)
+            }
+            CoordinateLookupKeyV2::RawTime(value) => {
+                raw.key_domain = CoordinateKeyDomainV2::RawTime.to_raw();
+                raw.i64_value = *value;
+                None
+            }
+        };
+        Ok(Self {
+            text,
+            raw,
+            _bytes: PhantomData,
+        })
+    }
+
+    /// Returns the raw C ABI lookup key. Pointers remain valid while `self` is alive.
+    pub fn raw(&self) -> &sys::ArcadiaTioCoordinateLookupKeyV2 {
+        &self.raw
+    }
+}
+
+/// Coordinate v2 lookup result copied into Rust-owned vectors/strings.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CoordinateLookupResultV2 {
+    /// Lookup result status.
+    pub status: CoordinateLookupResultStatusV2,
+    /// Status category.
+    pub status_category: CoordinateStatusCategoryV2,
+    /// Unique position.
+    pub unique_position: u32,
+    /// Half-open range start.
+    pub range_start: u32,
+    /// Half-open range end.
+    pub range_end: u32,
+    /// Many-result positions.
+    pub positions: Vec<u32>,
+    /// Availability.
+    pub availability: CoordinateAvailabilityV2,
+    /// Status reason.
+    pub reason: Option<String>,
+}
+
+impl CoordinateLookupResultV2 {
+    /// Returns true when this result carries one unique position.
+    pub fn is_unique(&self) -> bool {
+        self.status == CoordinateLookupResultStatusV2::Unique
+    }
+
+    /// Returns true when this result carries a half-open range.
+    pub fn is_range(&self) -> bool {
+        self.status == CoordinateLookupResultStatusV2::Range
+    }
+
+    /// Returns true when this result carries many positions.
+    pub fn is_many(&self) -> bool {
+        self.status == CoordinateLookupResultStatusV2::Many
+    }
+
+    /// Returns true when the key is missing.
+    pub fn is_missing(&self) -> bool {
+        self.status == CoordinateLookupResultStatusV2::Missing
+    }
+
+    /// Returns true when coordinate data is unavailable for the selected root.
+    pub fn is_unavailable(&self) -> bool {
+        self.status == CoordinateLookupResultStatusV2::Unavailable
+    }
+
+    /// Returns true when a unique lookup found duplicates.
+    pub fn is_duplicate(&self) -> bool {
+        self.status == CoordinateLookupResultStatusV2::Duplicate
+    }
+
+    /// Returns true when the lookup domain/operation is unsupported.
+    pub fn is_unsupported(&self) -> bool {
+        self.status == CoordinateLookupResultStatusV2::Unsupported
+    }
+
+    /// Returns true when the raw lookup reports an ordinary error-status result.
+    pub fn is_error(&self) -> bool {
+        self.status == CoordinateLookupResultStatusV2::Error
+    }
+
+    /// Returns the unique position when this result is unique.
+    pub fn unique_position(&self) -> Option<u32> {
+        self.is_unique().then_some(self.unique_position)
+    }
+
+    /// Returns the half-open range when this result is a range result.
+    pub fn range(&self) -> Option<Range<u32>> {
+        self.is_range().then_some(self.range_start..self.range_end)
+    }
+
+    /// Returns many-result positions when this result carries many positions.
+    pub fn many_positions(&self) -> Option<&[u32]> {
+        self.is_many().then_some(self.positions.as_slice())
+    }
+
+    /// Copies a raw lookup result into safe Rust-owned values.
+    ///
+    /// # Safety
+    ///
+    /// `raw.positions` must be valid for `raw.positions_len` entries when non-null according to
+    /// the C ABI, and the caller must later release the raw carrier with the matching free function.
+    pub unsafe fn from_raw_borrowed(raw: &sys::ArcadiaTioCoordinateLookupResultV2) -> Result<Self> {
+        let positions = if raw.positions.is_null() || raw.positions_len == 0 {
+            Vec::new()
+        } else {
+            // SAFETY: Caller guarantees the C ABI positions buffer is valid for `positions_len`.
+            unsafe { slice::from_raw_parts(raw.positions, raw.positions_len) }.to_vec()
+        };
+        Ok(Self {
+            status: CoordinateLookupResultStatusV2::from_raw(raw.status)?,
+            status_category: CoordinateStatusCategoryV2::from_raw(raw.status_category)?,
+            unique_position: raw.unique_position,
+            range_start: raw.range_start,
+            range_end: raw.range_end,
+            positions,
+            availability: CoordinateAvailabilityV2::from_raw(raw.availability)?,
+            reason: optional_c_string(raw.reason.cast_const()),
+        })
+    }
+}
+
+/// Coordinate v2 append coordinate entry.
+///
+/// Safe builders own the coordinate buffers. During `prepare`, raw C ABI pointers borrow from
+/// these Rust-owned buffers and from prepared descriptor/name strings; those borrowed pointers are
+/// valid only while the returned `PreparedAppendCoordinateBatchV2` and this source batch remain
+/// alive. Append-with-coordinate methods prepare a batch and call the C ABI synchronously without
+/// storing the borrowed pointers.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AppendCoordinateEntryV2 {
+    /// Axis index.
+    pub axis: usize,
+    /// Optional descriptor identifier.
+    pub descriptor_id: Option<String>,
+    /// Optional coordinate name.
+    pub name: Option<String>,
+    /// Value domain.
+    pub value_domain: CoordinateValueDomainV2,
+    /// Numeric dtype.
+    pub numeric_dtype: CoordinateDType,
+    /// Numeric encoding.
+    pub numeric_encoding: CoordinateEncoding,
+    /// Dictionary code dtype.
+    pub code_dtype: CoordinateCodeDTypeV2,
+    /// Append values.
+    pub values: CoordinateInputValuesV2,
+    /// Fixed-text width for fixed-text append values.
+    pub fixed_text_width: usize,
+}
+
+impl AppendCoordinateEntryV2 {
+    /// Creates an i32 append-coordinate entry from Rust-owned coordinate values.
+    pub fn i32(axis: usize, values: Vec<i32>) -> Self {
+        Self {
+            axis,
+            descriptor_id: None,
+            name: None,
+            value_domain: CoordinateValueDomainV2::InlineNumeric,
+            numeric_dtype: CoordinateDType::I32,
+            numeric_encoding: CoordinateEncoding::Plain,
+            code_dtype: CoordinateCodeDTypeV2::U32,
+            values: CoordinateInputValuesV2::I32(values),
+            fixed_text_width: 0,
+        }
+    }
+
+    /// Creates an i64 append-coordinate entry from Rust-owned coordinate values.
+    pub fn i64(axis: usize, values: Vec<i64>) -> Self {
+        Self {
+            numeric_dtype: CoordinateDType::I64,
+            values: CoordinateInputValuesV2::I64(values),
+            ..Self::i32(axis, Vec::new())
+        }
+    }
+
+    /// Creates a fixed-width ASCII/right-space-padded append-coordinate entry from raw bytes.
+    ///
+    /// `bytes` must contain exactly `count * layout.width` bytes. NUL termination, variable-length
+    /// strings, Unicode normalization, locale/collation, and case folding are not inferred.
+    pub fn fixed_text_bytes(
+        axis: usize,
+        layout: CoordinateFixedTextLayoutV2,
+        bytes: Vec<u8>,
+    ) -> Result<Self> {
+        validate_fixed_text_bytes_v2(&bytes, layout)?;
+        Ok(Self {
+            axis,
+            descriptor_id: None,
+            name: None,
+            value_domain: CoordinateValueDomainV2::FixedText,
+            numeric_dtype: CoordinateDType::I32,
+            numeric_encoding: CoordinateEncoding::Plain,
+            code_dtype: CoordinateCodeDTypeV2::U32,
+            values: CoordinateInputValuesV2::FixedText(bytes),
+            fixed_text_width: layout.width,
+        })
+    }
+
+    /// Creates a fixed-width ASCII append-coordinate entry, right-padding each logical value.
+    pub fn fixed_text_ascii<I, S>(axis: usize, width: usize, values: I) -> Result<Self>
+    where
+        I: IntoIterator<Item = S>,
+        S: AsRef<str>,
+    {
+        let layout = CoordinateFixedTextLayoutV2::ascii_right_space_padded(width)?;
+        let bytes = encode_fixed_text_ascii_values(width, values)?;
+        Self::fixed_text_bytes(axis, layout, bytes)
+    }
+
+    /// Creates a dictionary-code append-coordinate entry from Rust-owned code values.
+    ///
+    /// The codes must refer to entries in the descriptor-bound dictionary revision. Append-time
+    /// dictionary extension is intentionally not implemented by this public Rust wrapper.
+    pub fn dictionary_codes(
+        axis: usize,
+        code_dtype: CoordinateCodeDTypeV2,
+        values: CoordinateInputValuesV2,
+    ) -> Result<Self> {
+        validate_dictionary_values_v2(&values, code_dtype)?;
+        Ok(Self {
+            axis,
+            descriptor_id: None,
+            name: None,
+            value_domain: CoordinateValueDomainV2::DictionaryCode,
+            numeric_dtype: CoordinateDType::I32,
+            numeric_encoding: CoordinateEncoding::Plain,
+            code_dtype,
+            values,
+            fixed_text_width: 0,
+        })
+    }
+
+    /// Creates a dictionary-code append-coordinate entry with `u8` codes.
+    pub fn dictionary_codes_u8(axis: usize, values: Vec<u8>) -> Result<Self> {
+        Self::dictionary_codes(
+            axis,
+            CoordinateCodeDTypeV2::U8,
+            CoordinateInputValuesV2::CodesU8(values),
+        )
+    }
+
+    /// Creates a dictionary-code append-coordinate entry with `u16` codes.
+    pub fn dictionary_codes_u16(axis: usize, values: Vec<u16>) -> Result<Self> {
+        Self::dictionary_codes(
+            axis,
+            CoordinateCodeDTypeV2::U16,
+            CoordinateInputValuesV2::CodesU16(values),
+        )
+    }
+
+    /// Creates a dictionary-code append-coordinate entry with `u32` codes.
+    pub fn dictionary_codes_u32(axis: usize, values: Vec<u32>) -> Result<Self> {
+        Self::dictionary_codes(
+            axis,
+            CoordinateCodeDTypeV2::U32,
+            CoordinateInputValuesV2::CodesU32(values),
+        )
+    }
+
+    /// Creates a dictionary-code append-coordinate entry with `u64` codes.
+    pub fn dictionary_codes_u64(axis: usize, values: Vec<u64>) -> Result<Self> {
+        Self::dictionary_codes(
+            axis,
+            CoordinateCodeDTypeV2::U64,
+            CoordinateInputValuesV2::CodesU64(values),
+        )
+    }
+
+    /// Sets the descriptor identifier used to match a specific append-axis descriptor.
+    pub fn with_descriptor_id(mut self, descriptor_id: impl Into<String>) -> Self {
+        self.descriptor_id = Some(descriptor_id.into());
+        self
+    }
+
+    /// Sets the coordinate name used to match a specific append-axis descriptor.
+    pub fn with_name(mut self, name: impl Into<String>) -> Self {
+        self.name = Some(name.into());
+        self
+    }
+
+    /// Sets numeric encoding metadata for numeric append entries.
+    pub fn with_numeric_encoding(mut self, encoding: CoordinateEncoding) -> Self {
+        self.numeric_encoding = encoding;
+        self
+    }
+
+    /// Rejects unsupported variable-length string append-coordinate semantics explicitly.
+    pub fn variable_string<I, S>(_axis: usize, _values: I) -> Result<Self>
+    where
+        I: IntoIterator<Item = S>,
+        S: AsRef<str>,
+    {
+        Err(TioError::unimplemented(
+            "Coordinate v2 variable-length string append semantics are not supported by the public Rust wrapper; use fixed_text_ascii/fixed_text_bytes for fixed-width ASCII values",
+        ))
+    }
+
+    /// Rejects unsupported external append-value resolution explicitly.
+    pub fn external_reference(_axis: usize) -> Result<Self> {
+        Err(TioError::unimplemented(
+            "Coordinate v2 append-time external coordinate values are not supported by the public Rust wrapper",
+        ))
+    }
+
+    /// Rejects unsupported append-time dictionary extension explicitly.
+    pub fn dictionary_extension(_axis: usize) -> Result<Self> {
+        Err(TioError::unimplemented(
+            "Coordinate v2 append-time dictionary extension is not supported by the public Rust wrapper; append dictionary codes must already exist in the descriptor-bound dictionary revision",
+        ))
+    }
+
+    /// Rejects treating optional indexes as authoritative append-coordinate truth explicitly.
+    pub fn index_authority(_axis: usize) -> Result<Self> {
+        Err(TioError::unimplemented(
+            "Coordinate v2 optional indexes are not authoritative append-coordinate values in the public Rust wrapper",
+        ))
+    }
+}
+
+/// Coordinate v2 append coordinate batch.
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct AppendCoordinateBatchV2 {
+    /// Append-coordinate entries.
+    pub entries: Vec<AppendCoordinateEntryV2>,
+}
+
+impl AppendCoordinateBatchV2 {
+    /// Creates an append-coordinate batch from Rust-owned entries.
+    pub fn new(entries: Vec<AppendCoordinateEntryV2>) -> Self {
+        Self { entries }
+    }
+
+    /// Creates an empty append-coordinate batch.
+    pub fn empty() -> Self {
+        Self::default()
+    }
+
+    /// Appends one coordinate entry to this batch.
+    pub fn push(&mut self, entry: AppendCoordinateEntryV2) {
+        self.entries.push(entry);
+    }
+
+    /// Returns the append-coordinate entries.
+    pub fn entries(&self) -> &[AppendCoordinateEntryV2] {
+        &self.entries
+    }
+
+    /// Returns the number of append-coordinate entries in the batch.
+    pub fn len(&self) -> usize {
+        self.entries.len()
+    }
+
+    /// Returns true when the batch carries no append-coordinate entries.
+    pub fn is_empty(&self) -> bool {
+        self.entries.is_empty()
+    }
+
+    /// Prepares a raw append batch with borrowed pointers valid while the prepared object lives.
+    ///
+    /// The raw batch borrows coordinate value buffers from `self.entries` and must be consumed by a
+    /// single synchronous C ABI append call before either `self` or the prepared batch is dropped.
+    pub fn prepare(&self) -> Result<PreparedAppendCoordinateBatchV2<'_>> {
+        PreparedAppendCoordinateBatchV2::new(self)
+    }
+}
+
+/// Prepared Coordinate v2 append-coordinate batch.
+///
+/// This object owns the raw entry array and prepared descriptor/name C strings while borrowing the
+/// coordinate value buffers from the source `AppendCoordinateBatchV2`. The raw pointers returned by
+/// `raw()` must not outlive this prepared object or the source batch.
+pub struct PreparedAppendCoordinateBatchV2<'a> {
+    entries: Vec<PreparedAppendCoordinateEntryV2<'a>>,
+    raw_entries: Vec<sys::ArcadiaTioAppendCoordinateEntryV2>,
+    raw: sys::ArcadiaTioAppendCoordinateBatchV2,
+    _batch: PhantomData<&'a AppendCoordinateBatchV2>,
+}
+
+impl<'a> PreparedAppendCoordinateBatchV2<'a> {
+    fn new(batch: &'a AppendCoordinateBatchV2) -> Result<Self> {
+        let entries = batch
+            .entries
+            .iter()
+            .map(PreparedAppendCoordinateEntryV2::new)
+            .collect::<Result<Vec<_>>>()?;
+        let raw_entries = entries.iter().map(|entry| entry.raw).collect::<Vec<_>>();
+        let raw = sys::ArcadiaTioAppendCoordinateBatchV2 {
+            version: sys::ARCADIA_TIO_COORDINATE_V2_ABI_VERSION,
+            struct_size: mem::size_of::<sys::ArcadiaTioAppendCoordinateBatchV2>(),
+            entries: if raw_entries.is_empty() {
+                ptr::null()
+            } else {
+                raw_entries.as_ptr()
+            },
+            entries_len: raw_entries.len(),
+            reserved: [0; 4],
+        };
+        Ok(Self {
+            entries,
+            raw_entries,
+            raw,
+            _batch: PhantomData,
+        })
+    }
+
+    /// Returns the raw C ABI append batch. Pointers remain valid while `self` is alive.
+    pub fn raw(&self) -> &sys::ArcadiaTioAppendCoordinateBatchV2 {
+        &self.raw
+    }
+}
+
+struct PreparedAppendCoordinateEntryV2<'a> {
+    descriptor_id: Option<CString>,
+    name: Option<CString>,
+    raw: sys::ArcadiaTioAppendCoordinateEntryV2,
+    _entry: PhantomData<&'a AppendCoordinateEntryV2>,
+}
+
+impl<'a> PreparedAppendCoordinateEntryV2<'a> {
+    fn new(entry: &'a AppendCoordinateEntryV2) -> Result<Self> {
+        validate_append_entry_v2(entry)?;
+        let descriptor_id =
+            optional_owned_cstring(&entry.descriptor_id, "Coordinate v2 append descriptor_id")?;
+        let name = optional_owned_cstring(&entry.name, "Coordinate v2 append name")?;
+        let (values, count, element_size) = entry
+            .values
+            .pointer_count_element_size(entry.fixed_text_width)?;
+        let values = if count == 0 { ptr::null() } else { values };
+        Ok(Self {
+            raw: sys::ArcadiaTioAppendCoordinateEntryV2 {
+                version: sys::ARCADIA_TIO_COORDINATE_V2_ABI_VERSION,
+                struct_size: mem::size_of::<sys::ArcadiaTioAppendCoordinateEntryV2>(),
+                axis: entry.axis,
+                descriptor_id: opt_cstring_ptr(&descriptor_id),
+                name: opt_cstring_ptr(&name),
+                value_domain: entry.value_domain.to_raw(),
+                numeric_dtype: entry.numeric_dtype.to_raw(),
+                numeric_encoding: entry.numeric_encoding.to_raw(),
+                code_dtype: entry.code_dtype.to_raw(),
+                values,
+                count,
+                element_size,
+                fixed_text_width: entry.fixed_text_width,
+                reserved: [0; 4],
+            },
+            descriptor_id,
+            name,
+            _entry: PhantomData,
+        })
+    }
+}
+
+struct PreparedCoordinateDictionarySummaryV2 {
+    dictionary_id: Option<CString>,
+    content_id: Option<CString>,
+    raw: Box<sys::ArcadiaTioCoordinateDictionarySummaryV2>,
+}
+
+impl PreparedCoordinateDictionarySummaryV2 {
+    fn new(summary: &CoordinateDictionarySummaryV2) -> Result<Self> {
+        let dictionary_id =
+            optional_owned_cstring(&summary.dictionary_id, "Coordinate v2 dictionary_id")?;
+        let content_id =
+            optional_owned_cstring(&summary.content_id, "Coordinate v2 dictionary content_id")?;
+        let raw = Box::new(sys::ArcadiaTioCoordinateDictionarySummaryV2 {
+            version: sys::ARCADIA_TIO_COORDINATE_V2_ABI_VERSION,
+            struct_size: mem::size_of::<sys::ArcadiaTioCoordinateDictionarySummaryV2>(),
+            dictionary_id: opt_cstring_ptr(&dictionary_id),
+            revision: summary.revision,
+            code_dtype: summary.code_dtype.to_raw(),
+            entry_count: summary.entry_count,
+            stable_ids_unique: u8::from(summary.stable_ids_unique),
+            display_labels_unique: u8::from(summary.display_labels_unique),
+            aliases_unique: u8::from(summary.aliases_unique),
+            codes_stable_across_revisions: u8::from(summary.codes_stable_across_revisions),
+            reserved_u8: [0; 4],
+            content_id: opt_cstring_ptr(&content_id),
+            reserved: [0; 2],
+        });
+        Ok(Self {
+            dictionary_id,
+            content_id,
+            raw,
+        })
+    }
+
+    fn raw_ptr(&self) -> *const sys::ArcadiaTioCoordinateDictionarySummaryV2 {
+        self.raw.as_ref()
+    }
+}
+
+struct PreparedCoordinateExternalBindingV2 {
+    logical_id: Option<CString>,
+    privacy_safe_display: Option<CString>,
+    content_id: Option<CString>,
+    raw: Box<sys::ArcadiaTioCoordinateExternalBindingV2>,
+}
+
+impl PreparedCoordinateExternalBindingV2 {
+    fn new(binding: &CoordinateExternalBindingV2) -> Result<Self> {
+        let logical_id =
+            optional_owned_cstring(&binding.logical_id, "Coordinate v2 external logical_id")?;
+        let privacy_safe_display = optional_owned_cstring(
+            &binding.privacy_safe_display,
+            "Coordinate v2 external privacy_safe_display",
+        )?;
+        let content_id =
+            optional_owned_cstring(&binding.content_id, "Coordinate v2 external content_id")?;
+        let raw = Box::new(sys::ArcadiaTioCoordinateExternalBindingV2 {
+            version: sys::ARCADIA_TIO_COORDINATE_V2_ABI_VERSION,
+            struct_size: mem::size_of::<sys::ArcadiaTioCoordinateExternalBindingV2>(),
+            source_kind: binding.source_kind.to_raw(),
+            logical_id: opt_cstring_ptr(&logical_id),
+            privacy_safe_display: opt_cstring_ptr(&privacy_safe_display),
+            content_id: opt_cstring_ptr(&content_id),
+            value_domain: binding.value_domain.to_raw(),
+            length: binding.length,
+            availability: binding.availability.to_raw(),
+            status_category: binding.status_category.to_raw(),
+            required: u8::from(binding.required),
+            reserved_u8: [0; 7],
+            reserved: [0; 2],
+        });
+        Ok(Self {
+            logical_id,
+            privacy_safe_display,
+            content_id,
+            raw,
+        })
+    }
+
+    fn raw_ptr(&self) -> *const sys::ArcadiaTioCoordinateExternalBindingV2 {
+        self.raw.as_ref()
+    }
+}
+
+#[derive(Default)]
+struct PreparedCoordinateDictionaryEntriesV2 {
+    stable_ids: Vec<Option<CString>>,
+    display_labels: Vec<Option<CString>>,
+    aliases: Vec<Vec<CString>>,
+    alias_ptrs: Vec<Vec<*mut c_char>>,
+    raw: Vec<sys::ArcadiaTioCoordinateDictionaryEntryV2>,
+}
+
+impl PreparedCoordinateDictionaryEntriesV2 {
+    fn new(entries: &[CoordinateDictionaryEntryV2]) -> Result<Self> {
+        let stable_ids = entries
+            .iter()
+            .map(|entry| {
+                optional_owned_cstring(&entry.stable_id, "Coordinate v2 dictionary stable_id")
+            })
+            .collect::<Result<Vec<_>>>()?;
+        let display_labels = entries
+            .iter()
+            .map(|entry| {
+                optional_owned_cstring(
+                    &entry.display_label,
+                    "Coordinate v2 dictionary display_label",
+                )
+            })
+            .collect::<Result<Vec<_>>>()?;
+        let aliases = entries
+            .iter()
+            .map(|entry| {
+                entry
+                    .aliases
+                    .iter()
+                    .map(|alias| string_to_cstring(alias, "Coordinate v2 dictionary alias"))
+                    .collect::<Result<Vec<_>>>()
+            })
+            .collect::<Result<Vec<_>>>()?;
+        let mut alias_ptrs = aliases
+            .iter()
+            .map(|items| {
+                items
+                    .iter()
+                    .map(|item| item.as_ptr() as *mut c_char)
+                    .collect::<Vec<_>>()
+            })
+            .collect::<Vec<_>>();
+        let raw = entries
+            .iter()
+            .enumerate()
+            .map(|(idx, entry)| sys::ArcadiaTioCoordinateDictionaryEntryV2 {
+                version: sys::ARCADIA_TIO_COORDINATE_V2_ABI_VERSION,
+                struct_size: mem::size_of::<sys::ArcadiaTioCoordinateDictionaryEntryV2>(),
+                code: entry.code,
+                stable_id: opt_cstring_mut_ptr(&stable_ids[idx]),
+                display_label: opt_cstring_mut_ptr(&display_labels[idx]),
+                aliases: if alias_ptrs[idx].is_empty() {
+                    ptr::null_mut()
+                } else {
+                    alias_ptrs[idx].as_mut_ptr()
+                },
+                aliases_len: alias_ptrs[idx].len(),
+                reserved: [0; 2],
+            })
+            .collect::<Vec<_>>();
+        Ok(Self {
+            stable_ids,
+            display_labels,
+            aliases,
+            alias_ptrs,
+            raw,
+        })
+    }
+
+    fn ptr(&self) -> *const sys::ArcadiaTioCoordinateDictionaryEntryV2 {
+        if self.raw.is_empty() {
+            ptr::null()
+        } else {
+            self.raw.as_ptr()
+        }
+    }
+
+    fn len(&self) -> usize {
+        self.raw.len()
+    }
+}
+
+fn default_coordinate_v2_descriptor_id(axis: usize, suffix: &str) -> String {
+    format!("axis{axis}-{suffix}")
+}
+
+fn encode_fixed_text_ascii_values<I, S>(width: usize, values: I) -> Result<Vec<u8>>
+where
+    I: IntoIterator<Item = S>,
+    S: AsRef<str>,
+{
+    let layout = CoordinateFixedTextLayoutV2::ascii_right_space_padded(width)?;
+    let mut encoded = Vec::new();
+    for value in values {
+        let bytes = value.as_ref().as_bytes();
+        if bytes.len() > width {
+            return Err(TioError::invalid_argument(
+                "Coordinate v2 fixed-text value exceeds declared width",
+            ));
+        }
+        if layout.reject_non_ascii && !bytes.is_ascii() {
+            return Err(TioError::invalid_argument(
+                "Coordinate v2 fixed-text values must be ASCII",
+            ));
+        }
+        encoded.extend_from_slice(bytes);
+        encoded.extend(std::iter::repeat_n(b' ', width - bytes.len()));
+    }
+    Ok(encoded)
+}
+
+fn validate_fixed_text_layout_v2(layout: CoordinateFixedTextLayoutV2) -> Result<()> {
+    if layout.width == 0 {
+        return Err(TioError::invalid_argument(
+            "Coordinate v2 fixed-text width must be > 0",
+        ));
+    }
+    if layout.encoding != CoordinateFixedTextEncodingV2::Ascii {
+        return Err(TioError::invalid_argument(
+            "Coordinate v2 public Rust wrappers currently support only ASCII fixed text",
+        ));
+    }
+    if layout.padding != CoordinateFixedTextPaddingV2::RightSpace {
+        return Err(TioError::invalid_argument(
+            "Coordinate v2 public Rust wrappers currently support only right-space padding",
+        ));
+    }
+    Ok(())
+}
+
+fn validate_fixed_text_bytes_v2(bytes: &[u8], layout: CoordinateFixedTextLayoutV2) -> Result<()> {
+    validate_fixed_text_layout_v2(layout)?;
+    fixed_text_value_count(bytes.len(), layout.width)?;
+    if layout.reject_non_ascii && !bytes.is_ascii() {
+        return Err(TioError::invalid_argument(
+            "Coordinate v2 fixed-text values must be ASCII",
+        ));
+    }
+    Ok(())
+}
+
+fn validate_dictionary_values_v2(
+    values: &CoordinateInputValuesV2,
+    code_dtype: CoordinateCodeDTypeV2,
+) -> Result<()> {
+    match (values, code_dtype) {
+        (CoordinateInputValuesV2::CodesU8(_), CoordinateCodeDTypeV2::U8)
+        | (CoordinateInputValuesV2::CodesU16(_), CoordinateCodeDTypeV2::U16)
+        | (CoordinateInputValuesV2::CodesU32(_), CoordinateCodeDTypeV2::U32)
+        | (CoordinateInputValuesV2::CodesU64(_), CoordinateCodeDTypeV2::U64) => Ok(()),
+        _ => Err(TioError::invalid_argument(
+            "Coordinate v2 dictionary-code values must match code_dtype",
+        )),
+    }
+}
+
+fn validate_dictionary_descriptor_v2(input: &AxisCoordinateInputV2) -> Result<()> {
+    let Some(dictionary) = &input.dictionary else {
+        return Err(TioError::invalid_argument(
+            "Coordinate v2 dictionary-code descriptors require dictionary metadata",
+        ));
+    };
+    if dictionary
+        .dictionary_id
+        .as_deref()
+        .is_none_or(|value| value.is_empty())
+    {
+        return Err(TioError::invalid_argument(
+            "Coordinate v2 dictionary-code descriptors require a non-empty dictionary_id",
+        ));
+    }
+    if input.dictionary_entries.is_empty() {
+        return Err(TioError::invalid_argument(
+            "Coordinate v2 dictionary-code descriptors require at least one dictionary entry",
+        ));
+    }
+    if dictionary.entry_count != input.dictionary_entries.len() as u64 {
+        return Err(TioError::invalid_argument(
+            "Coordinate v2 dictionary entry_count must match dictionary_entries length",
+        ));
+    }
+    for (idx, entry) in input.dictionary_entries.iter().enumerate() {
+        if entry
+            .stable_id
+            .as_deref()
+            .is_none_or(|value| value.is_empty())
+        {
+            return Err(TioError::invalid_argument(format!(
+                "Coordinate v2 dictionary entry {idx} requires a non-empty stable_id"
+            )));
+        }
+        if entry
+            .display_label
+            .as_deref()
+            .is_none_or(|value| value.is_empty())
+        {
+            return Err(TioError::invalid_argument(format!(
+                "Coordinate v2 dictionary entry {idx} requires a non-empty display_label"
+            )));
+        }
+        if entry.aliases.iter().any(|alias| alias.is_empty()) {
+            return Err(TioError::invalid_argument(format!(
+                "Coordinate v2 dictionary entry {idx} aliases cannot be empty"
+            )));
+        }
+    }
+    if dictionary.code_dtype != input.code_dtype {
+        return Err(TioError::invalid_argument(
+            "Coordinate v2 dictionary summary code_dtype must match descriptor code_dtype",
+        ));
+    }
+    validate_fixed_text_layout_v2(input.fixed_text)?;
+    Ok(())
+}
+
+fn validate_external_binding_v2(binding: &CoordinateExternalBindingV2) -> Result<()> {
+    let Some(logical_id) = binding.logical_id.as_deref() else {
+        return Err(TioError::invalid_argument(
+            "Coordinate v2 external-reference descriptors require a non-empty logical_id",
+        ));
+    };
+    if logical_id.is_empty() {
+        return Err(TioError::invalid_argument(
+            "Coordinate v2 external-reference descriptors require a non-empty logical_id",
+        ));
+    }
+    if binding.source_kind == CoordinateSourceKindV2::SameFileObject
+        && (logical_id.contains('/') || logical_id.contains('\\'))
+    {
+        return Err(TioError::invalid_argument(
+            "Coordinate v2 same-file external logical_id must be an object id, not a path",
+        ));
+    }
+    if binding.source_kind == CoordinateSourceKindV2::ApplicationRegistry {
+        return Err(TioError::unimplemented(
+            "Coordinate v2 application-registry external resolution is not supported by the public Rust wrapper",
+        ));
+    }
+    Ok(())
+}
+
+fn validate_coordinate_input_v2(input: &AxisCoordinateInputV2) -> Result<()> {
+    if input
+        .descriptor_id
+        .as_deref()
+        .is_none_or(|value| value.is_empty())
+    {
+        return Err(TioError::invalid_argument(
+            "Coordinate v2 descriptor_id is required and cannot be empty",
+        ));
+    }
+    if matches!(input.name.as_deref(), Some("")) {
+        return Err(TioError::invalid_argument(
+            "Coordinate v2 name cannot be empty",
+        ));
+    }
+    match input.value_domain {
+        CoordinateValueDomainV2::InlineNumeric => match (&input.values, input.numeric_dtype) {
+            (CoordinateInputValuesV2::I32(_), CoordinateDType::I32)
+            | (CoordinateInputValuesV2::I64(_), CoordinateDType::I64)
+                if input.fixed_text.width == 0 && input.dictionary.is_none() =>
+            {
+                Ok(())
+            }
+            _ => Err(TioError::invalid_argument(
+                "Coordinate v2 inline numeric values must match numeric_dtype and must not carry fixed-text/dictionary metadata",
+            )),
+        },
+        CoordinateValueDomainV2::FixedText => match &input.values {
+            CoordinateInputValuesV2::FixedText(bytes) => {
+                validate_fixed_text_bytes_v2(bytes, input.fixed_text)?;
+                if input.dictionary.is_some() {
+                    return Err(TioError::invalid_argument(
+                        "Coordinate v2 fixed-text descriptors must not carry dictionary metadata",
+                    ));
+                }
+                Ok(())
+            }
+            _ => Err(TioError::invalid_argument(
+                "Coordinate v2 fixed-text descriptors require fixed-text values",
+            )),
+        },
+        CoordinateValueDomainV2::DictionaryCode => {
+            validate_dictionary_values_v2(&input.values, input.code_dtype)?;
+            validate_dictionary_descriptor_v2(input)
+        }
+        CoordinateValueDomainV2::AppendSequence => {
+            if !matches!(input.values, CoordinateInputValuesV2::None) {
+                return Err(TioError::invalid_argument(
+                    "Coordinate v2 append-sequence descriptors must not carry create-time values",
+                ));
+            }
+            if input.external_binding.is_some() {
+                return Err(TioError::invalid_argument(
+                    "Coordinate v2 append-sequence descriptors must not carry external bindings",
+                ));
+            }
+            if input.fixed_text.width != 0 {
+                validate_fixed_text_layout_v2(input.fixed_text)?;
+            }
+            if input.dictionary.is_some() {
+                validate_dictionary_descriptor_v2(input)?;
+            }
+            Ok(())
+        }
+        CoordinateValueDomainV2::ExternalReference => {
+            let Some(binding) = &input.external_binding else {
+                return Err(TioError::invalid_argument(
+                    "Coordinate v2 external-reference descriptors require an external binding",
+                ));
+            };
+            if !matches!(input.values, CoordinateInputValuesV2::None) {
+                return Err(TioError::invalid_argument(
+                    "Coordinate v2 external-reference descriptors must not carry a value buffer",
+                ));
+            }
+            validate_external_binding_v2(binding)?;
+            if input.required != binding.required {
+                return Err(TioError::invalid_argument(
+                    "Coordinate v2 external descriptor required flag must match external binding required flag",
+                ));
+            }
+            match binding.value_domain {
+                CoordinateValueDomainV2::InlineNumeric => {
+                    if input.fixed_text.width != 0 || input.dictionary.is_some() {
+                        return Err(TioError::invalid_argument(
+                            "Coordinate v2 numeric external references must not carry fixed-text/dictionary metadata",
+                        ));
+                    }
+                    Ok(())
+                }
+                CoordinateValueDomainV2::FixedText => {
+                    validate_fixed_text_layout_v2(input.fixed_text)
+                }
+                CoordinateValueDomainV2::DictionaryCode => {
+                    if input.fixed_text.width != 0
+                        || input.dictionary.is_some()
+                        || !input.dictionary_entries.is_empty()
+                    {
+                        return Err(TioError::invalid_argument(
+                            "Coordinate v2 external dictionary-code references persist only code_dtype metadata; dictionary summaries/entries are not accepted",
+                        ));
+                    }
+                    Ok(())
+                }
+                CoordinateValueDomainV2::AppendSequence => Err(TioError::invalid_argument(
+                    "Coordinate v2 append-sequence external references are not supported by the public Rust wrapper",
+                )),
+                CoordinateValueDomainV2::ExternalReference => Err(TioError::invalid_argument(
+                    "Coordinate v2 nested external-reference metadata is not supported",
+                )),
+            }
+        }
+    }
+}
+
+fn validate_append_entry_v2(entry: &AppendCoordinateEntryV2) -> Result<()> {
+    if matches!(entry.descriptor_id.as_deref(), Some("")) {
+        return Err(TioError::invalid_argument(
+            "Coordinate v2 append descriptor_id cannot be empty",
+        ));
+    }
+    if matches!(entry.name.as_deref(), Some("")) {
+        return Err(TioError::invalid_argument(
+            "Coordinate v2 append name cannot be empty",
+        ));
+    }
+    match entry.value_domain {
+        CoordinateValueDomainV2::InlineNumeric => {
+            if entry.fixed_text_width != 0 {
+                return Err(TioError::invalid_argument(
+                    "Coordinate v2 append numeric entries must not carry fixed-text width",
+                ));
+            }
+            match (&entry.values, entry.numeric_dtype) {
+                (CoordinateInputValuesV2::I32(_), CoordinateDType::I32)
+                | (CoordinateInputValuesV2::I64(_), CoordinateDType::I64) => Ok(()),
+                _ => Err(TioError::invalid_argument(
+                    "Coordinate v2 append numeric values must match numeric_dtype",
+                )),
+            }
+        }
+        CoordinateValueDomainV2::FixedText => match &entry.values {
+            CoordinateInputValuesV2::FixedText(bytes) => {
+                let layout =
+                    CoordinateFixedTextLayoutV2::ascii_right_space_padded(entry.fixed_text_width)?;
+                validate_fixed_text_bytes_v2(bytes, layout)
+            }
+            _ => Err(TioError::invalid_argument(
+                "Coordinate v2 append fixed-text values are required for fixed-text entries",
+            )),
+        },
+        CoordinateValueDomainV2::DictionaryCode => {
+            if entry.fixed_text_width != 0 {
+                return Err(TioError::invalid_argument(
+                    "Coordinate v2 append dictionary-code entries must not carry fixed-text width",
+                ));
+            }
+            validate_dictionary_values_v2(&entry.values, entry.code_dtype)
+        }
+        CoordinateValueDomainV2::AppendSequence | CoordinateValueDomainV2::ExternalReference => {
+            Err(TioError::invalid_argument(
+                "Coordinate v2 append entries only carry implemented numeric, fixed-text, or dictionary-code values",
+            ))
+        }
+    }
+}
+
+fn copy_coordinate_index_summaries_v2(
+    ptr: *mut sys::ArcadiaTioCoordinateIndexSummaryV2,
+    len: usize,
+) -> Result<Vec<CoordinateIndexSummaryV2>> {
+    if ptr.is_null() || len == 0 {
+        return Ok(Vec::new());
+    }
+    // SAFETY: Coordinate v2 index summary array is valid for `len` until the parent metadata is freed.
+    unsafe { slice::from_raw_parts(ptr, len) }
+        .iter()
+        .map(CoordinateIndexSummaryV2::from_raw)
+        .collect()
+}
+
+fn optional_owned_cstring(value: &Option<String>, label: &str) -> Result<Option<CString>> {
+    value
+        .as_deref()
+        .map(|item| string_to_cstring(item, label))
+        .transpose()
+}
+
+fn opt_cstring_ptr(value: &Option<CString>) -> *const c_char {
+    value.as_ref().map_or(ptr::null(), |item| item.as_ptr())
+}
+
+fn opt_cstring_mut_ptr(value: &Option<CString>) -> *mut c_char {
+    value
+        .as_ref()
+        .map_or(ptr::null_mut(), |item| item.as_ptr() as *mut c_char)
+}
+
 /// RAII TensorFile handle over the native C ABI.
 ///
 /// The wrapper closes the native handle exactly once in `Drop`. It deliberately does not
@@ -3118,6 +6072,77 @@ impl TensorFile {
             }
         };
         let file = Self::from_raw_handle(raw, "failed to create TensorFile")?;
+        if let Some(compression) = compression {
+            file.set_compression(compression)?;
+        }
+        Ok(file)
+    }
+
+    /// Creates a TensorFile from Coordinate v2 descriptors while leaving v1 `CoordinateSpec` helpers unchanged.
+    pub fn create_with_coordinates_v2(
+        path: impl AsRef<Path>,
+        options: CreateOptions,
+        coordinates: &[AxisCoordinateInputV2],
+        coordinate_options: CoordinateV2Options,
+    ) -> Result<Self> {
+        validate_create_with_coordinates_v2_options(&options, coordinate_options)?;
+        let prepared = PreparedCreate::new(path, &options)?;
+        let prepared_coordinates =
+            PreparedAxisCoordinateInputsV2::new(coordinates, options.dims.len())?;
+        let raw_coordinate_options = coordinate_options.to_raw();
+        let compression = options
+            .compression
+            .map(CompressionConfig::validate)
+            .transpose()?;
+        // SAFETY: PreparedCreate owns common create strings/vectors and PreparedAxisCoordinateInputsV2
+        // owns Coordinate v2 C strings/dictionary/external helper storage for the duration of this call.
+        let raw = unsafe {
+            match options.layout {
+                CreateLayout::Streaming => sys::arcadia_tio_create_streaming_with_coordinates_v2(
+                    prepared.path.as_ptr(),
+                    options.dtype.to_raw(),
+                    prepared.dim_kinds.as_ptr(),
+                    prepared.dim_lens.as_ptr(),
+                    prepared.dim_lens.len(),
+                    options.append_dim,
+                    prepared.dim_name_ptr(),
+                    prepared.dim_name_len(),
+                    prepared.symbol_ptr(),
+                    prepared.symbol_len(),
+                    prepared.channel_ptr(),
+                    prepared.channel_len(),
+                    prepared.user_key_ptr(),
+                    prepared.user_value_ptr(),
+                    prepared.user_kv_len(),
+                    prepared_coordinates.ptr(),
+                    prepared_coordinates.len(),
+                    &raw_coordinate_options,
+                ),
+                CreateLayout::RandomAccess => {
+                    sys::arcadia_tio_create_random_access_with_coordinates_v2(
+                        prepared.path.as_ptr(),
+                        options.dtype.to_raw(),
+                        prepared.dim_kinds.as_ptr(),
+                        prepared.dim_lens.as_ptr(),
+                        prepared.dim_lens.len(),
+                        options.append_dim,
+                        prepared.dim_name_ptr(),
+                        prepared.dim_name_len(),
+                        prepared.symbol_ptr(),
+                        prepared.symbol_len(),
+                        prepared.channel_ptr(),
+                        prepared.channel_len(),
+                        prepared.user_key_ptr(),
+                        prepared.user_value_ptr(),
+                        prepared.user_kv_len(),
+                        prepared_coordinates.ptr(),
+                        prepared_coordinates.len(),
+                        &raw_coordinate_options,
+                    )
+                }
+            }
+        };
+        let file = Self::from_raw_handle(raw, "failed to create Coordinate v2 TensorFile")?;
         if let Some(compression) = compression {
             file.set_compression(compression)?;
         }
@@ -3242,6 +6267,59 @@ impl TensorFile {
         Ok(file)
     }
 
+    /// Creates an inferred-layout TensorFile from Coordinate v2 descriptors.
+    pub fn create_inferred_with_coordinates_v2(
+        path: impl AsRef<Path>,
+        options: CreateOptions,
+        inferred_options: CreateInferredOptions,
+        coordinates: &[AxisCoordinateInputV2],
+        coordinate_options: CoordinateV2Options,
+    ) -> Result<Self> {
+        validate_create_with_coordinates_v2_options(&options, coordinate_options)?;
+        let prepared = PreparedCreate::new(path, &options)?;
+        let prepared_coordinates =
+            PreparedAxisCoordinateInputsV2::new(coordinates, options.dims.len())?;
+        let raw_coordinate_options = coordinate_options.to_raw();
+        let compression = options
+            .compression
+            .map(CompressionConfig::validate)
+            .transpose()?;
+        // SAFETY: PreparedCreate and PreparedAxisCoordinateInputsV2 keep all borrowed raw pointers
+        // valid until the C ABI create call returns.
+        let raw = unsafe {
+            sys::arcadia_tio_create_inferred_with_coordinates_v2(
+                prepared.path.as_ptr(),
+                options.dtype.to_raw(),
+                prepared.dim_kinds.as_ptr(),
+                prepared.dim_lens.as_ptr(),
+                prepared.dim_lens.len(),
+                options.append_dim,
+                prepared.dim_name_ptr(),
+                prepared.dim_name_len(),
+                prepared.symbol_ptr(),
+                prepared.symbol_len(),
+                prepared.channel_ptr(),
+                prepared.channel_len(),
+                prepared.user_key_ptr(),
+                prepared.user_value_ptr(),
+                prepared.user_kv_len(),
+                inferred_options.storage_access.to_raw(),
+                inferred_options.open_pattern.to_raw(),
+                inferred_options.file_population.to_raw(),
+                inferred_options.metadata_stability.to_raw(),
+                prepared_coordinates.ptr(),
+                prepared_coordinates.len(),
+                &raw_coordinate_options,
+            )
+        };
+        let file =
+            Self::from_raw_handle(raw, "failed to create inferred Coordinate v2 TensorFile")?;
+        if let Some(compression) = compression {
+            file.set_compression(compression)?;
+        }
+        Ok(file)
+    }
+
     /// Creates a RegularChunked TensorFile using native policy-based chunking.
     ///
     /// Inline coordinate descriptors are accepted for fixed non-append axes; external
@@ -3286,6 +6364,60 @@ impl TensorFile {
             )
         };
         let file = Self::from_raw_handle(raw, "failed to create policy TensorFile")?;
+        if let Some(compression) = compression {
+            file.set_compression(compression)?;
+        }
+        Ok(file)
+    }
+
+    /// Creates a RegularChunked TensorFile from Coordinate v2 descriptors.
+    pub fn create_with_policy_with_coordinates_v2(
+        path: impl AsRef<Path>,
+        options: CreateOptions,
+        policy_options: CreatePolicyOptions,
+        coordinates: &[AxisCoordinateInputV2],
+        coordinate_options: CoordinateV2Options,
+    ) -> Result<Self> {
+        validate_create_policy(&options, &policy_options)?;
+        validate_create_with_coordinates_v2_options(&options, coordinate_options)?;
+        let prepared = PreparedCreate::new(path, &options)?;
+        let prepared_coordinates =
+            PreparedAxisCoordinateInputsV2::new(coordinates, options.dims.len())?;
+        let raw_coordinate_options = coordinate_options.to_raw();
+        let compression = options
+            .compression
+            .map(CompressionConfig::validate)
+            .transpose()?;
+        // SAFETY: PreparedCreate and PreparedAxisCoordinateInputsV2 keep all borrowed raw pointers
+        // valid until the C ABI create call returns.
+        let raw = unsafe {
+            sys::arcadia_tio_create_with_policy_with_coordinates_v2(
+                prepared.path.as_ptr(),
+                options.dtype.to_raw(),
+                prepared.dim_kinds.as_ptr(),
+                prepared.dim_lens.as_ptr(),
+                prepared.dim_lens.len(),
+                options.append_dim,
+                prepared.dim_name_ptr(),
+                prepared.dim_name_len(),
+                prepared.symbol_ptr(),
+                prepared.symbol_len(),
+                prepared.channel_ptr(),
+                prepared.channel_len(),
+                prepared.user_key_ptr(),
+                prepared.user_value_ptr(),
+                prepared.user_kv_len(),
+                policy_options.chunk_axes.as_ptr(),
+                policy_options.chunk_axes.len(),
+                policy_options.storage_profile.to_raw(),
+                policy_options.typical_query_sizes.as_ptr(),
+                policy_options.typical_query_sizes.len(),
+                prepared_coordinates.ptr(),
+                prepared_coordinates.len(),
+                &raw_coordinate_options,
+            )
+        };
+        let file = Self::from_raw_handle(raw, "failed to create policy Coordinate v2 TensorFile")?;
         if let Some(compression) = compression {
             file.set_compression(compression)?;
         }
@@ -3392,6 +6524,22 @@ impl TensorFile {
         let out = copy_coordinate_meta(raw_meta, len);
         // SAFETY: `raw_meta`/`len` are native-owned output from load_coordinate_meta and freed once.
         unsafe { sys::arcadia_tio_axis_coordinate_meta_free(raw_meta, len) };
+        out
+    }
+
+    /// Loads Coordinate v2 metadata without keeping a TensorFile handle open.
+    pub fn load_coordinate_meta_v2(path: impl AsRef<Path>) -> Result<Vec<AxisCoordinateMetaV2>> {
+        let path = path_to_cstring(path)?;
+        let mut raw_meta: *mut sys::ArcadiaTioAxisCoordinateMetaV2 = ptr::null_mut();
+        let mut len = 0usize;
+        // SAFETY: The path C string and out pointers are valid for the duration of this call.
+        let status = unsafe {
+            sys::arcadia_tio_load_coordinate_meta_v2(path.as_ptr(), &mut raw_meta, &mut len)
+        };
+        status_result(status, "failed to load Coordinate v2 metadata")?;
+        let out = copy_coordinate_meta_v2(raw_meta, len);
+        // SAFETY: `raw_meta`/`len` are native-owned output and are freed exactly once after copying.
+        unsafe { sys::arcadia_tio_axis_coordinate_meta_v2_free(raw_meta, len) };
         out
     }
 
@@ -3570,6 +6718,21 @@ impl TensorFile {
         let out = copy_coordinate_meta(raw_meta, len);
         // SAFETY: `raw_meta`/`len` are native-owned output from coordinate_meta and freed once.
         unsafe { sys::arcadia_tio_axis_coordinate_meta_free(raw_meta, len) };
+        out
+    }
+
+    /// Reads Coordinate v2 metadata from the open handle.
+    pub fn coordinate_meta_v2(&self) -> Result<Vec<AxisCoordinateMetaV2>> {
+        let mut raw_meta: *mut sys::ArcadiaTioAxisCoordinateMetaV2 = ptr::null_mut();
+        let mut len = 0usize;
+        // SAFETY: Out pointers are valid and the handle is live.
+        let status = unsafe {
+            sys::arcadia_tio_coordinate_meta_v2(self.raw.as_ptr(), &mut raw_meta, &mut len)
+        };
+        status_result(status, "failed to read Coordinate v2 metadata")?;
+        let out = copy_coordinate_meta_v2(raw_meta, len);
+        // SAFETY: `raw_meta`/`len` are native-owned output and are freed exactly once after copying.
+        unsafe { sys::arcadia_tio_axis_coordinate_meta_v2_free(raw_meta, len) };
         out
     }
 
@@ -3935,6 +7098,100 @@ impl TensorFile {
                 data.as_ptr(),
                 shape.as_ptr(),
                 shape.len(),
+                start,
+                end,
+            )
+        })
+    }
+
+    /// Appends a bulk f32 slice with Coordinate v2 append-axis values and returns the assigned range.
+    ///
+    /// Coordinate semantic validation (missing required values, wrong counts, descriptor/domain
+    /// mismatches, dictionary/fixed-text conflicts, and publication conflicts) is delegated to the
+    /// raw Coordinate v2 append call so native last-error details are preserved. The wrapper prepares
+    /// borrowed coordinate buffers only for this synchronous call and never falls back to a payload-only
+    /// append, preserving raw no-partial-publication semantics on failure.
+    pub fn append_f32_with_coordinates_v2(
+        &mut self,
+        data: &[f32],
+        shape: &[u64],
+        coordinates: &AppendCoordinateBatchV2,
+    ) -> Result<AppendRange> {
+        self.validate_append(DType::F32, data.len(), shape)?;
+        let prepared = coordinates.prepare()?;
+        self.append_with_range(shape, |handle, start, end| unsafe {
+            sys::arcadia_tio_append_f32_with_coordinates_v2(
+                handle,
+                data.as_ptr(),
+                shape.as_ptr(),
+                shape.len(),
+                prepared.raw(),
+                start,
+                end,
+            )
+        })
+    }
+
+    /// Appends a bulk f64 slice with Coordinate v2 append-axis values and returns the assigned range.
+    pub fn append_f64_with_coordinates_v2(
+        &mut self,
+        data: &[f64],
+        shape: &[u64],
+        coordinates: &AppendCoordinateBatchV2,
+    ) -> Result<AppendRange> {
+        self.validate_append(DType::F64, data.len(), shape)?;
+        let prepared = coordinates.prepare()?;
+        self.append_with_range(shape, |handle, start, end| unsafe {
+            sys::arcadia_tio_append_f64_with_coordinates_v2(
+                handle,
+                data.as_ptr(),
+                shape.as_ptr(),
+                shape.len(),
+                prepared.raw(),
+                start,
+                end,
+            )
+        })
+    }
+
+    /// Appends a bulk i32 slice with Coordinate v2 append-axis values and returns the assigned range.
+    pub fn append_i32_with_coordinates_v2(
+        &mut self,
+        data: &[i32],
+        shape: &[u64],
+        coordinates: &AppendCoordinateBatchV2,
+    ) -> Result<AppendRange> {
+        self.validate_append(DType::I32, data.len(), shape)?;
+        let prepared = coordinates.prepare()?;
+        self.append_with_range(shape, |handle, start, end| unsafe {
+            sys::arcadia_tio_append_i32_with_coordinates_v2(
+                handle,
+                data.as_ptr(),
+                shape.as_ptr(),
+                shape.len(),
+                prepared.raw(),
+                start,
+                end,
+            )
+        })
+    }
+
+    /// Appends a bulk i64 slice with Coordinate v2 append-axis values and returns the assigned range.
+    pub fn append_i64_with_coordinates_v2(
+        &mut self,
+        data: &[i64],
+        shape: &[u64],
+        coordinates: &AppendCoordinateBatchV2,
+    ) -> Result<AppendRange> {
+        self.validate_append(DType::I64, data.len(), shape)?;
+        let prepared = coordinates.prepare()?;
+        self.append_with_range(shape, |handle, start, end| unsafe {
+            sys::arcadia_tio_append_i64_with_coordinates_v2(
+                handle,
+                data.as_ptr(),
+                shape.as_ptr(),
+                shape.len(),
+                prepared.raw(),
                 start,
                 end,
             )
@@ -4706,6 +7963,151 @@ impl TensorFile {
         self.read_tensor(|handle, out| unsafe {
             sys::arcadia_tio_read_axis_coordinates(handle, axis, out)
         })
+    }
+
+    /// Reads Coordinate v2 axis values into Rust-owned bytes while preserving status fields.
+    pub fn read_axis_coordinates_v2(
+        &self,
+        axis: usize,
+        options: CoordinateV2Options,
+    ) -> Result<CoordinateValueSliceV2> {
+        self.validate_axis(axis)?;
+        let raw_options = options.to_raw();
+        let mut raw = sys::ArcadiaTioCoordinateValueSliceV2::default();
+        // SAFETY: `self.raw` is live, `raw_options` and `raw` are valid for the duration of the call.
+        let status = unsafe {
+            sys::arcadia_tio_read_axis_coordinates_v2(
+                self.raw.as_ptr(),
+                axis,
+                &raw_options,
+                &mut raw,
+            )
+        };
+        if let Err(err) = status_result(status, "failed to read Coordinate v2 axis values") {
+            // SAFETY: The raw value carrier is either empty/default or native-owned partial output;
+            // the paired free function tolerates empty carriers and is called at most once here.
+            unsafe { sys::arcadia_tio_coordinate_value_slice_v2_free(&mut raw) };
+            return Err(err);
+        }
+        // SAFETY: Successful status initializes `raw`; from_raw_borrowed copies data before free.
+        let out = unsafe { CoordinateValueSliceV2::from_raw_borrowed(&raw) };
+        // SAFETY: `raw` is native-owned output and is freed exactly once after copying.
+        unsafe { sys::arcadia_tio_coordinate_value_slice_v2_free(&mut raw) };
+        out
+    }
+
+    /// Reads Coordinate v2 dictionary metadata/entries into Rust-owned values.
+    pub fn coordinate_dictionary_v2(
+        &self,
+        axis: usize,
+        options: CoordinateV2Options,
+    ) -> Result<CoordinateDictionaryV2> {
+        self.validate_axis(axis)?;
+        let raw_options = options.to_raw();
+        let mut raw = sys::ArcadiaTioCoordinateDictionaryV2::default();
+        // SAFETY: `self.raw` is live, `raw_options` and `raw` are valid for the duration of the call.
+        let status = unsafe {
+            sys::arcadia_tio_coordinate_dictionary_v2(
+                self.raw.as_ptr(),
+                axis,
+                &raw_options,
+                &mut raw,
+            )
+        };
+        if let Err(err) = status_result(status, "failed to read Coordinate v2 dictionary") {
+            // SAFETY: The raw dictionary is either empty/default or native-owned partial output;
+            // the paired free function tolerates empty carriers and is called at most once here.
+            unsafe { sys::arcadia_tio_coordinate_dictionary_v2_free(&mut raw) };
+            return Err(err);
+        }
+        // SAFETY: Successful status initializes `raw`; from_raw_borrowed copies data before free.
+        let out = unsafe { CoordinateDictionaryV2::from_raw_borrowed(&raw) };
+        // SAFETY: `raw` is native-owned output and is freed exactly once after copying.
+        unsafe { sys::arcadia_tio_coordinate_dictionary_v2_free(&mut raw) };
+        out
+    }
+
+    /// Performs an exact Coordinate v2 lookup using a typed key.
+    ///
+    /// Transport/API misuse is returned as `Err(TioError)`. Ordinary Coordinate v2 outcomes such
+    /// as missing, unavailable, duplicate, unsupported, invalid/stale index, or domain mismatch are
+    /// preserved in the returned [`CoordinateLookupResultV2`]. Optional indexes are acceleration
+    /// metadata only; pass [`CoordinateV2Options::authoritative_scan`] when callers explicitly allow
+    /// fallback to authoritative selected-root coordinate values.
+    pub fn coordinate_lookup_v2(
+        &self,
+        axis: usize,
+        key: &CoordinateLookupKeyV2,
+        options: CoordinateV2Options,
+    ) -> Result<CoordinateLookupResultV2> {
+        self.validate_axis(axis)?;
+        let prepared_key = key.prepare()?;
+        let raw_options = options.to_raw();
+        let mut raw = sys::ArcadiaTioCoordinateLookupResultV2::default();
+        // SAFETY: `self.raw` is live. `prepared_key`, `raw_options`, and `raw` remain valid for
+        // the duration of the call and the raw result is copied before being freed.
+        let status = unsafe {
+            sys::arcadia_tio_coordinate_lookup_v2(
+                self.raw.as_ptr(),
+                axis,
+                prepared_key.raw(),
+                &raw_options,
+                &mut raw,
+            )
+        };
+        if let Err(err) = status_result(status, "failed to perform Coordinate v2 exact lookup") {
+            // SAFETY: The raw result is either default/empty or native-owned partial output; the
+            // paired free function tolerates empty carriers and is called at most once here.
+            unsafe { sys::arcadia_tio_coordinate_lookup_result_v2_free(&mut raw) };
+            return Err(err);
+        }
+        // SAFETY: Successful status initializes `raw`; from_raw_borrowed copies positions/reason.
+        let out = unsafe { CoordinateLookupResultV2::from_raw_borrowed(&raw) };
+        // SAFETY: `raw` is native-owned output and is freed exactly once after copying.
+        unsafe { sys::arcadia_tio_coordinate_lookup_result_v2_free(&mut raw) };
+        out
+    }
+
+    /// Performs a half-open Coordinate v2 range lookup using typed lower/upper keys.
+    ///
+    /// Status-rich raw lookup outcomes are returned as [`CoordinateLookupResultV2`] instead of
+    /// being collapsed into opaque errors. Optional indexes remain non-authoritative; callers must
+    /// opt into authoritative scans through [`CoordinateV2Options`].
+    pub fn coordinate_lookup_range_v2(
+        &self,
+        axis: usize,
+        lower: &CoordinateLookupKeyV2,
+        upper: &CoordinateLookupKeyV2,
+        options: CoordinateV2Options,
+    ) -> Result<CoordinateLookupResultV2> {
+        self.validate_axis(axis)?;
+        let prepared_lower = lower.prepare()?;
+        let prepared_upper = upper.prepare()?;
+        let raw_options = options.to_raw();
+        let mut raw = sys::ArcadiaTioCoordinateLookupResultV2::default();
+        // SAFETY: `self.raw` is live. Prepared keys/options/output outlive the FFI call and the
+        // raw result is copied before being freed.
+        let status = unsafe {
+            sys::arcadia_tio_coordinate_lookup_range_v2(
+                self.raw.as_ptr(),
+                axis,
+                prepared_lower.raw(),
+                prepared_upper.raw(),
+                &raw_options,
+                &mut raw,
+            )
+        };
+        if let Err(err) = status_result(status, "failed to perform Coordinate v2 range lookup") {
+            // SAFETY: The raw result is either default/empty or native-owned partial output; the
+            // paired free function tolerates empty carriers and is called at most once here.
+            unsafe { sys::arcadia_tio_coordinate_lookup_result_v2_free(&mut raw) };
+            return Err(err);
+        }
+        // SAFETY: Successful status initializes `raw`; from_raw_borrowed copies positions/reason.
+        let out = unsafe { CoordinateLookupResultV2::from_raw_borrowed(&raw) };
+        // SAFETY: `raw` is native-owned output and is freed exactly once after copying.
+        unsafe { sys::arcadia_tio_coordinate_lookup_result_v2_free(&mut raw) };
+        out
     }
 
     /// Looks up the unique axis index for an inline validated i32 coordinate value.
@@ -5648,6 +9050,23 @@ fn shape_element_len(shape: &[u64]) -> Result<usize> {
     Ok(product)
 }
 
+fn validate_create_with_coordinates_v2_options(
+    options: &CreateOptions,
+    coordinate_options: CoordinateV2Options,
+) -> Result<()> {
+    if !options.coordinates.is_empty() {
+        return Err(TioError::invalid_argument(
+            "Coordinate v2 create helpers cannot be combined with v1 CoordinateSpec descriptors",
+        ));
+    }
+    if coordinate_options.allow_external_resolution {
+        return Err(TioError::unimplemented(
+            "Coordinate v2 public Rust create helpers do not resolve external references",
+        ));
+    }
+    Ok(())
+}
+
 fn validate_create_policy(options: &CreateOptions, policy: &CreatePolicyOptions) -> Result<()> {
     let rank = options.dims.len();
     if options.append_dim >= rank {
@@ -6455,6 +9874,20 @@ fn copy_coordinate_meta(
                 validation_status: CoordinateValidationStatus::from_raw(item.validation_status)?,
             })
         })
+        .collect()
+}
+
+fn copy_coordinate_meta_v2(
+    ptr: *mut sys::ArcadiaTioAxisCoordinateMetaV2,
+    len: usize,
+) -> Result<Vec<AxisCoordinateMetaV2>> {
+    if ptr.is_null() || len == 0 {
+        return Ok(Vec::new());
+    }
+    // SAFETY: Coordinate v2 metadata array is valid for `len` until freed by the caller.
+    unsafe { slice::from_raw_parts(ptr, len) }
+        .iter()
+        .map(AxisCoordinateMetaV2::from_raw)
         .collect()
 }
 
@@ -7563,5 +10996,483 @@ mod tests {
         assert_eq!(DType::F64.size_bytes(), 8);
         assert_eq!(DType::I32.size_bytes(), 4);
         assert_eq!(DType::I64.size_bytes(), 8);
+    }
+
+    #[test]
+    fn coordinate_v2_options_and_layout_set_raw_contract_fields() {
+        let options = CoordinateV2Options {
+            allow_authoritative_scan: true,
+            include_dictionary_entries: true,
+            include_index_summaries: true,
+            allow_external_resolution: false,
+        };
+        let raw_options = options.to_raw();
+        assert_eq!(
+            raw_options.version,
+            sys::ARCADIA_TIO_COORDINATE_V2_ABI_VERSION
+        );
+        assert_eq!(
+            raw_options.struct_size,
+            mem::size_of::<sys::ArcadiaTioCoordinateV2Options>()
+        );
+        assert_eq!(raw_options.allow_authoritative_scan, 1);
+        assert_eq!(raw_options.include_dictionary_entries, 1);
+        assert_eq!(raw_options.include_index_summaries, 1);
+        assert_eq!(raw_options.allow_external_resolution, 0);
+        assert_eq!(raw_options.reserved_u8, [0; 4]);
+        assert_eq!(raw_options.reserved, [0; 4]);
+
+        let layout = CoordinateFixedTextLayoutV2 {
+            width: 4,
+            ..CoordinateFixedTextLayoutV2::default()
+        };
+        let raw_layout = layout.to_raw();
+        assert_eq!(
+            raw_layout.version,
+            sys::ARCADIA_TIO_COORDINATE_V2_ABI_VERSION
+        );
+        assert_eq!(
+            raw_layout.struct_size,
+            mem::size_of::<sys::ArcadiaTioCoordinateFixedTextLayoutV2>()
+        );
+        assert_eq!(raw_layout.width, 4);
+        assert_eq!(raw_layout.reserved_u8, [0; 6]);
+        assert_eq!(raw_layout.reserved, [0; 2]);
+    }
+
+    #[test]
+    fn coordinate_v2_input_prepare_sets_pointer_and_reserved_fields() {
+        let mut input = AxisCoordinateInputV2::inline_i32(1, vec![10, 20]);
+        input.descriptor_id = Some("trade-date".to_string());
+        input.name = Some("trade_date".to_string());
+        input.kind = CoordinateKind::Date;
+        input.numeric_encoding = CoordinateEncoding::DateYyyymmdd;
+        input.required = true;
+        let prepared = input.prepare().expect("Coordinate v2 input prepares");
+        let raw = prepared.raw();
+        assert_eq!(raw.version, sys::ARCADIA_TIO_COORDINATE_V2_ABI_VERSION);
+        assert_eq!(
+            raw.struct_size,
+            mem::size_of::<sys::ArcadiaTioAxisCoordinateInputV2>()
+        );
+        assert_eq!(raw.axis, 1);
+        assert!(!raw.descriptor_id.is_null());
+        assert!(!raw.name.is_null());
+        assert!(!raw.values.is_null());
+        assert_eq!(raw.values_len, 2);
+        assert_eq!(raw.required, 1);
+        assert_eq!(raw.reserved_u8, [0; 7]);
+        assert_eq!(raw.reserved, [0; 4]);
+    }
+
+    #[test]
+    fn coordinate_v2_lookup_and_append_prepare_raw_contract_fields() {
+        let key = CoordinateLookupKeyV2::fixed_text_ascii("B", 4)
+            .expect("fixed-text ASCII lookup key builds");
+        let prepared_key = key.prepare().expect("lookup key prepares");
+        let raw_key = prepared_key.raw();
+        assert_eq!(raw_key.version, sys::ARCADIA_TIO_COORDINATE_V2_ABI_VERSION);
+        assert_eq!(
+            raw_key.struct_size,
+            mem::size_of::<sys::ArcadiaTioCoordinateLookupKeyV2>()
+        );
+        assert_eq!(
+            raw_key.key_domain,
+            sys::ARCADIA_TIO_COORDINATE_KEY_DOMAIN_V2_FIXED_TEXT
+        );
+        assert!(!raw_key.bytes.is_null());
+        assert_eq!(raw_key.bytes_len, 1);
+        assert_eq!(raw_key.fixed_text_width, 4);
+        assert_eq!(raw_key.reserved, [0; 4]);
+
+        let stable_key = CoordinateLookupKeyV2::stable_id("instrument-a");
+        let prepared_stable = stable_key.prepare().expect("stable-id key prepares");
+        let raw_stable = prepared_stable.raw();
+        assert_eq!(
+            raw_stable.version,
+            sys::ARCADIA_TIO_COORDINATE_V2_ABI_VERSION
+        );
+        assert_eq!(
+            raw_stable.struct_size,
+            mem::size_of::<sys::ArcadiaTioCoordinateLookupKeyV2>()
+        );
+        assert_eq!(
+            raw_stable.key_domain,
+            sys::ARCADIA_TIO_COORDINATE_KEY_DOMAIN_V2_STABLE_ID
+        );
+        assert!(raw_stable.bytes.is_null());
+        assert!(!raw_stable.text.is_null());
+        assert_eq!(raw_stable.reserved, [0; 4]);
+
+        let raw_time = CoordinateLookupKeyV2::raw_time_i64(1778918400000000000);
+        let prepared_raw_time = raw_time.prepare().expect("raw-time key prepares");
+        let raw_raw_time = prepared_raw_time.raw();
+        assert_eq!(
+            raw_raw_time.key_domain,
+            sys::ARCADIA_TIO_COORDINATE_KEY_DOMAIN_V2_RAW_TIME
+        );
+        assert_eq!(raw_raw_time.i64_value, 1778918400000000000);
+        assert_eq!(raw_raw_time.reserved, [0; 4]);
+
+        let batch = AppendCoordinateBatchV2 {
+            entries: vec![AppendCoordinateEntryV2::i64(0, vec![100, 101])],
+        };
+        let prepared_batch = batch.prepare().expect("append batch prepares");
+        let raw_batch = prepared_batch.raw();
+        assert_eq!(
+            raw_batch.version,
+            sys::ARCADIA_TIO_COORDINATE_V2_ABI_VERSION
+        );
+        assert_eq!(
+            raw_batch.struct_size,
+            mem::size_of::<sys::ArcadiaTioAppendCoordinateBatchV2>()
+        );
+        assert!(!raw_batch.entries.is_null());
+        assert_eq!(raw_batch.entries_len, 1);
+        assert_eq!(raw_batch.reserved, [0; 4]);
+    }
+
+    #[test]
+    fn coordinate_v2_lookup_result_mapping_preserves_status_fields() {
+        let positions = [2u32, 4u32, 6u32];
+        let reason = CString::new("duplicate display labels").expect("cstring");
+        let raw = sys::ArcadiaTioCoordinateLookupResultV2 {
+            version: sys::ARCADIA_TIO_COORDINATE_V2_ABI_VERSION,
+            struct_size: mem::size_of::<sys::ArcadiaTioCoordinateLookupResultV2>(),
+            status: sys::ARCADIA_TIO_COORDINATE_LOOKUP_RESULT_V2_MANY,
+            status_category: sys::ARCADIA_TIO_COORDINATE_STATUS_V2_DUPLICATE_UNIQUE_LOOKUP,
+            unique_position: 0,
+            range_start: 1,
+            range_end: 7,
+            positions: positions.as_ptr() as *mut u32,
+            positions_len: positions.len(),
+            availability: sys::ARCADIA_TIO_COORDINATE_AVAILABILITY_V2_AVAILABLE,
+            reason: reason.as_ptr() as *mut c_char,
+            reserved: [0; 4],
+        };
+        let mapped = unsafe { CoordinateLookupResultV2::from_raw_borrowed(&raw) }
+            .expect("lookup result maps");
+        assert!(mapped.is_many());
+        assert_eq!(mapped.status, CoordinateLookupResultStatusV2::Many);
+        assert_eq!(
+            mapped.status_category,
+            CoordinateStatusCategoryV2::DuplicateUniqueLookup
+        );
+        assert_eq!(mapped.range_start, 1);
+        assert_eq!(mapped.range_end, 7);
+        assert_eq!(mapped.many_positions(), Some([2u32, 4u32, 6u32].as_slice()));
+        assert_eq!(mapped.reason.as_deref(), Some("duplicate display labels"));
+        assert_eq!(mapped.availability, CoordinateAvailabilityV2::Available);
+    }
+
+    #[test]
+    fn coordinate_v2_lookup_builders_reject_deferred_semantics() {
+        let non_ascii = CoordinateLookupKeyV2::fixed_text_ascii("å", 4)
+            .expect_err("non-ASCII fixed text is deferred");
+        assert_eq!(non_ascii.code(), ErrorCode::InvalidArgument);
+        let over_width = CoordinateLookupKeyV2::fixed_text_ascii("ABCDE", 4)
+            .expect_err("over-width fixed text is rejected");
+        assert_eq!(over_width.code(), ErrorCode::InvalidArgument);
+        let variable = CoordinateLookupKeyV2::variable_string("abc")
+            .expect_err("variable strings are deferred");
+        assert_eq!(variable.code(), ErrorCode::Unimplemented);
+        let calendar = CoordinateLookupKeyV2::calendar_time("2026-06-01T00:00:00Z")
+            .expect_err("calendar semantics are deferred");
+        assert_eq!(calendar.code(), ErrorCode::Unimplemented);
+        let resolver = CoordinateLookupKeyV2::external_resolver("symbol://ABC")
+            .expect_err("external resolver semantics are deferred");
+        assert_eq!(resolver.code(), ErrorCode::Unimplemented);
+    }
+
+    #[test]
+    fn coordinate_v2_numeric_append_sequence_zeroes_fixed_text_layout() {
+        let mut input = AxisCoordinateInputV2::inline_i32(0, Vec::new());
+        input.value_domain = CoordinateValueDomainV2::AppendSequence;
+        input.values = CoordinateInputValuesV2::None;
+        let prepared = input.prepare().expect("append-sequence input prepares");
+        let raw = prepared.raw();
+        assert_eq!(
+            raw.value_domain,
+            sys::ARCADIA_TIO_COORDINATE_VALUE_DOMAIN_V2_APPEND_SEQUENCE
+        );
+        assert_eq!(raw.fixed_text.struct_size, 0);
+        assert_eq!(raw.fixed_text.width, 0);
+    }
+
+    #[test]
+    fn coordinate_v2_fixed_text_append_uses_byte_element_size() {
+        let entry = AppendCoordinateEntryV2 {
+            axis: 0,
+            descriptor_id: Some("venue".to_string()),
+            name: Some("venue".to_string()),
+            value_domain: CoordinateValueDomainV2::FixedText,
+            numeric_dtype: CoordinateDType::I32,
+            numeric_encoding: CoordinateEncoding::Plain,
+            code_dtype: CoordinateCodeDTypeV2::U32,
+            values: CoordinateInputValuesV2::FixedText(b"ABCDWXYZ".to_vec()),
+            fixed_text_width: 4,
+        };
+        let batch = AppendCoordinateBatchV2 {
+            entries: vec![entry],
+        };
+        let prepared = batch.prepare().expect("fixed-text append prepares");
+        let raw = prepared.raw();
+        assert_eq!(raw.entries_len, 1);
+        let raw_entry = unsafe { &*raw.entries };
+        assert_eq!(raw_entry.count, 2);
+        assert_eq!(raw_entry.fixed_text_width, 4);
+        assert_eq!(raw_entry.element_size, mem::size_of::<u8>());
+        assert!(!raw_entry.values.is_null());
+    }
+
+    #[test]
+    fn coordinate_v2_empty_buffers_use_null_raw_pointers() {
+        let input = AxisCoordinateInputV2::inline_i32(0, Vec::new());
+        let prepared_input = input.prepare().expect("empty inline input prepares");
+        let raw_input = prepared_input.raw();
+        assert_eq!(raw_input.values_len, 0);
+        assert!(raw_input.values.is_null());
+
+        let mut fixed_input = AxisCoordinateInputV2::inline_i32(1, Vec::new());
+        fixed_input.value_domain = CoordinateValueDomainV2::FixedText;
+        fixed_input.fixed_text.width = 4;
+        fixed_input.values = CoordinateInputValuesV2::FixedText(Vec::new());
+        let prepared_fixed = fixed_input.prepare().expect("empty fixed input prepares");
+        let raw_fixed = prepared_fixed.raw();
+        assert_eq!(raw_fixed.values_len, 0);
+        assert!(raw_fixed.values.is_null());
+
+        let dictionary_input = AxisCoordinateInputV2::dictionary_codes_u16(
+            2,
+            Vec::new(),
+            CoordinateFixedTextLayoutV2::ascii_right_space_padded(4).expect("layout"),
+            CoordinateDictionarySummaryV2::new(CoordinateCodeDTypeV2::U16)
+                .with_dictionary_id("empty-codes"),
+            vec![CoordinateDictionaryEntryV2::new(
+                0,
+                Some("ZERO".to_string()),
+                Some("Zero".to_string()),
+            )],
+        )
+        .expect("dictionary input builds");
+        let prepared_dictionary = dictionary_input
+            .prepare()
+            .expect("empty dictionary input prepares");
+        let raw_dictionary = prepared_dictionary.raw();
+        assert_eq!(raw_dictionary.values_len, 0);
+        assert!(raw_dictionary.values.is_null());
+
+        let empty_append = AppendCoordinateBatchV2 {
+            entries: vec![AppendCoordinateEntryV2::i32(0, Vec::new())],
+        };
+        let prepared_append = empty_append.prepare().expect("empty append prepares");
+        let raw_append = prepared_append.raw();
+        let raw_entry = unsafe { &*raw_append.entries };
+        assert_eq!(raw_entry.count, 0);
+        assert!(raw_entry.values.is_null());
+    }
+
+    #[test]
+    fn coordinate_v2_descriptor_builders_prepare_implemented_domains() {
+        let fixed = AxisCoordinateInputV2::fixed_text_ascii(0, 4, ["AB", "XYZ"])
+            .expect("fixed-text builder pads ASCII values");
+        let prepared_fixed = fixed.prepare().expect("fixed-text descriptor prepares");
+        assert_eq!(prepared_fixed.raw().fixed_text.width, 4);
+        assert_eq!(prepared_fixed.raw().values_len, 2);
+
+        let dictionary = AxisCoordinateInputV2::dictionary_codes_u32(
+            1,
+            vec![0, 1],
+            CoordinateFixedTextLayoutV2::ascii_right_space_padded(3).expect("label layout"),
+            CoordinateDictionarySummaryV2::new(CoordinateCodeDTypeV2::U32)
+                .with_dictionary_id("symbols"),
+            vec![CoordinateDictionaryEntryV2::new(
+                0,
+                Some("A".to_string()),
+                Some("AAA".to_string()),
+            )],
+        )
+        .expect("dictionary builder succeeds");
+        let prepared_dictionary = dictionary
+            .prepare()
+            .expect("dictionary descriptor prepares");
+        assert_eq!(
+            prepared_dictionary.raw().code_dtype,
+            CoordinateCodeDTypeV2::U32.to_raw()
+        );
+        assert!(!prepared_dictionary.raw().dictionary.is_null());
+
+        let append = AxisCoordinateInputV2::append_fixed_text(
+            0,
+            CoordinateFixedTextLayoutV2::ascii_right_space_padded(6).expect("append layout"),
+        )
+        .expect("append fixed-text declaration builds");
+        let prepared_append = append.prepare().expect("append descriptor prepares");
+        assert_eq!(prepared_append.raw().values_len, 0);
+        assert!(prepared_append.raw().values.is_null());
+
+        let external = AxisCoordinateInputV2::external_reference_fixed_text(
+            1,
+            CoordinateExternalBindingV2::metadata_only(
+                CoordinateSourceKindV2::SameFileObject,
+                Some("coords-symbol".to_string()),
+                Some("symbol coordinates".to_string()),
+                CoordinateValueDomainV2::FixedText,
+                2,
+            ),
+            CoordinateFixedTextLayoutV2::ascii_right_space_padded(6).expect("external layout"),
+        )
+        .expect("fixed-text external summary builds");
+        let prepared_external = external.prepare().expect("external summary prepares");
+        assert_eq!(
+            prepared_external.raw().value_domain,
+            sys::ARCADIA_TIO_COORDINATE_VALUE_DOMAIN_V2_EXTERNAL_REFERENCE
+        );
+        assert!(!prepared_external.raw().external_binding.is_null());
+
+        let external_dictionary = AxisCoordinateInputV2::external_reference_dictionary_codes(
+            1,
+            CoordinateExternalBindingV2::metadata_only(
+                CoordinateSourceKindV2::SameFileObject,
+                Some("coords-symbol-code".to_string()),
+                Some("symbol code coordinates".to_string()),
+                CoordinateValueDomainV2::DictionaryCode,
+                2,
+            ),
+            CoordinateCodeDTypeV2::U16,
+        )
+        .expect("external dictionary-code summary builds");
+        let prepared_external_dictionary = external_dictionary
+            .prepare()
+            .expect("external dictionary-code descriptor prepares");
+        assert!(prepared_external_dictionary.raw().dictionary.is_null());
+        assert_eq!(
+            prepared_external_dictionary.raw().code_dtype,
+            CoordinateCodeDTypeV2::U16.to_raw()
+        );
+
+        let create_inputs = [fixed, dictionary, append, external, external_dictionary];
+        let create_prepared = PreparedAxisCoordinateInputsV2::new(&create_inputs, 2)
+            .expect("create helper preparation keeps builder descriptors FFI-ready");
+        assert_eq!(create_prepared.len(), 5);
+        let raw = unsafe { slice::from_raw_parts(create_prepared.ptr(), create_prepared.len()) };
+        assert!(raw.iter().all(|item| !item.descriptor_id.is_null()));
+    }
+
+    #[test]
+    fn coordinate_v2_create_validation_rejects_unsupported_semantics() {
+        let mut missing_id = AxisCoordinateInputV2::inline_i32(0, vec![1]);
+        missing_id.descriptor_id = None;
+        let err = match missing_id.prepare() {
+            Ok(_) => panic!("missing descriptor id unexpectedly prepared"),
+            Err(err) => err,
+        };
+        assert_eq!(err.code(), ErrorCode::InvalidArgument);
+
+        let err = AxisCoordinateInputV2::fixed_text_ascii(0, 2, ["ABC"])
+            .expect_err("over-width fixed text rejects before native create");
+        assert_eq!(err.code(), ErrorCode::InvalidArgument);
+
+        let bad_dictionary = AxisCoordinateInputV2::dictionary_codes_u32(
+            0,
+            vec![0],
+            CoordinateFixedTextLayoutV2::ascii_right_space_padded(2).expect("layout"),
+            CoordinateDictionarySummaryV2::new(CoordinateCodeDTypeV2::U32),
+            Vec::new(),
+        )
+        .expect("builder permits validation to report required dictionary fields");
+        let err = match bad_dictionary.prepare() {
+            Ok(_) => panic!("dictionary descriptor without id/entries unexpectedly prepared"),
+            Err(err) => err,
+        };
+        assert_eq!(err.code(), ErrorCode::InvalidArgument);
+
+        let bad_external = AxisCoordinateInputV2::external_reference(
+            0,
+            CoordinateExternalBindingV2::metadata_only(
+                CoordinateSourceKindV2::SameFileObject,
+                Option::<String>::None,
+                Some("missing logical id".to_string()),
+                CoordinateValueDomainV2::InlineNumeric,
+                1,
+            ),
+        );
+        let err = match bad_external.prepare() {
+            Ok(_) => panic!("external descriptor without logical_id unexpectedly prepared"),
+            Err(err) => err,
+        };
+        assert_eq!(err.code(), ErrorCode::InvalidArgument);
+
+        let mut ignored_external_dictionary =
+            AxisCoordinateInputV2::external_reference_dictionary_codes(
+                0,
+                CoordinateExternalBindingV2::metadata_only(
+                    CoordinateSourceKindV2::SameFileObject,
+                    Some("coords-codes".to_string()),
+                    Some("codes".to_string()),
+                    CoordinateValueDomainV2::DictionaryCode,
+                    1,
+                ),
+                CoordinateCodeDTypeV2::U32,
+            )
+            .expect("external dictionary-code builder succeeds");
+        ignored_external_dictionary.dictionary = Some(
+            CoordinateDictionarySummaryV2::new(CoordinateCodeDTypeV2::U32)
+                .with_dictionary_id("ignored"),
+        );
+        ignored_external_dictionary.dictionary_entries = vec![CoordinateDictionaryEntryV2::new(
+            0,
+            Some("ZERO".to_string()),
+            Some("Zero".to_string()),
+        )];
+        let err = match ignored_external_dictionary.prepare() {
+            Ok(_) => panic!("ignored external dictionary metadata unexpectedly prepared"),
+            Err(err) => err,
+        };
+        assert_eq!(err.code(), ErrorCode::InvalidArgument);
+
+        let external = AxisCoordinateInputV2::external_reference(
+            0,
+            CoordinateExternalBindingV2::metadata_only(
+                CoordinateSourceKindV2::ApplicationRegistry,
+                Some("resolver-key".to_string()),
+                Some("resolver".to_string()),
+                CoordinateValueDomainV2::InlineNumeric,
+                1,
+            ),
+        );
+        let err = match external.prepare() {
+            Ok(_) => panic!("application-registry resolver semantics unexpectedly prepared"),
+            Err(err) => err,
+        };
+        assert_eq!(err.code(), ErrorCode::Unimplemented);
+
+        let mut create_options =
+            CreateOptions::streaming(DType::F64, vec![DimSpec::new(AxisKind::Time, 0)], 0);
+        create_options.coordinates.push(CoordinateSpec {
+            axis: 0,
+            name: None,
+            kind: CoordinateKind::DomainValue,
+            encoding: CoordinateEncoding::Plain,
+            storage: CoordinateStorage::Inline(CoordinateValues::I32(vec![1])),
+            ordering: CoordinateOrdering::default(),
+            required: false,
+        });
+        let err = validate_create_with_coordinates_v2_options(
+            &create_options,
+            CoordinateV2Options::default(),
+        )
+        .expect_err("v1/v2 coordinate descriptors cannot mix");
+        assert_eq!(err.code(), ErrorCode::InvalidArgument);
+
+        let err = validate_create_with_coordinates_v2_options(
+            &CreateOptions::streaming(DType::F64, vec![DimSpec::new(AxisKind::Time, 0)], 0),
+            CoordinateV2Options {
+                allow_external_resolution: true,
+                ..CoordinateV2Options::default()
+            },
+        )
+        .expect_err("external resolution rejects");
+        assert_eq!(err.code(), ErrorCode::Unimplemented);
     }
 }

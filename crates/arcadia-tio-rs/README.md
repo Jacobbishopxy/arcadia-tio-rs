@@ -12,7 +12,8 @@ The API slice is intentionally bounded but now covers the agreed public Rust
 error strings, create/open metadata types, policy/inferred create helpers,
 write-forward compression selection, bulk tensor I/O helpers, f32/f64/i32/i64
 sparse-intent analysis and append helpers, universe-aware create/append
-authoring, current read options and shape policies, historical
+authoring, bounded Coordinate v2 create/read/lookup/append helpers,
+current read options and shape policies, historical
 `read_at_commit` options and shape policies, retained-history head/list helpers,
 f32/f64 rewrite, rewrite-slice, pop/pop-batched/revert and clear-block mutation
 helpers, scoped reform and compaction workflows, index/chunk-plan inspection,
@@ -52,9 +53,44 @@ the selected axis extent. `TensorFile::coordinate_index_i32/i64` and
 axis-range reads and return the same `Tensor` shapes as selector reads. Exact
 lookup returns an axis index; range lookup returns a half-open `Range<u32>` for
 an inclusive coordinate interval. The read conveniences are ergonomic helpers,
-not coordinate-index acceleration. External, string/dictionary,
-timezone/calendar interpretation, append-axis coordinate growth, and
-index-accelerated coordinate lookup remain deferred.
+not coordinate-index acceleration.
+
+Coordinate v2 wrappers are also available under explicit `*_v2` names. Use
+`AxisCoordinateInputV2` builders with `TensorFile::create_with_coordinates_v2`,
+`create_inferred_with_coordinates_v2`, or
+`create_with_policy_with_coordinates_v2` for implemented source-only domains:
+inline numeric values, fixed-width ASCII/right-space-padded text,
+dictionary-code coordinates with create-time dictionary entries, append-axis
+coordinate declarations, and descriptor-only external-reference summaries.
+`AppendCoordinateEntryV2`/`AppendCoordinateBatchV2` carry append-time coordinate
+values for append-axis descriptors: numeric `i32`/`i64` vectors, fixed-width
+ASCII/right-space-padded byte buffers or strings, and dictionary code vectors
+whose codes must already exist in the descriptor-bound dictionary revision.
+`TensorFile::append_f32_with_coordinates_v2`, `append_f64_with_coordinates_v2`,
+`append_i32_with_coordinates_v2`, and `append_i64_with_coordinates_v2` append the
+payload plus a batch and return the native half-open `AppendRange`; missing
+required coordinates, wrong counts, domain/dtype mismatches, and publication
+conflicts are reported through the native status/last-error path and publish no
+payload-only fallback root.
+`TensorFile::coordinate_meta_v2`, `load_coordinate_meta_v2`,
+`read_axis_coordinates_v2`, `coordinate_dictionary_v2`,
+`coordinate_lookup_v2`, and `coordinate_lookup_range_v2` copy native-owned
+metadata/value/dictionary/lookup outputs into Rust-owned structs/bytes before
+calling the paired C free function. Build lookup keys with
+`CoordinateLookupKeyV2::i32`, `i64`, `fixed_text_ascii`/`fixed_text_bytes`,
+`dictionary_code`, `stable_id`, `display_label`, `alias`, or `raw_time_i64`.
+Lookup results preserve `status`, `status_category`, `availability`, `reason`,
+unique positions, half-open ranges, and many-position vectors; ordinary missing,
+unavailable, unsupported, duplicate, domain-mismatch, and index-status outcomes
+are visible result statuses rather than opaque wrapper errors. Availability,
+status category/reason, external summaries, dictionary summaries, and optional
+index summaries remain visible as status/context; optional indexes are not
+treated as authoritative coordinate truth, and callers must explicitly allow
+selected-root authoritative scans with `CoordinateV2Options::authoritative_scan`.
+The public Rust wrapper does not dereference external references and does not add
+variable-length strings, locale/collation/case folding, broad calendar or
+resolver semantics, append-time dictionary extension, lookup-composed v2 reads,
+or benchmark/release/readiness claims.
 
 ## Example
 
@@ -205,12 +241,13 @@ query-attribution helpers are available as API-completeness access to native
 trace JSON, and bounded read-index/Arrow C Data helpers expose native interop
 vocabulary outside the original 17-family score. These remain outside
 benchmark/performance evidence. This crate does not expose generic zero-copy
-native views or compressed storage-accounting eligibility claims. Coordinate authoring/lookup/read conveniences remain inline numeric-only for
-fixed axes: exact/range coordinate read helpers compose lookup with ordinary
-axis-range reads and do not imply coordinate-index acceleration; external
-coordinate value resolution, string/dictionary coordinates, timezone/calendar
-interpretation, append-axis coordinate growth, and lookup acceleration are
-deferred. Pop/revert, metadata setter, index
+native views or compressed storage-accounting eligibility claims. Coordinate v1 lookup/read conveniences remain inline numeric-only for fixed
+axes: exact/range coordinate read helpers compose lookup with ordinary axis-range
+reads and do not imply coordinate-index acceleration. Coordinate v2 create/read
+wrappers cover only the implemented descriptor/value/dictionary/status/lookup
+surfaces listed above; external value resolution, variable-length strings, broad
+calendar/timezone interpretation, append-time dictionary extension, lookup-
+composed v2 reads, and authoritative index acceleration are deferred. Pop/revert, metadata setter, index
 checkpoint setter, clear-block, and unsupported auto-compaction calls
 intentionally surface native policy/layout support errors.
 

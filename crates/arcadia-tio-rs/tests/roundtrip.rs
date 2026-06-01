@@ -4,19 +4,38 @@ use std::path::PathBuf;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
 use arcadia_tio_rs::{
-    AppendWithUniverseOptions, AutoCompactionConfig, AxisIdentityInput, AxisKind, CompactionMode,
-    CompactionOptions, CompressionConfig, CoordinateDType, CoordinateEncoding, CoordinateKind,
-    CoordinateMonotonicity, CoordinateOrdering, CoordinateSpec, CoordinateStorage,
-    CoordinateStorageKind, CoordinateUniqueness, CoordinateValidationStatus, CoordinateValues,
-    CreateInferredOptions, CreateOptions, CreatePolicyOptions, CreateUniverseOptions, DType,
-    DimSpec, EntrySelector, ErrorCode, ExplicitExtentAxisTarget, ExplicitUniverseAxisTarget,
-    HistoricalQuerySourceKind, HistoricalReadWithOptions, HistoricalReadWithShapePolicyOptions,
-    QueryTraceContext, ReadIndexItem, ReadIndexLoweringKind, ReadShapePolicy, ReadWithOptions,
+    AppendCoordinateBatchV2, AppendCoordinateEntryV2, AppendWithUniverseOptions,
+    AutoCompactionConfig, AxisCoordinateInputV2, AxisIdentityInput, AxisKind, CompactionMode,
+    CompactionOptions, CompressionConfig, CoordinateAvailabilityV2, CoordinateCodeDTypeV2,
+    CoordinateDType, CoordinateDictionaryEntryV2, CoordinateDictionarySummaryV2,
+    CoordinateEncoding, CoordinateExternalBindingV2, CoordinateFixedTextLayoutV2, CoordinateKind,
+    CoordinateLookupKeyV2, CoordinateLookupResultStatusV2, CoordinateMonotonicity,
+    CoordinateOrdering, CoordinateSourceKindV2, CoordinateSpec, CoordinateStatusCategoryV2,
+    CoordinateStorage, CoordinateStorageKind, CoordinateUniqueness, CoordinateV2Options,
+    CoordinateValidationStatus, CoordinateValueDomainV2, CoordinateValues, CreateInferredOptions,
+    CreateOptions, CreatePolicyOptions, CreateUniverseOptions, DType, DimSpec, EntrySelector,
+    ErrorCode, ExplicitExtentAxisTarget, ExplicitUniverseAxisTarget, HistoricalQuerySourceKind,
+    HistoricalReadWithOptions, HistoricalReadWithShapePolicyOptions, QueryTraceContext,
+    ReadIndexItem, ReadIndexLoweringKind, ReadShapePolicy, ReadWithOptions,
     ReadWithShapePolicyOptions, ReformOptions, SlotUniverseBindings, SparseAppendOutcome,
     SparseAppendReason, SparseRule, SparseValuePredicate, StorageAccessKind, TensorData,
     TensorFile, UniverseBinding, V4CompactionAnalysisPolicy, V4PreciseAccountingField,
     V4PreciseAccountingOptions, V4ReportStatus, V4RetainedHistoryCompactionOptions,
 };
+
+fn i32_bytes(values: &[i32]) -> Vec<u8> {
+    values
+        .iter()
+        .flat_map(|value| value.to_ne_bytes())
+        .collect()
+}
+
+fn u16_bytes(values: &[u16]) -> Vec<u8> {
+    values
+        .iter()
+        .flat_map(|value| value.to_ne_bytes())
+        .collect()
+}
 
 #[test]
 fn safe_wrapper_roundtrips_f64_with_metadata_and_coordinates() {
@@ -274,6 +293,573 @@ fn safe_wrapper_looks_up_i64_coordinate_ranges() {
         dtype_mismatch
             .message()
             .contains("coordinate dtype is i64; expected i32 lookup value")
+    );
+
+    drop(file);
+    let _ = fs::remove_file(path);
+}
+
+#[test]
+fn safe_wrapper_coordinate_v2_numeric_and_fixed_text_roundtrip() {
+    let path = unique_path("safe-wrapper-coordinate-v2-numeric-fixed.tio");
+    let options = CreateOptions::streaming(
+        DType::F32,
+        vec![
+            DimSpec::new(AxisKind::Time, 0).with_name("time"),
+            DimSpec::new(AxisKind::Symbol, 2).with_name("symbol"),
+            DimSpec::new(AxisKind::Channel, 2).with_name("channel"),
+        ],
+        0,
+    );
+    let coordinates = vec![
+        AxisCoordinateInputV2::inline_i32(1, vec![10, 20])
+            .with_descriptor_id("symbol-id-v2")
+            .with_name("symbol_id")
+            .with_kind(CoordinateKind::LabelId)
+            .with_required(true)
+            .with_ordering(CoordinateOrdering {
+                sorted: arcadia_tio_rs::CoordinateSortedness::Ascending,
+                monotonicity: CoordinateMonotonicity::StrictlyIncreasing,
+                uniqueness: CoordinateUniqueness::Unique,
+            }),
+        AxisCoordinateInputV2::fixed_text_ascii(2, 4, ["BID", "ASK"])
+            .expect("fixed-text descriptor")
+            .with_descriptor_id("channel-code-v2")
+            .with_name("channel_code")
+            .with_required(true),
+    ];
+    {
+        let mut file = TensorFile::create_with_coordinates_v2(
+            &path,
+            options,
+            &coordinates,
+            CoordinateV2Options::default(),
+        )
+        .expect("create Coordinate v2 numeric/fixed file");
+        file.append_f32(&[1.0, 2.0, 3.0, 4.0], &[1, 2, 2])
+            .expect("append Coordinate v2 payload");
+    }
+
+    let file = TensorFile::open(&path).expect("open Coordinate v2 numeric/fixed file");
+    let meta = file.coordinate_meta_v2().expect("Coordinate v2 metadata");
+    assert_eq!(meta.len(), 2);
+    assert_eq!(meta[0].descriptor_id.as_deref(), Some("symbol-id-v2"));
+    assert_eq!(meta[0].value_domain, CoordinateValueDomainV2::InlineNumeric);
+    assert_eq!(meta[0].availability, CoordinateAvailabilityV2::Available);
+    assert_eq!(meta[0].status_category, CoordinateStatusCategoryV2::Ok);
+    assert_eq!(meta[1].descriptor_id.as_deref(), Some("channel-code-v2"));
+    assert_eq!(meta[1].value_domain, CoordinateValueDomainV2::FixedText);
+    assert_eq!(meta[1].fixed_text.width, 4);
+
+    let numeric_values = file
+        .read_axis_coordinates_v2(1, CoordinateV2Options::default())
+        .expect("Coordinate v2 numeric values");
+    assert_eq!(
+        numeric_values.value_domain,
+        CoordinateValueDomainV2::InlineNumeric
+    );
+    assert_eq!(numeric_values.numeric_dtype, CoordinateDType::I32);
+    assert_eq!(numeric_values.len, 2);
+    assert_eq!(numeric_values.element_size, std::mem::size_of::<i32>());
+    assert_eq!(
+        numeric_values.availability,
+        CoordinateAvailabilityV2::Available
+    );
+    assert_eq!(
+        numeric_values.status_category,
+        CoordinateStatusCategoryV2::Ok
+    );
+    assert_eq!(numeric_values.data, i32_bytes(&[10, 20]));
+
+    let text_values = file
+        .read_axis_coordinates_v2(2, CoordinateV2Options::default())
+        .expect("Coordinate v2 fixed-text values");
+    assert_eq!(text_values.value_domain, CoordinateValueDomainV2::FixedText);
+    assert_eq!(text_values.fixed_text_width, 4);
+    assert_eq!(text_values.len, 2);
+    assert_eq!(text_values.data, b"BID ASK ".to_vec());
+
+    let lookup_options = CoordinateV2Options::authoritative_scan();
+    let numeric_exact = file
+        .coordinate_lookup_v2(1, &CoordinateLookupKeyV2::i32(20), lookup_options)
+        .expect("Coordinate v2 numeric exact lookup");
+    assert_eq!(numeric_exact.status, CoordinateLookupResultStatusV2::Unique);
+    assert_eq!(numeric_exact.unique_position(), Some(1));
+    assert_eq!(
+        numeric_exact.status_category,
+        CoordinateStatusCategoryV2::Ok
+    );
+    let numeric_range = file
+        .coordinate_lookup_range_v2(
+            1,
+            &CoordinateLookupKeyV2::i32(10),
+            &CoordinateLookupKeyV2::i32(21),
+            lookup_options,
+        )
+        .expect("Coordinate v2 numeric range lookup");
+    assert_eq!(numeric_range.status, CoordinateLookupResultStatusV2::Range);
+    assert_eq!(numeric_range.range(), Some(0..2));
+
+    let fixed_exact = file
+        .coordinate_lookup_v2(
+            2,
+            &CoordinateLookupKeyV2::fixed_text_ascii("ASK", 4).expect("fixed-text key"),
+            lookup_options,
+        )
+        .expect("Coordinate v2 fixed-text exact lookup");
+    assert_eq!(fixed_exact.status, CoordinateLookupResultStatusV2::Unique);
+    assert_eq!(fixed_exact.unique_position(), Some(1));
+    let fixed_range = file
+        .coordinate_lookup_range_v2(
+            2,
+            &CoordinateLookupKeyV2::fixed_text_ascii("BID", 4).expect("fixed-text lower"),
+            &CoordinateLookupKeyV2::fixed_text_ascii("BIE", 4).expect("fixed-text upper"),
+            lookup_options,
+        )
+        .expect("Coordinate v2 fixed-text range lookup");
+    assert_eq!(fixed_range.status, CoordinateLookupResultStatusV2::Range);
+    assert_eq!(fixed_range.range(), Some(0..1));
+
+    let missing = file
+        .coordinate_lookup_v2(1, &CoordinateLookupKeyV2::i32(99), lookup_options)
+        .expect("Coordinate v2 missing is a visible result");
+    assert_eq!(missing.status, CoordinateLookupResultStatusV2::Missing);
+    assert_eq!(missing.status_category, CoordinateStatusCategoryV2::Ok);
+    let domain_mismatch = file
+        .coordinate_lookup_v2(2, &CoordinateLookupKeyV2::i64(10), lookup_options)
+        .expect("Coordinate v2 domain mismatch is a visible result");
+    assert_eq!(
+        domain_mismatch.status_category,
+        CoordinateStatusCategoryV2::LookupDomainMismatch
+    );
+    assert!(domain_mismatch.is_error() || domain_mismatch.is_unsupported());
+
+    drop(file);
+    let _ = fs::remove_file(path);
+}
+
+#[test]
+fn safe_wrapper_coordinate_v2_dictionary_roundtrip() {
+    let path = unique_path("safe-wrapper-coordinate-v2-dictionary.tio");
+    let options = CreateOptions::random_access(
+        DType::F64,
+        vec![
+            DimSpec::new(AxisKind::Time, 0).with_name("time"),
+            DimSpec::new(AxisKind::Symbol, 2).with_name("symbol"),
+        ],
+        0,
+    );
+    let dictionary_summary = CoordinateDictionarySummaryV2::new(CoordinateCodeDTypeV2::U16)
+        .with_dictionary_id("symbol-dict-v2")
+        .with_revision(7)
+        .with_content_id("symbol-dict-content-v2");
+    let dictionary_entries = vec![
+        CoordinateDictionaryEntryV2::new(1, Some("AAPL".to_string()), Some("AAPL".to_string())),
+        CoordinateDictionaryEntryV2::new(2, Some("MSFT".to_string()), Some("MSFT".to_string())),
+    ];
+    let coordinates = vec![
+        AxisCoordinateInputV2::dictionary_codes_u16(
+            1,
+            vec![1, 2],
+            CoordinateFixedTextLayoutV2::ascii_right_space_padded(4).expect("dictionary labels"),
+            dictionary_summary,
+            dictionary_entries,
+        )
+        .expect("dictionary-code descriptor")
+        .with_descriptor_id("symbol-dictionary-code-v2")
+        .with_name("symbol_code")
+        .with_required(true),
+    ];
+    {
+        let mut file = TensorFile::create_with_coordinates_v2(
+            &path,
+            options,
+            &coordinates,
+            CoordinateV2Options::default(),
+        )
+        .expect("create Coordinate v2 dictionary file");
+        file.append_f64(&[1.5, 2.5], &[1, 2])
+            .expect("append dictionary payload");
+    }
+
+    let file = TensorFile::open(&path).expect("open Coordinate v2 dictionary file");
+    let meta = file
+        .coordinate_meta_v2()
+        .expect("Coordinate v2 dictionary metadata");
+    assert_eq!(meta.len(), 1);
+    assert_eq!(
+        meta[0].value_domain,
+        CoordinateValueDomainV2::DictionaryCode
+    );
+    assert_eq!(
+        meta[0].dictionary.dictionary_id.as_deref(),
+        Some("symbol-dict-v2")
+    );
+    assert_eq!(meta[0].dictionary.revision, 7);
+    assert_eq!(meta[0].dictionary.entry_count, 2);
+
+    let code_values = file
+        .read_axis_coordinates_v2(1, CoordinateV2Options::default())
+        .expect("Coordinate v2 dictionary code values");
+    assert_eq!(
+        code_values.value_domain,
+        CoordinateValueDomainV2::DictionaryCode
+    );
+    assert_eq!(code_values.code_dtype, CoordinateCodeDTypeV2::U16);
+    assert_eq!(code_values.data, u16_bytes(&[1, 2]));
+
+    let dictionary = file
+        .coordinate_dictionary_v2(
+            1,
+            CoordinateV2Options {
+                include_dictionary_entries: true,
+                ..CoordinateV2Options::default()
+            },
+        )
+        .expect("Coordinate v2 dictionary read");
+    assert_eq!(dictionary.status_category, CoordinateStatusCategoryV2::Ok);
+    assert_eq!(
+        dictionary.summary.dictionary_id.as_deref(),
+        Some("symbol-dict-v2")
+    );
+    assert_eq!(dictionary.entries.len(), 2);
+    assert_eq!(dictionary.entries[0].stable_id.as_deref(), Some("AAPL"));
+    assert_eq!(dictionary.entries[1].display_label.as_deref(), Some("MSFT"));
+
+    let lookup_options = CoordinateV2Options::authoritative_scan();
+    let code_lookup = file
+        .coordinate_lookup_v2(
+            1,
+            &CoordinateLookupKeyV2::dictionary_code(2),
+            lookup_options,
+        )
+        .expect("Coordinate v2 dictionary-code lookup");
+    assert_eq!(code_lookup.status, CoordinateLookupResultStatusV2::Unique);
+    assert_eq!(code_lookup.unique_position(), Some(1));
+    let stable_lookup = file
+        .coordinate_lookup_v2(1, &CoordinateLookupKeyV2::stable_id("AAPL"), lookup_options)
+        .expect("Coordinate v2 stable-id lookup");
+    assert_eq!(stable_lookup.status, CoordinateLookupResultStatusV2::Unique);
+    assert_eq!(stable_lookup.unique_position(), Some(0));
+    let label_lookup = file
+        .coordinate_lookup_v2(
+            1,
+            &CoordinateLookupKeyV2::display_label("MSFT"),
+            lookup_options,
+        )
+        .expect("Coordinate v2 display-label lookup");
+    assert_eq!(label_lookup.status, CoordinateLookupResultStatusV2::Unique);
+    assert_eq!(label_lookup.unique_position(), Some(1));
+    let alias_lookup = file
+        .coordinate_lookup_v2(1, &CoordinateLookupKeyV2::alias("A.N"), lookup_options)
+        .expect("Coordinate v2 alias unsupported is a visible result");
+    assert_eq!(
+        alias_lookup.status,
+        CoordinateLookupResultStatusV2::Unsupported
+    );
+    assert_eq!(
+        alias_lookup.status_category,
+        CoordinateStatusCategoryV2::UnsupportedDomain
+    );
+
+    drop(file);
+    let _ = fs::remove_file(path);
+}
+
+#[test]
+fn safe_wrapper_coordinate_v2_append_with_coordinates_success() {
+    let numeric_path = unique_path("safe-wrapper-coordinate-v2-append-numeric.tio");
+    let fixed_path = unique_path("safe-wrapper-coordinate-v2-append-fixed.tio");
+
+    let numeric_options = CreateOptions::streaming(
+        DType::F32,
+        vec![
+            DimSpec::new(AxisKind::Time, 0).with_name("time"),
+            DimSpec::new(AxisKind::Channel, 2).with_name("channel"),
+        ],
+        0,
+    );
+    let numeric_coordinates = vec![
+        AxisCoordinateInputV2::append_numeric_i32(0)
+            .with_descriptor_id("append-day-v2")
+            .with_name("append_day")
+            .with_kind(CoordinateKind::Date)
+            .with_numeric_encoding(CoordinateEncoding::DateYyyymmdd)
+            .with_required(true)
+            .with_ordering(CoordinateOrdering {
+                sorted: arcadia_tio_rs::CoordinateSortedness::Ascending,
+                monotonicity: CoordinateMonotonicity::StrictlyIncreasing,
+                uniqueness: CoordinateUniqueness::Unique,
+            }),
+    ];
+    {
+        let mut file = TensorFile::create_with_coordinates_v2(
+            &numeric_path,
+            numeric_options,
+            &numeric_coordinates,
+            CoordinateV2Options::default(),
+        )
+        .expect("create append numeric Coordinate v2 file");
+        let batch = AppendCoordinateBatchV2::new(vec![
+            AppendCoordinateEntryV2::i32(0, vec![20260531, 20260601])
+                .with_descriptor_id("append-day-v2")
+                .with_numeric_encoding(CoordinateEncoding::DateYyyymmdd),
+        ]);
+        let range = file
+            .append_f32_with_coordinates_v2(&[1.0, 2.0, 3.0, 4.0], &[2, 2], &batch)
+            .expect("append f32 payload with numeric append coordinates");
+        assert_eq!((range.start, range.end), (0, 2));
+        assert_eq!(file.dim_lens().expect("numeric append dims"), vec![2, 2]);
+        assert_eq!(
+            file.read_all().expect("numeric append payload").data,
+            TensorData::F32(vec![1.0, 2.0, 3.0, 4.0])
+        );
+        let meta = file
+            .coordinate_meta_v2()
+            .expect("numeric append-coordinate metadata");
+        assert_eq!(
+            meta[0].value_domain,
+            CoordinateValueDomainV2::AppendSequence
+        );
+        assert_eq!(meta[0].numeric_dtype, CoordinateDType::I32);
+        assert_eq!(meta[0].length, 2);
+    }
+
+    let fixed_options = CreateOptions::streaming(
+        DType::I32,
+        vec![
+            DimSpec::new(AxisKind::Time, 0).with_name("time"),
+            DimSpec::new(AxisKind::Channel, 1).with_name("channel"),
+        ],
+        0,
+    );
+    let fixed_layout =
+        CoordinateFixedTextLayoutV2::ascii_right_space_padded(4).expect("fixed append layout");
+    let fixed_coordinates = vec![
+        AxisCoordinateInputV2::append_fixed_text(0, fixed_layout)
+            .expect("append fixed-text descriptor")
+            .with_descriptor_id("append-session-v2")
+            .with_name("append_session")
+            .with_kind(CoordinateKind::LabelId)
+            .with_required(true),
+    ];
+    {
+        let mut file = TensorFile::create_with_coordinates_v2(
+            &fixed_path,
+            fixed_options,
+            &fixed_coordinates,
+            CoordinateV2Options::default(),
+        )
+        .expect("create append fixed-text Coordinate v2 file");
+        let batch = AppendCoordinateBatchV2::new(vec![
+            AppendCoordinateEntryV2::fixed_text_ascii(0, 4, ["AM", "PM"])
+                .expect("fixed append values")
+                .with_descriptor_id("append-session-v2"),
+        ]);
+        let range = file
+            .append_i32_with_coordinates_v2(&[5, 6], &[2, 1], &batch)
+            .expect("append i32 payload with fixed-text append coordinates");
+        assert_eq!((range.start, range.end), (0, 2));
+        assert_eq!(file.dim_lens().expect("fixed append dims"), vec![2, 1]);
+        let fixed_lookup = file
+            .coordinate_lookup_v2(
+                0,
+                &CoordinateLookupKeyV2::fixed_text_ascii("PM", 4).expect("fixed lookup key"),
+                CoordinateV2Options::authoritative_scan(),
+            )
+            .expect("fixed append coordinate lookup");
+        assert_eq!(fixed_lookup.status, CoordinateLookupResultStatusV2::Unique);
+        assert_eq!(fixed_lookup.unique_position(), Some(1));
+    }
+
+    let _ = fs::remove_file(numeric_path);
+    let _ = fs::remove_file(fixed_path);
+}
+
+#[test]
+fn safe_wrapper_coordinate_v2_append_rejects_missing_required_and_wrong_count() {
+    let path = unique_path("safe-wrapper-coordinate-v2-append-failures.tio");
+    let options = CreateOptions::streaming(
+        DType::F64,
+        vec![
+            DimSpec::new(AxisKind::Time, 0).with_name("time"),
+            DimSpec::new(AxisKind::Channel, 2).with_name("channel"),
+        ],
+        0,
+    );
+    let coordinates = vec![
+        AxisCoordinateInputV2::append_numeric_i32(0)
+            .with_descriptor_id("required-append-day-v2")
+            .with_name("required_append_day")
+            .with_kind(CoordinateKind::Date)
+            .with_numeric_encoding(CoordinateEncoding::DateYyyymmdd)
+            .with_required(true),
+    ];
+
+    let mut file = TensorFile::create_with_coordinates_v2(
+        &path,
+        options,
+        &coordinates,
+        CoordinateV2Options::default(),
+    )
+    .expect("create required append-coordinate file");
+    let good_batch = AppendCoordinateBatchV2::new(vec![
+        AppendCoordinateEntryV2::i32(0, vec![20260531, 20260601])
+            .with_descriptor_id("required-append-day-v2")
+            .with_numeric_encoding(CoordinateEncoding::DateYyyymmdd),
+    ]);
+    file.append_f64_with_coordinates_v2(&[1.0, 2.0, 3.0, 4.0], &[2, 2], &good_batch)
+        .expect("seed append-coordinate state");
+    let before_dims = file.dim_lens().expect("dims before failed append");
+    let before_payload = file.read_all().expect("payload before failed append");
+    let before_meta = file
+        .coordinate_meta_v2()
+        .expect("metadata before failed append");
+    let before_values = file
+        .read_axis_coordinates_v2(0, CoordinateV2Options::default())
+        .expect("coordinates before failed append");
+
+    let missing = file
+        .append_f64_with_coordinates_v2(
+            &[5.0, 6.0, 7.0, 8.0],
+            &[2, 2],
+            &AppendCoordinateBatchV2::empty(),
+        )
+        .expect_err("missing required append coordinates should fail");
+    assert_eq!(missing.code(), ErrorCode::InvalidArgument);
+    assert!(
+        missing.message().contains("missing required")
+            || missing.message().contains("required append coordinate"),
+        "unexpected missing-required error: {}",
+        missing.message()
+    );
+
+    let wrong_count_batch = AppendCoordinateBatchV2::new(vec![
+        AppendCoordinateEntryV2::i32(0, vec![20260602])
+            .with_descriptor_id("required-append-day-v2")
+            .with_numeric_encoding(CoordinateEncoding::DateYyyymmdd),
+    ]);
+    let wrong_count = file
+        .append_f64_with_coordinates_v2(&[5.0, 6.0, 7.0, 8.0], &[2, 2], &wrong_count_batch)
+        .expect_err("wrong-count append coordinates should fail");
+    assert_eq!(wrong_count.code(), ErrorCode::InvalidArgument);
+    assert!(
+        wrong_count.message().contains("count") || wrong_count.message().contains("extent"),
+        "unexpected wrong-count error: {}",
+        wrong_count.message()
+    );
+
+    assert_eq!(
+        file.dim_lens().expect("dims after failed append"),
+        before_dims
+    );
+    assert_eq!(
+        file.read_all().expect("payload after failed append"),
+        before_payload
+    );
+    assert_eq!(
+        file.coordinate_meta_v2()
+            .expect("metadata after failed append"),
+        before_meta
+    );
+    assert_eq!(
+        file.read_axis_coordinates_v2(0, CoordinateV2Options::default())
+            .expect("coordinates after failed append"),
+        before_values
+    );
+
+    drop(file);
+    let _ = fs::remove_file(path);
+}
+
+#[test]
+fn safe_wrapper_coordinate_v2_external_unavailable_status_without_dereference() {
+    let path = unique_path("safe-wrapper-coordinate-v2-external.tio");
+    let options = CreateOptions::streaming(
+        DType::F32,
+        vec![
+            DimSpec::new(AxisKind::Time, 0).with_name("time"),
+            DimSpec::new(AxisKind::Symbol, 2).with_name("symbol"),
+        ],
+        0,
+    );
+    let external_binding = CoordinateExternalBindingV2::metadata_only(
+        CoordinateSourceKindV2::SameFileObject,
+        Some("coords-symbols".to_string()),
+        Some("symbol coordinate object".to_string()),
+        CoordinateValueDomainV2::FixedText,
+        2,
+    );
+    let coordinates = vec![
+        AxisCoordinateInputV2::external_reference_fixed_text(
+            1,
+            external_binding,
+            CoordinateFixedTextLayoutV2::ascii_right_space_padded(4).expect("external layout"),
+        )
+        .expect("external fixed-text descriptor")
+        .with_descriptor_id("symbol-external-v2")
+        .with_name("symbol_external"),
+    ];
+    {
+        let mut file = TensorFile::create_with_coordinates_v2(
+            &path,
+            options,
+            &coordinates,
+            CoordinateV2Options::default(),
+        )
+        .expect("create Coordinate v2 external file");
+        file.append_f32(&[3.0, 4.0], &[1, 2])
+            .expect("append external-coordinate payload");
+    }
+
+    let file = TensorFile::open(&path).expect("open Coordinate v2 external file");
+    let meta = file
+        .coordinate_meta_v2()
+        .expect("Coordinate v2 external metadata");
+    assert_eq!(meta.len(), 1);
+    assert_eq!(
+        meta[0].value_domain,
+        CoordinateValueDomainV2::ExternalReference
+    );
+    assert_eq!(meta[0].availability, CoordinateAvailabilityV2::Unavailable);
+    assert_eq!(meta[0].status_category, CoordinateStatusCategoryV2::Ok);
+    assert!(!meta[0].required);
+    assert_eq!(
+        meta[0].external_binding.logical_id.as_deref(),
+        Some("coords-symbols")
+    );
+    assert_eq!(
+        meta[0].external_binding.availability,
+        CoordinateAvailabilityV2::Unavailable
+    );
+
+    let values = file
+        .read_axis_coordinates_v2(1, CoordinateV2Options::default())
+        .expect("Coordinate v2 external values return status carrier");
+    assert_ne!(values.availability, CoordinateAvailabilityV2::Available);
+    assert_eq!(values.status_category, CoordinateStatusCategoryV2::Ok);
+    assert!(
+        values
+            .reason
+            .as_deref()
+            .map_or(true, |reason| !reason.is_empty())
+    );
+    assert!(values.data.is_empty());
+
+    let unavailable_lookup = file
+        .coordinate_lookup_v2(
+            1,
+            &CoordinateLookupKeyV2::fixed_text_ascii("AAPL", 4).expect("external fixed key"),
+            CoordinateV2Options::default(),
+        )
+        .expect("Coordinate v2 external unavailable lookup is visible");
+    assert_eq!(
+        unavailable_lookup.status,
+        CoordinateLookupResultStatusV2::Unavailable
+    );
+    assert_eq!(
+        unavailable_lookup.availability,
+        CoordinateAvailabilityV2::Unavailable
     );
 
     drop(file);

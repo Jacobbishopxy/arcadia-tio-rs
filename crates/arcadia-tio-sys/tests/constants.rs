@@ -1,6 +1,6 @@
 use std::ffi::c_int;
 use std::fs;
-use std::mem::{align_of, size_of};
+use std::mem::{align_of, offset_of, size_of};
 use std::path::{Path, PathBuf};
 
 use arcadia_tio_sys::*;
@@ -22,6 +22,9 @@ const _: () = {
     assert!(size_of::<ArcadiaTioDType>() == size_of::<c_int>());
     assert!(size_of::<ArcadiaTioErrorCode>() == size_of::<c_int>());
     assert!(size_of::<ArcadiaTioV4PreciseAccountingField>() == size_of::<c_int>());
+    assert!(size_of::<ArcadiaTioCoordinateValueDomainV2>() == size_of::<c_int>());
+    assert!(size_of::<ArcadiaTioCoordinateStatusCategoryV2>() == size_of::<c_int>());
+    assert!(size_of::<ArcadiaTioCoordinateLookupResultStatusV2>() == size_of::<c_int>());
     assert!(ARCADIA_TIO_DTYPE_F32 == 0);
     assert!(ARCADIA_TIO_DTYPE_F64 == 1);
     assert!(ARCADIA_TIO_DTYPE_I32 == 2);
@@ -33,6 +36,28 @@ const _: () = {
     assert!(ARCADIA_TIO_COORDINATE_KIND_DATE == 2);
     assert!(ARCADIA_TIO_COORDINATE_ENCODING_DATE_YYYYMMDD == 2);
     assert!(ARCADIA_TIO_COORDINATE_STORAGE_INLINE == 0);
+    assert!(ARCADIA_TIO_COORDINATE_V2_ABI_VERSION == 1);
+    assert!(ARCADIA_TIO_COORDINATE_VALUE_DOMAIN_V2_INLINE_NUMERIC == 0);
+    assert!(ARCADIA_TIO_COORDINATE_VALUE_DOMAIN_V2_FIXED_TEXT == 1);
+    assert!(ARCADIA_TIO_COORDINATE_VALUE_DOMAIN_V2_DICTIONARY_CODE == 2);
+    assert!(ARCADIA_TIO_COORDINATE_VALUE_DOMAIN_V2_APPEND_SEQUENCE == 3);
+    assert!(ARCADIA_TIO_COORDINATE_VALUE_DOMAIN_V2_EXTERNAL_REFERENCE == 4);
+    assert!(ARCADIA_TIO_COORDINATE_KEY_DOMAIN_V2_I32 == 0);
+    assert!(ARCADIA_TIO_COORDINATE_KEY_DOMAIN_V2_FIXED_TEXT == 2);
+    assert!(ARCADIA_TIO_COORDINATE_KEY_DOMAIN_V2_ALIAS == 6);
+    assert!(ARCADIA_TIO_COORDINATE_CODE_DTYPE_V2_U16 == 1);
+    assert!(ARCADIA_TIO_COORDINATE_FIXED_TEXT_ENCODING_V2_ASCII == 0);
+    assert!(ARCADIA_TIO_COORDINATE_FIXED_TEXT_PADDING_V2_RIGHT_SPACE == 0);
+    assert!(ARCADIA_TIO_COORDINATE_SOURCE_V2_APPLICATION_REGISTRY == 4);
+    assert!(ARCADIA_TIO_COORDINATE_AVAILABILITY_V2_UNSUPPORTED == 5);
+    assert!(ARCADIA_TIO_COORDINATE_STATUS_V2_REQUIRED_UNAVAILABLE == 4);
+    assert!(ARCADIA_TIO_COORDINATE_STATUS_V2_UNSUPPORTED_INDEX == 10);
+    assert!(ARCADIA_TIO_COORDINATE_INDEX_KIND_V2_DICTIONARY_KEY == 2);
+    assert!(ARCADIA_TIO_COORDINATE_INDEX_STATUS_V2_STALE == 2);
+    assert!(ARCADIA_TIO_COORDINATE_INDEX_FALLBACK_V2_REJECT_INDEX_DEPENDENT_OPERATION == 2);
+    assert!(ARCADIA_TIO_COORDINATE_INDEX_USE_V2_UNAVAILABLE == 3);
+    assert!(ARCADIA_TIO_COORDINATE_LOOKUP_RESULT_V2_DUPLICATE == 5);
+    assert!(ARCADIA_TIO_COORDINATE_LOOKUP_RESULT_V2_ERROR == 7);
     assert!(ARCADIA_TIO_HEADER_PROFILE_STREAMING == 0);
     assert!(ARCADIA_TIO_ENTRY_SELECTOR_ALL == 0);
     assert!(ARCADIA_TIO_ENTRY_SELECTOR_RANGE == 1);
@@ -228,6 +253,35 @@ fn sorted_difference(
 }
 
 #[test]
+fn coordinate_v2_symbols_are_declared() {
+    for name in [
+        "arcadia_tio_create_with_policy_with_coordinates_v2",
+        "arcadia_tio_create_inferred_with_coordinates_v2",
+        "arcadia_tio_create_random_access_with_coordinates_v2",
+        "arcadia_tio_create_streaming_with_coordinates_v2",
+        "arcadia_tio_coordinate_meta_v2",
+        "arcadia_tio_load_coordinate_meta_v2",
+        "arcadia_tio_axis_coordinate_meta_v2_free",
+        "arcadia_tio_read_axis_coordinates_v2",
+        "arcadia_tio_coordinate_value_slice_v2_free",
+        "arcadia_tio_coordinate_dictionary_v2",
+        "arcadia_tio_coordinate_dictionary_v2_free",
+        "arcadia_tio_coordinate_lookup_v2",
+        "arcadia_tio_coordinate_lookup_range_v2",
+        "arcadia_tio_coordinate_lookup_result_v2_free",
+        "arcadia_tio_append_f32_with_coordinates_v2",
+        "arcadia_tio_append_f64_with_coordinates_v2",
+        "arcadia_tio_append_i32_with_coordinates_v2",
+        "arcadia_tio_append_i64_with_coordinates_v2",
+    ] {
+        assert!(
+            SYS_LIB.contains(&format!("pub fn {name}(")),
+            "missing sys declaration for {name}"
+        );
+    }
+}
+
+#[test]
 fn sparse_integer_append_symbols_are_declared() {
     for name in [
         "arcadia_tio_analyze_sparse_append_i32",
@@ -251,10 +305,44 @@ fn representative_raw_layouts_are_pointer_compatible() {
         align_of::<ArcadiaTioAxisCoordinateInput>(),
         align_of::<usize>()
     );
+    assert_eq!(
+        align_of::<ArcadiaTioAxisCoordinateInputV2>(),
+        align_of::<usize>()
+    );
+    assert_eq!(
+        offset_of!(ArcadiaTioCoordinateFixedTextLayoutV2, version),
+        0
+    );
+    assert_eq!(offset_of!(ArcadiaTioCoordinateValueSliceV2, version), 0);
+    assert_eq!(offset_of!(ArcadiaTioAxisCoordinateInputV2, version), 0);
+    assert_eq!(offset_of!(ArcadiaTioAxisCoordinateMetaV2, version), 0);
 
     #[cfg(target_pointer_width = "64")]
     {
         assert_eq!(size_of::<ArcadiaTioAxisCoordinateInput>(), 120);
+        assert_eq!(size_of::<ArcadiaTioCoordinateFixedTextLayoutV2>(), 56);
+        assert_eq!(size_of::<ArcadiaTioCoordinateDictionarySummaryV2>(), 80);
+        assert_eq!(size_of::<ArcadiaTioCoordinateExternalBindingV2>(), 96);
+        assert_eq!(size_of::<ArcadiaTioCoordinateIndexSourceBindingV2>(), 168);
+        assert_eq!(size_of::<ArcadiaTioCoordinateIndexSummaryV2>(), 264);
+        assert_eq!(size_of::<ArcadiaTioCoordinateDictionaryEntryV2>(), 72);
+        assert_eq!(size_of::<ArcadiaTioCoordinateDictionaryV2>(), 160);
+        assert_eq!(size_of::<ArcadiaTioCoordinateValueSliceV2>(), 112);
+        assert_eq!(size_of::<ArcadiaTioCoordinateLookupKeyV2>(), 104);
+        assert_eq!(size_of::<ArcadiaTioCoordinateLookupResultV2>(), 104);
+        assert_eq!(size_of::<ArcadiaTioAppendCoordinateEntryV2>(), 120);
+        assert_eq!(size_of::<ArcadiaTioAppendCoordinateBatchV2>(), 64);
+        assert_eq!(size_of::<ArcadiaTioCoordinateV2Options>(), 56);
+        assert_eq!(size_of::<ArcadiaTioAxisCoordinateInputV2>(), 224);
+        assert_eq!(size_of::<ArcadiaTioAxisCoordinateMetaV2>(), 408);
+        assert_eq!(offset_of!(ArcadiaTioAxisCoordinateInputV2, struct_size), 8);
+        assert_eq!(offset_of!(ArcadiaTioAxisCoordinateInputV2, fixed_text), 56);
+        assert_eq!(offset_of!(ArcadiaTioAxisCoordinateInputV2, values), 120);
+        assert_eq!(offset_of!(ArcadiaTioAxisCoordinateMetaV2, dictionary), 184);
+        assert_eq!(
+            offset_of!(ArcadiaTioAxisCoordinateMetaV2, index_summaries),
+            360
+        );
         assert_eq!(size_of::<ArcadiaTioEntrySelector>(), 32);
         assert_eq!(size_of::<ArcadiaTioChunkKey>(), 16);
         assert_eq!(size_of::<ArcadiaTioReadShapePolicyOptions>(), 72);
@@ -318,6 +406,8 @@ fn representative_raw_layouts_are_pointer_compatible() {
     #[cfg(target_pointer_width = "32")]
     {
         assert!(size_of::<ArcadiaTioAxisCoordinateInput>() >= 72);
+        assert!(size_of::<ArcadiaTioAxisCoordinateInputV2>() >= 128);
+        assert!(size_of::<ArcadiaTioAxisCoordinateMetaV2>() >= 248);
         assert_eq!(size_of::<ArcadiaTioChunkKey>(), 8);
     }
 }
