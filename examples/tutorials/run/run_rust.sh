@@ -31,7 +31,8 @@ elif [[ "$private_source" == "1" ]]; then
   target_root="${CARGO_TARGET_DIR:-$repo_root/target}"
   lib_dir="$target_root/release"
 else
-  host="$(rustc -vV | awk '/^host:/ { print $2; exit }')"
+  rustc_version_verbose="$(rustc -vV)"
+  host="$(awk '/^host:/ { print $2; exit }' <<<"$rustc_version_verbose")"
   lib_dir="$repo_root/native/$host/lib"
 fi
 export ARCADIA_TIO_CAPI_LIB_DIR="$lib_dir"

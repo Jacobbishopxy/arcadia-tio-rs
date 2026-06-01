@@ -32,7 +32,7 @@ Before using the public Rust wrapper in an application build:
 
 1. Build or obtain the operator-approved `arcadia_tio_capi` native library for the target platform.
 2. Set `ARCADIA_TIO_CAPI_LIB_DIR` for link discovery and configure the platform runtime loader separately (`LD_LIBRARY_PATH`, `DYLD_LIBRARY_PATH`, rpath/install-name, `PATH`, or DLL colocation as appropriate).
-3. Run `cargo test --workspace` and `bash examples/tutorials/run/run_rust.sh` against that native library.
+3. Run `cargo test --workspace` and `bash examples/tutorials/run/run_rust.sh` against that native library. A committed Cargo target runner automatically adds `ARCADIA_TIO_CAPI_LIB_DIR` or `native/x86_64-unknown-linux-gnu/lib` to the runtime loader path for common Linux/macOS `cargo run` and `cargo test` invocations.
 4. Keep generated `.tio` files, native libraries, package archives, and local `native/` copies out of source control unless a separate release task approves them.
 5. Treat Coordinate v2 external references as metadata/status summaries only; this wrapper does not add dereference, variable-length string, broad calendar/session, append-time dictionary extension, lookup-acceleration, or release/performance claims.
 
@@ -50,6 +50,11 @@ bash examples/tutorials/run/run_rust.sh
 cargo run -p arcadia-tio-rs --example tutorial_01_quickstart_create_append_read
 ```
 
-The native library path is local-only. Do not commit, push, publish, upload,
-sign, tag, or release native libraries, package archives, or generated bundles
-from this checkout without a later explicit release task approving that scope.
+The native library path is local-only. The committed Cargo target runner mirrors
+`ARCADIA_TIO_CAPI_LIB_DIR` or `native/x86_64-unknown-linux-gnu/lib` into the runtime loader path
+for common Linux/macOS `cargo run` and `cargo test` invocations; if your target
+or deployment launcher bypasses Cargo's runner, set `LD_LIBRARY_PATH`,
+`DYLD_LIBRARY_PATH`, `PATH`, rpath/install-name, or DLL colocation yourself.
+Do not commit, push, publish, upload, sign, tag, or release native libraries,
+package archives, or generated bundles from this checkout without a later
+explicit release task approving that scope.

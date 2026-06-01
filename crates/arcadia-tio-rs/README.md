@@ -284,7 +284,7 @@ Before shipping an application that uses this crate:
 
 - Validate against the exact native `arcadia_tio_capi` library you intend to deploy.
 - Set `ARCADIA_TIO_CAPI_LIB_DIR` for link discovery and configure runtime loader lookup separately.
-- Run the workspace tests and tutorial examples with that library.
+- Run the workspace tests and tutorial examples with that library. The public checkout includes a Cargo target runner that automatically mirrors `ARCADIA_TIO_CAPI_LIB_DIR` or `native/<target>/lib` into the platform runtime-loader path for common Linux/macOS `cargo run` and `cargo test` invocations.
 - Keep generated `.tio` data and native/package artifacts out of this source-only checkout unless a separate release task approves them.
 - Preserve the documented API boundaries: Coordinate v2 external summaries are not dereferenced, optional indexes are not authoritative truth, and examples are not benchmark, storage, compression, capacity, or release-readiness evidence.
 
@@ -300,9 +300,12 @@ LD_LIBRARY_PATH="$LIB_DIR${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}" \
   cargo test -p arcadia-tio-rs
 ```
 
-Use `DYLD_LIBRARY_PATH` instead of `LD_LIBRARY_PATH` on macOS. On Windows, make
-sure the directory containing `arcadia_tio_capi.dll` is on `PATH` and set
-`ARCADIA_TIO_CAPI_LIB_DIR` to the directory containing the import/native
-library used at link time. Applications may also choose platform rpath,
-install-name, or DLL-colocation strategies; runtime lookup remains the
-consumer application's responsibility.
+The public checkout's Cargo target runner does the runtime-loader environment
+step automatically for common Linux/macOS `cargo run` and `cargo test`
+invocations when `ARCADIA_TIO_CAPI_LIB_DIR` or `native/<target>/lib` is present.
+Use `DYLD_LIBRARY_PATH` instead of `LD_LIBRARY_PATH` on macOS when launching
+outside Cargo's runner. On Windows, make sure the directory containing
+`arcadia_tio_capi.dll` is on `PATH` and set `ARCADIA_TIO_CAPI_LIB_DIR` to the
+directory containing the import/native library used at link time. Applications
+may also choose platform rpath, install-name, or DLL-colocation strategies;
+runtime lookup remains the consumer application's responsibility.

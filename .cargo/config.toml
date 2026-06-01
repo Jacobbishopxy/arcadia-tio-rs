@@ -1,0 +1,18 @@
+# Public Rust wrapper local runtime helper.
+#
+# Cargo uses this target runner for common Linux/macOS targets so `cargo run`
+# and `cargo test` automatically extend the platform runtime-loader path with
+# ARCADIA_TIO_CAPI_LIB_DIR or native/<target>/lib when present. Link-time
+# discovery is still handled by arcadia-tio-sys build.rs.
+
+[target.x86_64-unknown-linux-gnu]
+runner = "examples/tutorials/run/with_native_lib.sh"
+
+[target.aarch64-unknown-linux-gnu]
+runner = "examples/tutorials/run/with_native_lib.sh"
+
+[target.x86_64-apple-darwin]
+runner = "examples/tutorials/run/with_native_lib.sh"
+
+[target.aarch64-apple-darwin]
+runner = "examples/tutorials/run/with_native_lib.sh"

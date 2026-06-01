@@ -3188,15 +3188,6 @@ impl CoordinateCodeDTypeV2 {
             ))),
         }
     }
-
-    fn size_bytes(self) -> usize {
-        match self {
-            Self::U8 => 1,
-            Self::U16 => 2,
-            Self::U32 => 4,
-            Self::U64 => 8,
-        }
-    }
 }
 
 /// Coordinate v2 fixed-text byte encoding.
@@ -4600,11 +4591,12 @@ impl AxisCoordinateInputV2 {
 
 /// Prepared Coordinate v2 input descriptor whose raw pointers borrow from owned Rust storage.
 pub struct PreparedAxisCoordinateInputV2<'a> {
-    descriptor_id: Option<CString>,
-    name: Option<CString>,
-    dictionary: Option<PreparedCoordinateDictionarySummaryV2>,
-    dictionary_entries: PreparedCoordinateDictionaryEntriesV2,
-    external_binding: Option<PreparedCoordinateExternalBindingV2>,
+    // Keep CString/nested preparation storage alive for raw C ABI pointers in `raw`.
+    _descriptor_id: Option<CString>,
+    _name: Option<CString>,
+    _dictionary: Option<PreparedCoordinateDictionarySummaryV2>,
+    _dictionary_entries: PreparedCoordinateDictionaryEntriesV2,
+    _external_binding: Option<PreparedCoordinateExternalBindingV2>,
     raw: sys::ArcadiaTioAxisCoordinateInputV2,
     _values: PhantomData<&'a AxisCoordinateInputV2>,
 }
@@ -4658,11 +4650,11 @@ impl<'a> PreparedAxisCoordinateInputV2<'a> {
             reserved: [0; 4],
         };
         Ok(Self {
-            descriptor_id,
-            name,
-            dictionary,
-            dictionary_entries,
-            external_binding,
+            _descriptor_id: descriptor_id,
+            _name: name,
+            _dictionary: dictionary,
+            _dictionary_entries: dictionary_entries,
+            _external_binding: external_binding,
             raw,
             _values: PhantomData,
         })
@@ -4966,7 +4958,8 @@ impl CoordinateLookupKeyV2 {
 
 /// Prepared Coordinate v2 lookup key.
 pub struct PreparedCoordinateLookupKeyV2<'a> {
-    text: Option<CString>,
+    // Keep optional lookup text alive for raw C ABI pointers in `raw`.
+    _text: Option<CString>,
     raw: sys::ArcadiaTioCoordinateLookupKeyV2,
     _bytes: PhantomData<&'a CoordinateLookupKeyV2>,
 }
@@ -5035,7 +5028,7 @@ impl<'a> PreparedCoordinateLookupKeyV2<'a> {
             }
         };
         Ok(Self {
-            text,
+            _text: text,
             raw,
             _bytes: PhantomData,
         })
@@ -5401,8 +5394,9 @@ impl AppendCoordinateBatchV2 {
 /// coordinate value buffers from the source `AppendCoordinateBatchV2`. The raw pointers returned by
 /// `raw()` must not outlive this prepared object or the source batch.
 pub struct PreparedAppendCoordinateBatchV2<'a> {
-    entries: Vec<PreparedAppendCoordinateEntryV2<'a>>,
-    raw_entries: Vec<sys::ArcadiaTioAppendCoordinateEntryV2>,
+    // Keep per-entry preparations and the raw entry array alive for C ABI pointers in `raw`.
+    _entries: Vec<PreparedAppendCoordinateEntryV2<'a>>,
+    _raw_entries: Vec<sys::ArcadiaTioAppendCoordinateEntryV2>,
     raw: sys::ArcadiaTioAppendCoordinateBatchV2,
     _batch: PhantomData<&'a AppendCoordinateBatchV2>,
 }
@@ -5427,8 +5421,8 @@ impl<'a> PreparedAppendCoordinateBatchV2<'a> {
             reserved: [0; 4],
         };
         Ok(Self {
-            entries,
-            raw_entries,
+            _entries: entries,
+            _raw_entries: raw_entries,
             raw,
             _batch: PhantomData,
         })
@@ -5441,8 +5435,9 @@ impl<'a> PreparedAppendCoordinateBatchV2<'a> {
 }
 
 struct PreparedAppendCoordinateEntryV2<'a> {
-    descriptor_id: Option<CString>,
-    name: Option<CString>,
+    // Keep descriptor/name C strings alive for raw C ABI pointers in `raw`.
+    _descriptor_id: Option<CString>,
+    _name: Option<CString>,
     raw: sys::ArcadiaTioAppendCoordinateEntryV2,
     _entry: PhantomData<&'a AppendCoordinateEntryV2>,
 }
@@ -5474,16 +5469,17 @@ impl<'a> PreparedAppendCoordinateEntryV2<'a> {
                 fixed_text_width: entry.fixed_text_width,
                 reserved: [0; 4],
             },
-            descriptor_id,
-            name,
+            _descriptor_id: descriptor_id,
+            _name: name,
             _entry: PhantomData,
         })
     }
 }
 
 struct PreparedCoordinateDictionarySummaryV2 {
-    dictionary_id: Option<CString>,
-    content_id: Option<CString>,
+    // Keep dictionary summary C strings alive for raw C ABI pointers in `raw`.
+    _dictionary_id: Option<CString>,
+    _content_id: Option<CString>,
     raw: Box<sys::ArcadiaTioCoordinateDictionarySummaryV2>,
 }
 
@@ -5509,8 +5505,8 @@ impl PreparedCoordinateDictionarySummaryV2 {
             reserved: [0; 2],
         });
         Ok(Self {
-            dictionary_id,
-            content_id,
+            _dictionary_id: dictionary_id,
+            _content_id: content_id,
             raw,
         })
     }
@@ -5521,9 +5517,10 @@ impl PreparedCoordinateDictionarySummaryV2 {
 }
 
 struct PreparedCoordinateExternalBindingV2 {
-    logical_id: Option<CString>,
-    privacy_safe_display: Option<CString>,
-    content_id: Option<CString>,
+    // Keep external-binding C strings alive for raw C ABI pointers in `raw`.
+    _logical_id: Option<CString>,
+    _privacy_safe_display: Option<CString>,
+    _content_id: Option<CString>,
     raw: Box<sys::ArcadiaTioCoordinateExternalBindingV2>,
 }
 
@@ -5553,9 +5550,9 @@ impl PreparedCoordinateExternalBindingV2 {
             reserved: [0; 2],
         });
         Ok(Self {
-            logical_id,
-            privacy_safe_display,
-            content_id,
+            _logical_id: logical_id,
+            _privacy_safe_display: privacy_safe_display,
+            _content_id: content_id,
             raw,
         })
     }
@@ -5567,10 +5564,11 @@ impl PreparedCoordinateExternalBindingV2 {
 
 #[derive(Default)]
 struct PreparedCoordinateDictionaryEntriesV2 {
-    stable_ids: Vec<Option<CString>>,
-    display_labels: Vec<Option<CString>>,
-    aliases: Vec<Vec<CString>>,
-    alias_ptrs: Vec<Vec<*mut c_char>>,
+    // Keep dictionary entry strings and alias pointer arrays alive for raw C ABI pointers in `raw`.
+    _stable_ids: Vec<Option<CString>>,
+    _display_labels: Vec<Option<CString>>,
+    _aliases: Vec<Vec<CString>>,
+    _alias_ptrs: Vec<Vec<*mut c_char>>,
     raw: Vec<sys::ArcadiaTioCoordinateDictionaryEntryV2>,
 }
 
@@ -5629,10 +5627,10 @@ impl PreparedCoordinateDictionaryEntriesV2 {
             })
             .collect::<Vec<_>>();
         Ok(Self {
-            stable_ids,
-            display_labels,
-            aliases,
-            alias_ptrs,
+            _stable_ids: stable_ids,
+            _display_labels: display_labels,
+            _aliases: aliases,
+            _alias_ptrs: alias_ptrs,
             raw,
         })
     }
