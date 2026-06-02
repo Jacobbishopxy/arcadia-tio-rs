@@ -23,12 +23,12 @@ name = "tutorial_02_layouts_reads_history"
 path = "examples/tutorials/02_layouts_reads_history.rs"
 
 [[example]]
-name = "tutorial_03_coordinates_v1_numeric"
-path = "examples/tutorials/03_coordinates_v1_numeric.rs"
+name = "tutorial_03_coordinates_numeric"
+path = "examples/tutorials/03_coordinates_numeric.rs"
 
 [[example]]
-name = "tutorial_04_coordinates_v2_full_surface"
-path = "examples/tutorials/04_coordinates_v2_full_surface.rs"
+name = "tutorial_04_coordinates_full_surface"
+path = "examples/tutorials/04_coordinates_full_surface.rs"
 
 [[example]]
 name = "tutorial_05_sparse_append"

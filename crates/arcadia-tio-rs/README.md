@@ -12,7 +12,7 @@ The API slice is intentionally bounded but now covers the agreed public Rust
 error strings, create/open metadata types, policy/inferred create helpers,
 write-forward compression selection, bulk tensor I/O helpers, f32/f64/i32/i64
 sparse-intent analysis and append helpers, universe-aware create/append
-authoring, bounded Coordinate v2 create/read/lookup/append helpers,
+authoring, bounded Current coordinate create/read/lookup/append helpers,
 current read options and shape policies, historical
 `read_at_commit` options and shape policies, retained-history head/list helpers,
 f32/f64 rewrite, rewrite-slice, pop/pop-batched/revert and clear-block mutation
@@ -88,11 +88,11 @@ are visible result statuses rather than opaque wrapper errors. Availability,
 status category/reason, external summaries, dictionary summaries, and optional
 index summaries remain visible as status/context; optional indexes are not
 treated as authoritative coordinate truth, and callers must explicitly allow
-selected-root authoritative scans with `CoordinateV2Options::authoritative_scan`.
+selected-root authoritative scans with `CoordinateOptions::authoritative_scan`.
 The public Rust wrapper does not dereference external references and does not add
 variable-length strings, locale/collation/case folding, broad calendar or
-resolver semantics, append-time dictionary extension, lookup-composed v2 reads,
-or benchmark/release/readiness claims.
+resolver semantics, lookup-composed coordinate reads, or
+benchmark/release/readiness claims.
 
 ## Example
 
@@ -243,13 +243,14 @@ query-attribution helpers are available as API-completeness access to native
 trace JSON, and bounded read-index/Arrow C Data helpers expose native interop
 vocabulary outside the original 17-family score. These remain outside
 benchmark/performance evidence. This crate does not expose generic zero-copy
-native views or compressed storage-accounting eligibility claims. Coordinate v1 lookup/read conveniences remain inline numeric-only for fixed
-axes: exact/range coordinate read helpers compose lookup with ordinary axis-range
-reads and do not imply coordinate-index acceleration. Coordinate v2 create/read
+native views or compressed storage-accounting eligibility claims. Legacy numeric
+coordinate lookup/read conveniences remain inline numeric-only for fixed axes:
+exact/range coordinate read helpers compose lookup with ordinary axis-range reads
+and do not imply coordinate-index acceleration. Current coordinate create/read
 wrappers cover only the implemented descriptor/value/dictionary/status/lookup
 surfaces listed above; external value resolution, variable-length strings, broad
-calendar/timezone interpretation, append-time dictionary extension, lookup-
-composed v2 reads, and authoritative index acceleration are deferred. Pop/revert, metadata setter, index
+calendar/timezone interpretation, lookup-composed coordinate reads, and
+authoritative index acceleration are deferred. Pop/revert, metadata setter, index
 checkpoint setter, clear-block, and unsupported auto-compaction calls
 intentionally surface native policy/layout support errors.
 
@@ -263,8 +264,8 @@ manifest:
 | --- | --- |
 | `tutorial_01_quickstart_create_append_read` | Quickstart create/append/read/metadata |
 | `tutorial_02_layouts_reads_history` | Layouts, selectors, shape policies, dense masks, and retained history |
-| `tutorial_03_coordinates_v1_numeric` | Numeric coordinate v1 descriptors, values, exact/range lookup, and lookup-composed reads |
-| `tutorial_04_coordinates_v2_full_surface` | Coordinate v2 bounded create/read/lookup/append/status surfaces |
+| `tutorial_03_coordinates_numeric` | Numeric coordinate descriptors, values, exact/range lookup, and lookup-composed reads |
+| `tutorial_04_coordinates_full_surface` | Current coordinate bounded create/read/lookup/append/status surfaces |
 | `tutorial_05_sparse_append` | Sparse append analysis and f32/f64/i32/i64 zero/null/exact-integer predicates |
 | `tutorial_06_mutation_history_universe` | Mutation/history helpers and explicit universe-aware remap reads |
 | `tutorial_07_reform_compaction_diagnostics` | Reform, compaction, and native diagnostic report wrappers |
@@ -288,7 +289,7 @@ Before shipping an application that uses this crate:
 - Set `ARCADIA_TIO_CAPI_LIB_DIR` for link discovery and configure runtime loader lookup separately.
 - Run the workspace tests and tutorial examples with that library. The public checkout includes a Cargo target runner that automatically mirrors `ARCADIA_TIO_CAPI_LIB_DIR` or `native/<target>/lib` into the platform runtime-loader path for common Linux/macOS `cargo run` and `cargo test` invocations.
 - Keep generated `.tio` data and native/package artifacts out of this source-only checkout unless a separate release task approves them.
-- Preserve the documented API boundaries: Coordinate v2 external summaries are not dereferenced, optional indexes are not authoritative truth, and examples are not benchmark, storage, compression, capacity, or release-readiness evidence.
+- Preserve the documented API boundaries: coordinate external summaries are not dereferenced, optional indexes are not authoritative truth, and examples are not benchmark, storage, compression, capacity, or release-readiness evidence.
 
 ## Local test/runtime library setup
 

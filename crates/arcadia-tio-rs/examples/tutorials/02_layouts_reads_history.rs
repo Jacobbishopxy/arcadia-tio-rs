@@ -18,8 +18,10 @@ use arcadia_tio_rs::{
 };
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
+    // Step 1: create a temporary directory shared by all layout/read demos.
     let temp = TutorialTempDir::new("layouts_reads_history")?;
 
+    // Step 2: run each focused walkthrough against its own tiny file.
     create_streaming(&temp.path().join("streaming.tio"))?;
     create_random_access(&temp.path().join("random_access.tio"))?;
     create_with_bounded_policy(&temp.path().join("policy_regular_chunked.tio"))?;
@@ -34,6 +36,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 }
 
 fn create_streaming(path: &Path) -> Result<(), Box<dyn std::error::Error>> {
+    // Step 1: declare a streaming tensor whose append axis starts at length 0.
     let options = CreateOptions::streaming(
         DType::F32,
         vec![
@@ -42,6 +45,7 @@ fn create_streaming(path: &Path) -> Result<(), Box<dyn std::error::Error>> {
         ],
         0,
     );
+    // Step 2: append one batch and read it back immediately.
     let mut file = TensorFile::create(path, options)?;
     let appended = file.append_f32(&[1.0, 2.0, 3.0, 4.0], &[2, 2])?;
     assert_eq!((appended.start, appended.end), (0, 2));
@@ -53,6 +57,7 @@ fn create_streaming(path: &Path) -> Result<(), Box<dyn std::error::Error>> {
 }
 
 fn create_random_access(path: &Path) -> Result<(), Box<dyn std::error::Error>> {
+    // Step 1: choose the random-access profile for the same logical shape.
     let options = CreateOptions::random_access(
         DType::I32,
         vec![
@@ -61,6 +66,7 @@ fn create_random_access(path: &Path) -> Result<(), Box<dyn std::error::Error>> {
         ],
         0,
     );
+    // Step 2: append and verify integer payloads use the same safe wrapper pattern.
     let mut file = TensorFile::create(path, options)?;
     file.append_i32(&[10, 20, 30, 40], &[2, 2])?;
     assert_eq!(file.read_all()?.data, TensorData::I32(vec![10, 20, 30, 40]));
@@ -68,6 +74,7 @@ fn create_random_access(path: &Path) -> Result<(), Box<dyn std::error::Error>> {
 }
 
 fn create_with_bounded_policy(path: &Path) -> Result<(), Box<dyn std::error::Error>> {
+    // Step 1: describe a small tensor with fixed symbol/channel axes.
     let mut options = CreateOptions::streaming(
         DType::F32,
         vec![
@@ -83,6 +90,7 @@ fn create_with_bounded_policy(path: &Path) -> Result<(), Box<dyn std::error::Err
     // Bounded RegularChunked policy: only fixed axes are chunked, and each
     // typical query extent is tiny and deterministic.
     let policy = CreatePolicyOptions::new(vec![1, 2], vec![0, 2, 2]);
+    // Step 2: create with policy options and confirm the published extents.
     let mut file = TensorFile::create_with_policy(path, options, policy)?;
     file.append_f32(&[1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0], &[2, 2, 2])?;
     assert_eq!(file.dim_lens()?, vec![2, 2, 2]);
@@ -90,6 +98,7 @@ fn create_with_bounded_policy(path: &Path) -> Result<(), Box<dyn std::error::Err
 }
 
 fn create_inferred(path: &Path) -> Result<(), Box<dyn std::error::Error>> {
+    // Step 1: provide inference hints instead of an explicit storage policy.
     let options = CreateOptions::streaming(
         DType::F64,
         vec![
@@ -101,6 +110,7 @@ fn create_inferred(path: &Path) -> Result<(), Box<dyn std::error::Error>> {
     let mut hints = CreateInferredOptions::new();
     hints.storage_access = StorageAccessKind::RemoteRangeRead;
 
+    // Step 2: create, append, and read back through the inferred profile.
     let mut file = TensorFile::create_inferred(path, options, hints)?;
     file.append_f64(&[9.0, 10.0], &[1, 2])?;
     assert_eq!(file.read_all()?.data, TensorData::F64(vec![9.0, 10.0]));
@@ -108,6 +118,7 @@ fn create_inferred(path: &Path) -> Result<(), Box<dyn std::error::Error>> {
 }
 
 fn read_selectors_options_shape_and_history(path: &Path) -> Result<(), Box<dyn std::error::Error>> {
+    // Step 1: seed two commits so current and historical reads differ.
     let options = CreateOptions::streaming(
         DType::F32,
         vec![
@@ -123,6 +134,7 @@ fn read_selectors_options_shape_and_history(path: &Path) -> Result<(), Box<dyn s
     let second_commit = file.head_commit()?.commit_seq;
     assert!(second_commit > first_commit);
 
+    // Step 2: select an append-entry range with explicit execution options.
     let selected = file.read_with_options(
         &[
             EntrySelector::Range { start: 1, end: 3 },
@@ -137,6 +149,7 @@ fn read_selectors_options_shape_and_history(path: &Path) -> Result<(), Box<dyn s
     );
     assert_eq!(selected.execution.query_max_threads, 2);
 
+    // Step 3: request explicit extents and a dense fill/mask for absent cells.
     let explicit = file.read_with_shape_policy_dense(
         &[],
         ReadWithShapePolicyOptions::serial(ReadShapePolicy::ExplicitExtents(vec![3])),
@@ -151,6 +164,7 @@ fn read_selectors_options_shape_and_history(path: &Path) -> Result<(), Box<dyn s
         assert_eq!(mask, &[1, 1, 0, 1, 1, 0, 1, 1, 0]);
     }
 
+    // Step 4: list commits and read the earlier root exactly.
     let history = file.list_commits(None)?;
     assert!(
         history
@@ -166,6 +180,7 @@ fn read_selectors_options_shape_and_history(path: &Path) -> Result<(), Box<dyn s
     );
     assert_eq!(historical.execution.query_commit_seq, first_commit);
 
+    // Step 5: combine historical reads with explicit shape policy and dense fill.
     let historical_dense = file.read_at_commit_with_shape_policy_dense(
         first_commit,
         &[],

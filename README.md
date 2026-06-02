@@ -34,7 +34,57 @@ Before using the public Rust wrapper in an application build:
 2. Set `ARCADIA_TIO_CAPI_LIB_DIR` for link discovery and configure the platform runtime loader separately (`LD_LIBRARY_PATH`, `DYLD_LIBRARY_PATH`, rpath/install-name, `PATH`, or DLL colocation as appropriate).
 3. Run `cargo test --workspace` and `bash examples/tutorials/run/run_rust.sh` against that native library. A committed Cargo target runner automatically adds `ARCADIA_TIO_CAPI_LIB_DIR` or `native/x86_64-unknown-linux-gnu/lib` to the runtime loader path for common Linux/macOS `cargo run` and `cargo test` invocations.
 4. Keep generated `.tio` files, native libraries, package archives, and local `native/` copies out of source control unless a separate release task approves them.
-5. Treat Coordinate v2 external references as metadata/status summaries only; this wrapper does not add dereference, variable-length string, broad calendar/session, append-time dictionary extension, lookup-acceleration, or release/performance claims.
+5. Treat Coordinate external references as metadata/status summaries only; this wrapper does not add dereference, variable-length string, broad calendar/session, lookup-acceleration, or release/performance claims.
+
+## Using from another Rust project
+
+Add the safe wrapper as a path dependency when working from a local checkout:
+
+```toml
+[dependencies]
+arcadia-tio-rs = { path = "../arcadia-tio-rs/crates/arcadia-tio-rs" }
+```
+
+Or use a git dependency once the desired commit is pushed:
+
+```toml
+[dependencies]
+arcadia-tio-rs = { git = "https://github.com/Jacobbishopxy/arcadia-tio-rs.git" }
+```
+
+The Rust wrapper links to the native C ABI library, so the consuming build must
+also provide `libarcadia_tio_capi`/`arcadia_tio_capi`. Point link discovery and
+the platform runtime loader at the native library directory, for example:
+
+```sh
+export ARCADIA_TIO_CAPI_LIB_DIR="/path/to/arcadia-tio-rs/native/x86_64-unknown-linux-gnu/lib"
+export LD_LIBRARY_PATH="$ARCADIA_TIO_CAPI_LIB_DIR${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
+```
+
+Use `DYLD_LIBRARY_PATH` on macOS, or add the DLL directory to `PATH` on Windows,
+unless the application configures rpath/install-name or colocates the native
+library by another deployment mechanism.
+
+Minimal usage:
+
+```rust
+use arcadia_tio_rs::{AxisKind, CreateOptions, DType, DimSpec, TensorFile};
+
+fn main() -> arcadia_tio_rs::Result<()> {
+    let options = CreateOptions::streaming(
+        DType::F32,
+        vec![
+            DimSpec::new(AxisKind::Time, 0).with_name("time"),
+            DimSpec::new(AxisKind::Channel, 2).with_name("channel"),
+        ],
+        0,
+    );
+
+    let mut file = TensorFile::create("example.tio", options)?;
+    file.append_f32(&[1.0, 2.0], &[1, 2])?;
+    Ok(())
+}
+```
 
 ## Local test flow
 

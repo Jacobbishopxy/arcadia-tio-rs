@@ -15,11 +15,13 @@ use arcadia_tio_rs::{
 };
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
+    // Step 1: create separate tutorial files for compression and interop checks.
     let temp = TutorialTempDir::new("compression_interop")?;
 
     let default_path = temp.path().join("default_then_zstd.tio");
     let uncompressed_path = temp.path().join("explicit_uncompressed.tio");
 
+    // Step 2: demonstrate write controls first, then read interop helpers.
     demonstrate_compression_controls(&default_path, &uncompressed_path)?;
     demonstrate_interop_surfaces(&default_path)?;
 
@@ -34,6 +36,7 @@ fn demonstrate_compression_controls(
     default_path: &Path,
     uncompressed_path: &Path,
 ) -> Result<(), Box<dyn std::error::Error>> {
+    // Step 1: create with native default compression policy and append once.
     let mut default_options = CreateOptions::streaming(
         DType::F32,
         vec![
@@ -48,7 +51,7 @@ fn demonstrate_compression_controls(
     let mut file = TensorFile::create(default_path, default_options)?;
     file.append_f32(&[1.0, 2.0, 3.0, 4.0], &[2, 2])?;
 
-    // The safe wrapper can also set a write-forward override for later appends.
+    // Step 2: switch future appends to a write-forward zstd override.
     file.set_compression(CompressionConfig::zstd_level(3))?;
     file.append_f32(&[5.0, 6.0], &[1, 2])?;
     assert_eq!(file.read_all()?.shape, vec![3, 2]);
@@ -57,6 +60,7 @@ fn demonstrate_compression_controls(
         TensorData::F32(vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0])
     );
 
+    // Step 3: create another file with explicit uncompressed writes.
     let mut explicit_options = CreateOptions::streaming(
         DType::F64,
         vec![
@@ -77,8 +81,10 @@ fn demonstrate_compression_controls(
 }
 
 fn demonstrate_interop_surfaces(path: &Path) -> Result<(), Box<dyn std::error::Error>> {
+    // Step 1: reopen the compressed file for bounded read interop APIs.
     let file = TensorFile::open(path)?;
 
+    // Step 2: use read-index lowering and inspect its report.
     let indexed = file.read_index(&[
         ReadIndexItem::slice(Some(0), Some(3), 2)?,
         ReadIndexItem::all(),
@@ -94,6 +100,7 @@ fn demonstrate_interop_surfaces(path: &Path) -> Result<(), Box<dyn std::error::E
         TensorData::F32(vec![1.0, 2.0, 5.0, 6.0])
     );
 
+    // Step 3: export Arrow C Data under RAII ownership.
     {
         let arrow = file.read_values_arrow()?;
         assert_eq!(arrow.array().length, 3);
@@ -104,8 +111,7 @@ fn demonstrate_interop_surfaces(path: &Path) -> Result<(), Box<dyn std::error::E
         assert!(!arrow.schema_ptr().is_null());
     }
 
-    // Dropping the RAII Arrow owner releases native callbacks. Ordinary reads
-    // remain available afterward.
+    // Step 4: dropping the Arrow owner releases native callbacks; ordinary reads remain available.
     assert_eq!(file.read_all()?.shape, vec![3, 2]);
 
     Ok(())

@@ -19,8 +19,10 @@ use arcadia_tio_rs::{
 const SHAPE: &[u64] = &[1, 4];
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
+    // Step 1: create one temporary workspace for all sparse-intent demos.
     let temp = TutorialTempDir::new("sparse_append")?;
 
+    // Step 2: run each dtype/predicate combination independently.
     demo_f32_zero(temp.path())?;
     demo_f64_zero(temp.path())?;
     demo_i32_zero_and_exact(temp.path())?;
@@ -35,6 +37,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 }
 
 fn create_sparse_file(path: &Path, dtype: DType) -> Result<TensorFile, Box<dyn std::error::Error>> {
+    // Step 1: sparse-intent demos use random-access files so sparse lowering is available.
     let options = CreateOptions::random_access(
         dtype,
         vec![
@@ -47,6 +50,7 @@ fn create_sparse_file(path: &Path, dtype: DType) -> Result<TensorFile, Box<dyn s
 }
 
 fn demo_f32_zero(root: &Path) -> Result<(), Box<dyn std::error::Error>> {
+    // Step 1: use zeros as absent subtensors for f32 input.
     let mut file = create_sparse_file(&root.join("f32_zero.tio"), DType::F32)?;
     let values = [11.0_f32, 0.0, 13.0, 0.0];
     let rule = SparseRule::predicate_subtensor(vec![1], SparseValuePredicate::Zero);
@@ -55,6 +59,7 @@ fn demo_f32_zero(root: &Path) -> Result<(), Box<dyn std::error::Error>> {
     assert_eq!(analysis.absent_subtensor_count, 2);
     assert_eq!(analysis.total_subtensor_count, 4);
 
+    // Step 2: append with the same rule and inspect dense fill/mask output.
     let range = file.append_sparse_f32_with_range(&values, SHAPE, &rule)?;
     assert_eq!((range.start, range.end), (0, 1));
     let dense = file.read_all_dense(-1.0)?;
@@ -69,6 +74,7 @@ fn demo_f32_zero(root: &Path) -> Result<(), Box<dyn std::error::Error>> {
 }
 
 fn demo_f64_zero(root: &Path) -> Result<(), Box<dyn std::error::Error>> {
+    // Step 1: repeat the zero-subtensor pattern for f64.
     let mut file = create_sparse_file(&root.join("f64_zero.tio"), DType::F64)?;
     let values = [101.0_f64, 0.0, 103.0, 0.0];
     let rule = SparseRule::predicate_subtensor(vec![1], SparseValuePredicate::Zero);
@@ -77,6 +83,7 @@ fn demo_f64_zero(root: &Path) -> Result<(), Box<dyn std::error::Error>> {
     assert_eq!(analysis.absent_subtensor_count, 2);
     assert_eq!(analysis.total_subtensor_count, 4);
 
+    // Step 2: verify the persisted sparse result through dense readback.
     let range = file.append_sparse_f64_with_range(&values, SHAPE, &rule)?;
     assert_eq!((range.start, range.end), (0, 1));
     let dense = file.read_all_dense(-1.0)?;
@@ -91,6 +98,7 @@ fn demo_f64_zero(root: &Path) -> Result<(), Box<dyn std::error::Error>> {
 }
 
 fn demo_i32_zero_and_exact(root: &Path) -> Result<(), Box<dyn std::error::Error>> {
+    // Step 1: lower i32 zeros as absent subtensors.
     let mut zero_file = create_sparse_file(&root.join("i32_zero.tio"), DType::I32)?;
     let zero_values = [21_i32, 0, 23, 0];
     let zero_rule = SparseRule::predicate_subtensor(vec![1], SparseValuePredicate::Zero);
@@ -107,6 +115,7 @@ fn demo_i32_zero_and_exact(root: &Path) -> Result<(), Box<dyn std::error::Error>
     );
     assert_eq!(zero_dense.mask.as_deref(), Some(&[1, 0, 1, 0][..]));
 
+    // Step 2: lower a custom exact i32 sentinel as absent subtensors.
     let mut exact_file = create_sparse_file(&root.join("i32_exact.tio"), DType::I32)?;
     let exact_values = [41_i32, -7, 43, -7];
     let exact_rule = SparseRule::predicate_subtensor(vec![1], SparseValuePredicate::EqualI32(-7));
@@ -122,6 +131,7 @@ fn demo_i32_zero_and_exact(root: &Path) -> Result<(), Box<dyn std::error::Error>
     );
     assert_eq!(exact_dense.mask.as_deref(), Some(&[1, 0, 1, 0][..]));
 
+    // Step 3: dtype-specific predicates reject mismatched integer widths.
     let mismatch = SparseRule::predicate_subtensor(vec![1], SparseValuePredicate::EqualI64(-7));
     let err = exact_file
         .analyze_sparse_append_i32(&exact_values, SHAPE, &mismatch)
@@ -135,6 +145,7 @@ fn demo_i32_zero_and_exact(root: &Path) -> Result<(), Box<dyn std::error::Error>
 }
 
 fn demo_i64_zero_and_exact(root: &Path) -> Result<(), Box<dyn std::error::Error>> {
+    // Step 1: lower i64 zeros as absent subtensors.
     let mut zero_file = create_sparse_file(&root.join("i64_zero.tio"), DType::I64)?;
     let zero_values = [201_i64, 0, 203, 0];
     let zero_rule = SparseRule::predicate_subtensor(vec![1], SparseValuePredicate::Zero);
@@ -151,6 +162,7 @@ fn demo_i64_zero_and_exact(root: &Path) -> Result<(), Box<dyn std::error::Error>
     );
     assert_eq!(zero_dense.mask.as_deref(), Some(&[1, 0, 1, 0][..]));
 
+    // Step 2: use a large exact i64 sentinel without losing integer precision.
     let mut exact_file = create_sparse_file(&root.join("i64_exact.tio"), DType::I64)?;
     let absent = 9_007_199_254_740_993_i64;
     let exact_values = [401_i64, absent, 403, absent];
@@ -168,6 +180,7 @@ fn demo_i64_zero_and_exact(root: &Path) -> Result<(), Box<dyn std::error::Error>
     );
     assert_eq!(exact_dense.mask.as_deref(), Some(&[1, 0, 1, 0][..]));
 
+    // Step 3: mismatched exact predicates are rejected before append.
     let mismatch = SparseRule::predicate_subtensor(vec![1], SparseValuePredicate::EqualI32(0));
     let err = exact_file
         .append_sparse_i64(&exact_values, SHAPE, &mismatch)
@@ -181,11 +194,12 @@ fn demo_i64_zero_and_exact(root: &Path) -> Result<(), Box<dyn std::error::Error>
 }
 
 fn demo_null_rule_boundary(root: &Path) -> Result<(), Box<dyn std::error::Error>> {
-    // Plain typed Rust slices have no nullable bitmap. A NullSubtensor rule is
+    // Step 1: show that plain typed Rust slices have no nullable bitmap. A NullSubtensor rule is
     // still explicit API input, but for these dense numeric slices it detects no
     // absent subtensors and appends densely to preserve exact values.
     let null_rule = SparseRule::null_subtensor(vec![1]);
 
+    // Step 2: null-subtensor analysis falls back densely for non-null i32 slices.
     let mut i32_file = create_sparse_file(&root.join("i32_null_rule_dense_view.tio"), DType::I32)?;
     let i32_values = [31_i32, 32, 33, 34];
     let i32_analysis = i32_file.analyze_sparse_append_i32(&i32_values, SHAPE, &null_rule)?;
@@ -198,6 +212,7 @@ fn demo_null_rule_boundary(root: &Path) -> Result<(), Box<dyn std::error::Error>
         TensorData::I32(i32_values.to_vec())
     );
 
+    // Step 3: the same dense fallback boundary applies to i64 slices.
     let mut i64_file = create_sparse_file(&root.join("i64_null_rule_dense_view.tio"), DType::I64)?;
     let i64_values = [301_i64, 302, 303, 304];
     let i64_analysis = i64_file.analyze_sparse_append_i64(&i64_values, SHAPE, &null_rule)?;

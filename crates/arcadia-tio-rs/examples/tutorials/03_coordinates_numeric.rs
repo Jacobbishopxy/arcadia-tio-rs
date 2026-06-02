@@ -1,6 +1,6 @@
-//! Public Rust numeric Coordinate v1 tutorial.
+//! Public Rust numeric coordinate tutorial.
 //!
-//! Coordinate v1 metadata is axis metadata. This example uses tiny integer date
+//! Coordinate metadata is axis metadata. This example uses tiny integer date
 //! encodings, reads descriptor/value metadata, performs exact/range lookup, and
 //! composes lookup helpers with ordinary reads. The integer values are not a
 //! timezone, calendar, or session semantics claim.
@@ -18,9 +18,11 @@ use arcadia_tio_rs::{
 };
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
-    let temp = TutorialTempDir::new("coordinates_v1_numeric")?;
-    let path = temp.path().join("coordinates_v1_numeric.tio");
+    // Step 1: use an isolated file so the tutorial is repeatable.
+    let temp = TutorialTempDir::new("coordinates_numeric")?;
+    let path = temp.path().join("coordinates_numeric.tio");
 
+    // Step 2: declare an inline numeric coordinate on the fixed symbol axis.
     let mut options = CreateOptions::streaming(
         DType::F64,
         vec![
@@ -45,10 +47,12 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         required: true,
     });
 
+    // Step 3: create the file and append two time rows over the coordinated axis.
     let mut file = TensorFile::create(&path, options)?;
     let appended = file.append_f64(&[101.0, 102.0, 103.0, 201.0, 202.0, 203.0], &[2, 3])?;
     assert_eq!((appended.start, appended.end), (0, 2));
 
+    // Step 4: inspect descriptor metadata without reading payload values.
     let descriptors = file.coordinate_meta()?;
     assert_eq!(descriptors.len(), 1);
     assert_eq!(descriptors[0].axis, 1);
@@ -62,6 +66,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         CoordinateValidationStatus::Validated
     );
 
+    // Step 5: read the coordinate values themselves as an ordinary tensor.
     let coordinate_values = file.read_axis_coordinates(1)?;
     assert_eq!(coordinate_values.dtype, DType::I32);
     assert_eq!(coordinate_values.shape, vec![3]);
@@ -70,10 +75,12 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         TensorData::I32(vec![20260514, 20260515, 20260516])
     );
 
+    // Step 6: run exact and range lookup helpers over validated integer values.
     assert_eq!(file.coordinate_index_i32(1, 20260515)?, 1);
     assert_eq!(file.coordinate_range_i32(1, 20260514, 20260516)?, 0..3);
     assert_eq!(file.coordinate_range_i32(1, 20260515, 20260516)?, 1..3);
 
+    // Step 7: compose coordinate lookup with ordinary reads.
     let exact_read = file.read_at_coordinate_i32(1, 20260516)?;
     assert_eq!(exact_read.shape, vec![2, 1]);
     assert_eq!(exact_read.data, TensorData::F64(vec![103.0, 203.0]));
@@ -85,6 +92,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         TensorData::F64(vec![101.0, 102.0, 201.0, 202.0])
     );
 
+    // Step 8: missing values are ordinary wrapper errors, not fabricated positions.
     let missing = file
         .coordinate_index_i32(1, 20260520)
         .expect_err("missing date should fail");
@@ -92,7 +100,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     assert!(missing.message().contains("coordinate value not found"));
 
     println!(
-        "coordinate v1 ok: descriptor/value reads and lookup-composed reads passed at {}",
+        "coordinate ok: descriptor/value reads and lookup-composed reads passed at {}",
         path.display()
     );
     Ok(())

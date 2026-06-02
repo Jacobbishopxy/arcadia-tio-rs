@@ -1,0 +1,117 @@
+# Arcadia TIO Rust wrapper public workspace
+# Requires cargo-make: cargo install cargo-make
+
+[config]
+default_to_workspace = false
+
+[tasks.default]
+description = "Show available tasks"
+alias = "help"
+
+[tasks.help]
+description = "Show available tasks"
+script_runner = "@shell"
+script = '''
+echo "Common tasks:"
+echo "  cargo make build       # build all crates with all features"
+echo "  cargo make test        # run all tests with the local native library"
+echo "  cargo make check       # cargo check all crates with all features"
+echo "  cargo make fmt         # verify rustfmt"
+echo "  cargo make ci          # fmt + check + test"
+echo "  cargo make native-info # print detected local native library path"
+echo ""
+echo "Native library:"
+echo "  By default tasks use native/<rustc-host-triple>/lib in this checkout."
+echo "  Override with ARCADIA_TIO_CAPI_LIB_DIR=/path/to/lib if needed."
+'''
+
+[tasks.native-info]
+description = "Print detected native library configuration"
+script_runner = "@shell"
+script = '''
+set -e
+ROOT_DIR="${CARGO_MAKE_WORKING_DIRECTORY:-$(pwd)}"
+TARGET_TRIPLE="${TARGET_TRIPLE:-$(rustc -vV | awk '/^host:/ { print $2 }')}"
+LIB_DIR="${ARCADIA_TIO_CAPI_LIB_DIR:-$ROOT_DIR/native/$TARGET_TRIPLE/lib}"
+echo "target_triple=$TARGET_TRIPLE"
+echo "native_lib_dir=$LIB_DIR"
+if [ -d "$LIB_DIR" ]; then
+  ls -l "$LIB_DIR"
+else
+  echo "native library directory is missing" >&2
+  exit 1
+fi
+'''
+
+[tasks.build]
+clear = true
+description = "Build all crates with all features"
+script_runner = "@shell"
+script = '''
+set -e
+ROOT_DIR="${CARGO_MAKE_WORKING_DIRECTORY:-$(pwd)}"
+TARGET_TRIPLE="${TARGET_TRIPLE:-$(rustc -vV | awk '/^host:/ { print $2 }')}"
+LIB_DIR="${ARCADIA_TIO_CAPI_LIB_DIR:-$ROOT_DIR/native/$TARGET_TRIPLE/lib}"
+if [ ! -d "$LIB_DIR" ]; then
+  echo "Native library directory not found: $LIB_DIR" >&2
+  echo "Copy libarcadia_tio_capi into native/$TARGET_TRIPLE/lib or set ARCADIA_TIO_CAPI_LIB_DIR." >&2
+  exit 1
+fi
+export ARCADIA_TIO_CAPI_LIB_DIR="$LIB_DIR"
+export LD_LIBRARY_PATH="$LIB_DIR${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
+export DYLD_LIBRARY_PATH="$LIB_DIR${DYLD_LIBRARY_PATH:+:$DYLD_LIBRARY_PATH}"
+export PATH="$LIB_DIR:$PATH"
+cargo build --all-features
+'''
+
+[tasks.check]
+clear = true
+description = "Check all crates with all features"
+script_runner = "@shell"
+script = '''
+set -e
+ROOT_DIR="${CARGO_MAKE_WORKING_DIRECTORY:-$(pwd)}"
+TARGET_TRIPLE="${TARGET_TRIPLE:-$(rustc -vV | awk '/^host:/ { print $2 }')}"
+LIB_DIR="${ARCADIA_TIO_CAPI_LIB_DIR:-$ROOT_DIR/native/$TARGET_TRIPLE/lib}"
+if [ ! -d "$LIB_DIR" ]; then
+  echo "Native library directory not found: $LIB_DIR" >&2
+  echo "Copy libarcadia_tio_capi into native/$TARGET_TRIPLE/lib or set ARCADIA_TIO_CAPI_LIB_DIR." >&2
+  exit 1
+fi
+export ARCADIA_TIO_CAPI_LIB_DIR="$LIB_DIR"
+export LD_LIBRARY_PATH="$LIB_DIR${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
+export DYLD_LIBRARY_PATH="$LIB_DIR${DYLD_LIBRARY_PATH:+:$DYLD_LIBRARY_PATH}"
+export PATH="$LIB_DIR:$PATH"
+cargo check --all-features
+'''
+
+[tasks.test]
+clear = true
+description = "Run all tests with all features and the local native library"
+script_runner = "@shell"
+script = '''
+set -e
+ROOT_DIR="${CARGO_MAKE_WORKING_DIRECTORY:-$(pwd)}"
+TARGET_TRIPLE="${TARGET_TRIPLE:-$(rustc -vV | awk '/^host:/ { print $2 }')}"
+LIB_DIR="${ARCADIA_TIO_CAPI_LIB_DIR:-$ROOT_DIR/native/$TARGET_TRIPLE/lib}"
+if [ ! -d "$LIB_DIR" ]; then
+  echo "Native library directory not found: $LIB_DIR" >&2
+  echo "Copy libarcadia_tio_capi into native/$TARGET_TRIPLE/lib or set ARCADIA_TIO_CAPI_LIB_DIR." >&2
+  exit 1
+fi
+export ARCADIA_TIO_CAPI_LIB_DIR="$LIB_DIR"
+export LD_LIBRARY_PATH="$LIB_DIR${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
+export DYLD_LIBRARY_PATH="$LIB_DIR${DYLD_LIBRARY_PATH:+:$DYLD_LIBRARY_PATH}"
+export PATH="$LIB_DIR:$PATH"
+cargo test --all-features
+'''
+
+[tasks.fmt]
+clear = true
+description = "Verify rustfmt"
+command = "cargo"
+args = ["fmt", "--all", "--", "--check"]
+
+[tasks.ci]
+description = "Run fmt, check, and tests"
+dependencies = ["fmt", "check", "test"]

@@ -11485,6 +11485,7 @@ mod tests {
             code_dtype: CoordinateCodeDTypeV2::U32,
             values: CoordinateInputValuesV2::FixedText(b"ABCDWXYZ".to_vec()),
             fixed_text_width: 4,
+            dictionary_entries: Vec::new(),
         };
         let batch = AppendCoordinateBatchV2 {
             entries: vec![entry],

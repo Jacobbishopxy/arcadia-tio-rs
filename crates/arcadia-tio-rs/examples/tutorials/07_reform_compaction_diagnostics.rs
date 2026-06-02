@@ -17,9 +17,11 @@ use arcadia_tio_rs::{
 };
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
+    // Step 1: allocate all source and destination paths under one temp directory.
     let temp = TutorialTempDir::new("reform_compaction_diagnostics")?;
     let paths = Paths::new(temp.path());
 
+    // Step 2: seed source data, reform copies, and diagnostics/compaction outputs.
     create_source(&paths.source)?;
     demonstrate_reform(&paths)?;
     demonstrate_compaction_and_reports(&paths)?;
@@ -32,6 +34,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 }
 
 fn create_source(path: &Path) -> Result<(), Box<dyn std::error::Error>> {
+    // Step 1: create a tiny source file with two commits plus a rewrite.
     let options = CreateOptions::streaming(
         DType::F32,
         vec![
@@ -52,6 +55,7 @@ fn create_source(path: &Path) -> Result<(), Box<dyn std::error::Error>> {
 }
 
 fn demonstrate_reform(paths: &Paths) -> Result<(), Box<dyn std::error::Error>> {
+    // Step 1: reform the source into RegularChunked, then WholeAppendUnit.
     let mut source = TensorFile::open(&paths.source)?;
     source.reform_to(
         &paths.regular_reform,
@@ -60,6 +64,7 @@ fn demonstrate_reform(paths: &Paths) -> Result<(), Box<dyn std::error::Error>> {
     let mut regular = TensorFile::open(&paths.regular_reform)?;
     regular.reform_to(&paths.wau_reform, ReformOptions::whole_append_unit())?;
 
+    // Step 2: both reformed files expose the same logical current payload.
     for path in [&paths.regular_reform, &paths.wau_reform] {
         let reformed = TensorFile::open(path)?;
         assert_eq!(reformed.read_all()?.shape, vec![2, 2]);
@@ -69,6 +74,7 @@ fn demonstrate_reform(paths: &Paths) -> Result<(), Box<dyn std::error::Error>> {
         );
     }
 
+    // Step 3: invalid reform requests return diagnostic wrapper errors.
     let invalid_report = regular
         .reform_to_ex(
             &paths.invalid_reform,
@@ -81,6 +87,7 @@ fn demonstrate_reform(paths: &Paths) -> Result<(), Box<dyn std::error::Error>> {
 }
 
 fn demonstrate_compaction_and_reports(paths: &Paths) -> Result<(), Box<dyn std::error::Error>> {
+    // Step 1: open the source and compare shallow and V4 diagnostic report shapes.
     let mut source = TensorFile::open(&paths.source)?;
 
     let shallow = source.analyze_compaction()?;
@@ -92,6 +99,7 @@ fn demonstrate_compaction_and_reports(paths: &Paths) -> Result<(), Box<dyn std::
     assert!(diagnostics.omitted_unreachable_bytes);
     assert!(diagnostics.omitted_unreachable_bytes_reason.is_some());
 
+    // Step 2: precise diagnostics expose optional accounting fields when complete.
     let precise_diagnostics =
         source.v4_diagnostics_precise(V4PreciseAccountingOptions::default())?;
     assert_eq!(precise_diagnostics.status, V4ReportStatus::Complete);
@@ -112,6 +120,7 @@ fn demonstrate_compaction_and_reports(paths: &Paths) -> Result<(), Box<dyn std::
             .is_some()
     );
 
+    // Step 3: analyze compaction before writing a compacted destination.
     let analysis = source.analyze_v4_compaction()?;
     assert_eq!(analysis.status, V4ReportStatus::Complete);
     assert_eq!(
@@ -125,6 +134,7 @@ fn demonstrate_compaction_and_reports(paths: &Paths) -> Result<(), Box<dyn std::
     assert_eq!(precise.status, V4ReportStatus::Complete);
     assert!(precise.source_file_bytes >= analysis.source_file_bytes);
 
+    // Step 4: compact to a separate file and verify logical data is preserved.
     source.compact_to(
         &paths.compact_copy,
         CompactionOptions {
@@ -140,6 +150,7 @@ fn demonstrate_compaction_and_reports(paths: &Paths) -> Result<(), Box<dyn std::
         TensorData::F32(vec![10.0, 11.0, 3.0, 4.0])
     );
 
+    // Step 5: maybe-compact can decline when thresholds are not met.
     let maybe_compacted = source.maybe_compact(
         &paths.maybe_compact,
         CompactionOptions {
@@ -149,6 +160,7 @@ fn demonstrate_compaction_and_reports(paths: &Paths) -> Result<(), Box<dyn std::
     )?;
     assert!(!maybe_compacted);
 
+    // Step 6: retained-history compaction writes another explicit destination.
     let retained = source.compact_v4_retained_history_to(
         &paths.retained_compact,
         V4RetainedHistoryCompactionOptions::retain_last(1),

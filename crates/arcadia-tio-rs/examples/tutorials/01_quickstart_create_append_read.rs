@@ -14,9 +14,11 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use arcadia_tio_rs::{AxisKind, CreateOptions, DType, DimSpec, TensorData, TensorFile};
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
+    // Step 1: create an isolated temporary workspace for this tutorial run.
     let temp = TutorialTempDir::new("quickstart_create_append_read")?;
     let path = temp.path().join("quickstart.tio");
 
+    // Step 2: describe the tensor axes and user metadata before create.
     let dims = vec![
         DimSpec::new(AxisKind::Time, 0).with_name("time"),
         DimSpec::new(AxisKind::Channel, 2).with_name("channel"),
@@ -26,18 +28,21 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     options.user_kv = vec![("tutorial".to_string(), "rust quickstart".to_string())];
 
     {
+        // Step 3: create the file, append one dense payload batch, and verify the assigned range.
         let mut file = TensorFile::create(&path, options)?;
         let appended = file.append_f32(&[1.0, 2.0, 3.0, 4.0], &[2, 2])?;
         assert_eq!((appended.start, appended.end), (0, 2));
         assert_eq!(file.dim_lens()?, vec![2, 2]);
     }
 
+    // Step 4: reopen the file to prove values survive handle boundaries.
     let file = TensorFile::open(&path)?;
     let values = file.read_all()?;
     assert_eq!(values.dtype, DType::F32);
     assert_eq!(values.shape, vec![2, 2]);
     assert_eq!(values.data, TensorData::F32(vec![1.0, 2.0, 3.0, 4.0]));
 
+    // Step 5: load metadata separately and check axis names, labels, and user kv.
     let meta = TensorFile::load_meta(&path)?;
     assert_eq!(meta.dtype, DType::F32);
     assert_eq!(meta.dims[0].name.as_deref(), Some("time"));

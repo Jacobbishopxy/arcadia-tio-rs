@@ -19,8 +19,10 @@ use arcadia_tio_rs::{
 };
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
+    // Step 1: create a shared temporary workspace for mutation and universe demos.
     let temp = TutorialTempDir::new("mutation_history_universe")?;
 
+    // Step 2: exercise history/mutation first, then universe-aware reads.
     demo_rewrite_pop_revert_and_history(temp.path())?;
     demo_universe_authoring_and_remap(temp.path())?;
 
@@ -32,6 +34,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 }
 
 fn demo_rewrite_pop_revert_and_history(root: &Path) -> Result<(), Box<dyn std::error::Error>> {
+    // Step 1: create a streaming file and seed a base commit.
     let path = root.join("mutation_history.tio");
     let options = CreateOptions::streaming(
         DType::F32,
@@ -47,6 +50,7 @@ fn demo_rewrite_pop_revert_and_history(root: &Path) -> Result<(), Box<dyn std::e
     file.append_f32(&base, &[3, 2])?;
     let base_commit = file.head_commit()?.commit_seq;
 
+    // Step 2: rewrite selected entries and verify current data changes.
     file.rewrite_slice_f32(
         &[EntrySelector::Take(vec![0, 2]), EntrySelector::All],
         &[10.0, 11.0, 50.0, 51.0],
@@ -59,15 +63,18 @@ fn demo_rewrite_pop_revert_and_history(root: &Path) -> Result<(), Box<dyn std::e
         TensorData::F32(vec![10.0, 11.0, 3.0, 4.0, 50.0, 51.0])
     );
 
+    // Step 3: retained history still exposes the original base commit.
     let historical_base = file.read_at_commit(base_commit, &[])?;
     assert_eq!(historical_base.shape, vec![3, 2]);
     assert_eq!(historical_base.data, TensorData::F32(base.to_vec()));
 
+    // Step 4: show the explicit unsupported clear-block boundary.
     let clear_boundary = file
         .clear_blocks(&[])
         .expect_err("clear_blocks is an explicit unsupported boundary here");
     assert_eq!(clear_boundary.code(), ErrorCode::Unimplemented);
 
+    // Step 5: append then pop to return to the rewrite head.
     file.append_f32(&[7.0, 8.0], &[1, 2])?;
     file.pop()?;
     assert_eq!(
@@ -77,6 +84,7 @@ fn demo_rewrite_pop_revert_and_history(root: &Path) -> Result<(), Box<dyn std::e
     let after_pop_commit = file.head_commit()?.commit_seq;
     assert!(after_pop_commit > rewrite_commit);
 
+    // Step 6: append again, then revert back to the base commit.
     file.append_f32(&[9.0, 10.0], &[1, 2])?;
     file.revert_commit(base_commit)?;
     let current_head = file.head_commit()?.commit_seq;
@@ -89,6 +97,7 @@ fn demo_rewrite_pop_revert_and_history(root: &Path) -> Result<(), Box<dyn std::e
         TensorData::F32(vec![10.0, 11.0, 3.0, 4.0, 50.0, 51.0])
     );
 
+    // Step 7: list visible commits and verify reopen preserves the current head.
     let visible = file.list_commits(Some(3))?;
     assert_eq!(visible[0].commit_seq, current_head);
     assert!(visible.len() >= 2);
@@ -106,6 +115,7 @@ fn demo_rewrite_pop_revert_and_history(root: &Path) -> Result<(), Box<dyn std::e
 }
 
 fn demo_universe_authoring_and_remap(root: &Path) -> Result<(), Box<dyn std::error::Error>> {
+    // Step 1: create a file whose symbol axis is universe-aware.
     let path = root.join("universe_remap.tio");
     let options = CreateOptions::streaming(
         DType::F32,
@@ -120,6 +130,7 @@ fn demo_universe_authoring_and_remap(root: &Path) -> Result<(), Box<dyn std::err
 
     let mut file = TensorFile::create_with_universe(&path, options, universe_options)?;
 
+    // Step 2: append the first slot and publish an explicit remap to another version.
     let first_append = AppendWithUniverseOptions {
         slots: vec![SlotUniverseBindings::new(vec![UniverseBinding::new(
             1,
@@ -139,6 +150,7 @@ fn demo_universe_authoring_and_remap(root: &Path) -> Result<(), Box<dyn std::err
     assert_eq!((first_range.start, first_range.end), (0, 1));
     let first_commit = file.head_commit()?.commit_seq;
 
+    // Step 3: append two more slots with per-slot bindings/remaps.
     let second_append = AppendWithUniverseOptions {
         slots: vec![
             SlotUniverseBindings::new(vec![UniverseBinding::new(1, family, uuid(2), 2)]),
@@ -153,6 +165,7 @@ fn demo_universe_authoring_and_remap(root: &Path) -> Result<(), Box<dyn std::err
         file.append_f32_with_universe(&[3.0, 4.0, 5.0, 6.0], &[2, 2], &second_append)?;
     assert_eq!((second_range.start, second_range.end), (1, 3));
 
+    // Step 4: read the latest slot in its exact universe version.
     let current_selectors = [
         EntrySelector::Range { start: 2, end: 3 },
         EntrySelector::All,
@@ -167,6 +180,7 @@ fn demo_universe_authoring_and_remap(root: &Path) -> Result<(), Box<dyn std::err
     assert_eq!(current.value.tensor.shape, vec![1, 2]);
     assert_eq!(current.value.tensor.data, TensorData::F32(vec![5.0, 6.0]));
 
+    // Step 5: read mixed slots into one explicit target universe.
     let remapped_selectors = [
         EntrySelector::Range { start: 1, end: 3 },
         EntrySelector::All,
@@ -184,6 +198,7 @@ fn demo_universe_authoring_and_remap(root: &Path) -> Result<(), Box<dyn std::err
         TensorData::F32(vec![4.0, 3.0, 5.0, 6.0])
     );
 
+    // Step 6: historical reads can target either original or remapped universes.
     let historical_selectors = [
         EntrySelector::Range { start: 0, end: 1 },
         EntrySelector::All,
@@ -221,6 +236,7 @@ fn demo_universe_authoring_and_remap(root: &Path) -> Result<(), Box<dyn std::err
         TensorData::F32(vec![2.0, 1.0])
     );
 
+    // Step 7: an unavailable target universe version fails visibly.
     let wrong_version = file
         .read_with_shape_policy(
             &current_selectors,
