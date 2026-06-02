@@ -11,8 +11,17 @@ description = "Safe Rust wrapper over the Arcadia TIO C ABI binary library."
 [lib]
 path = "src/lib.rs"
 
+[features]
+default = []
+arrow = ["dep:arrow-array", "dep:arrow-ipc", "dep:arrow-schema"]
+ndarray = ["dep:ndarray"]
+
 [dependencies]
 arcadia-tio-sys = { path = "../arcadia-tio-sys", version = "0.1.0" }
+arrow-array = { version = "57.2.0", optional = true }
+arrow-ipc = { version = "57.2.0", optional = true }
+arrow-schema = { version = "57.2.0", optional = true }
+ndarray = { version = "0.17.2", optional = true }
 
 [[example]]
 name = "tutorial_01_quickstart_create_append_read"
@@ -45,4 +54,9 @@ path = "examples/tutorials/07_reform_compaction_diagnostics.rs"
 [[example]]
 name = "tutorial_08_compression_interop"
 path = "examples/tutorials/08_compression_interop.rs"
+
+[[example]]
+name = "tutorial_09_tensor_ops_conversions"
+path = "examples/tutorials/09_tensor_ops_conversions.rs"
+required-features = ["arrow", "ndarray"]
 

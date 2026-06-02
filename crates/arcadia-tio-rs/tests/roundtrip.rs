@@ -4,23 +4,23 @@ use std::path::PathBuf;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
 use arcadia_tio_rs::{
-    AppendCoordinateBatch, AppendCoordinateEntry, AppendWithUniverseOptions,
-    AutoCompactionConfig, AxisCoordinateInput, AxisIdentityInput, AxisKind, CompactionMode,
-    CompactionOptions, CompressionConfig, CoordinateAvailability, CoordinateCodeDType,
-    CoordinateDType, CoordinateDictionaryEntry, CoordinateDictionarySummary,
-    CoordinateEncoding, CoordinateExternalBindingV2, CoordinateFixedTextLayout, CoordinateKind,
-    CoordinateLookupKey, CoordinateLookupResultStatus, CoordinateMonotonicity,
-    CoordinateOrdering, CoordinateSourceKind, CoordinateSpec, CoordinateStatusCategory,
-    CoordinateStorage, CoordinateStorageKind, CoordinateUniqueness, CoordinateOptions,
-    CoordinateValidationStatus, CoordinateValueDomain, CoordinateValues, CreateInferredOptions,
-    CreateOptions, CreatePolicyOptions, CreateUniverseOptions, DType, DimSpec, EntrySelector,
-    ErrorCode, ExplicitExtentAxisTarget, ExplicitUniverseAxisTarget, HistoricalQuerySourceKind,
-    HistoricalReadWithOptions, HistoricalReadWithShapePolicyOptions, QueryTraceContext,
-    ReadIndexItem, ReadIndexLoweringKind, ReadShapePolicy, ReadWithOptions,
-    ReadWithShapePolicyOptions, ReformOptions, SlotUniverseBindings, SparseAppendOutcome,
-    SparseAppendReason, SparseRule, SparseValuePredicate, StorageAccessKind, TensorData,
-    TensorFile, UniverseBinding, V4CompactionAnalysisPolicy, V4PreciseAccountingField,
-    V4PreciseAccountingOptions, V4ReportStatus, V4RetainedHistoryCompactionOptions,
+    AppendCoordinateBatch, AppendCoordinateEntry, AppendWithUniverseOptions, AutoCompactionConfig,
+    AxisCoordinateInput, AxisIdentityInput, AxisKind, CompactionMode, CompactionOptions,
+    CompressionConfig, CoordinateAvailability, CoordinateCodeDType, CoordinateDType,
+    CoordinateDictionaryEntry, CoordinateDictionarySummary, CoordinateEncoding,
+    CoordinateExternalBindingV2, CoordinateFixedTextLayout, CoordinateKind, CoordinateLookupKey,
+    CoordinateLookupResultStatus, CoordinateMonotonicity, CoordinateOptions, CoordinateOrdering,
+    CoordinateSourceKind, CoordinateSpec, CoordinateStatusCategory, CoordinateStorage,
+    CoordinateStorageKind, CoordinateUniqueness, CoordinateValidationStatus, CoordinateValueDomain,
+    CoordinateValues, CreateInferredOptions, CreateOptions, CreatePolicyOptions,
+    CreateUniverseOptions, DType, DimSpec, EntrySelector, ErrorCode, ExplicitExtentAxisTarget,
+    ExplicitUniverseAxisTarget, HistoricalQuerySourceKind, HistoricalReadWithOptions,
+    HistoricalReadWithShapePolicyOptions, QueryTraceContext, ReadIndexItem, ReadIndexLoweringKind,
+    ReadShapePolicy, ReadWithOptions, ReadWithShapePolicyOptions, ReformOptions,
+    SlotUniverseBindings, SparseAppendOutcome, SparseAppendReason, SparseRule,
+    SparseValuePredicate, StorageAccessKind, Tensor, TensorData, TensorFile, UniverseBinding,
+    V4CompactionAnalysisPolicy, V4PreciseAccountingField, V4PreciseAccountingOptions,
+    V4ReportStatus, V4RetainedHistoryCompactionOptions,
 };
 
 fn i32_bytes(values: &[i32]) -> Vec<u8> {
@@ -365,10 +365,7 @@ fn safe_wrapper_coordinate_v2_numeric_and_fixed_text_roundtrip() {
         numeric_values.availability,
         CoordinateAvailability::Available
     );
-    assert_eq!(
-        numeric_values.status_category,
-        CoordinateStatusCategory::Ok
-    );
+    assert_eq!(numeric_values.status_category, CoordinateStatusCategory::Ok);
     assert_eq!(numeric_values.data, i32_bytes(&[10, 20]));
 
     let text_values = file
@@ -385,10 +382,7 @@ fn safe_wrapper_coordinate_v2_numeric_and_fixed_text_roundtrip() {
         .expect("Coordinate v2 numeric exact lookup");
     assert_eq!(numeric_exact.status, CoordinateLookupResultStatus::Unique);
     assert_eq!(numeric_exact.unique_position(), Some(1));
-    assert_eq!(
-        numeric_exact.status_category,
-        CoordinateStatusCategory::Ok
-    );
+    assert_eq!(numeric_exact.status_category, CoordinateStatusCategory::Ok);
     let numeric_range = file
         .coordinate_lookup_range(
             1,
@@ -487,10 +481,7 @@ fn safe_wrapper_coordinate_v2_dictionary_roundtrip() {
         .coordinate_metadata()
         .expect("Coordinate v2 dictionary metadata");
     assert_eq!(meta.len(), 1);
-    assert_eq!(
-        meta[0].value_domain,
-        CoordinateValueDomain::DictionaryCode
-    );
+    assert_eq!(meta[0].value_domain, CoordinateValueDomain::DictionaryCode);
     assert_eq!(
         meta[0].dictionary.dictionary_id.as_deref(),
         Some("symbol-dict-v2")
@@ -528,11 +519,7 @@ fn safe_wrapper_coordinate_v2_dictionary_roundtrip() {
 
     let lookup_options = CoordinateOptions::authoritative_scan();
     let code_lookup = file
-        .coordinate_lookup(
-            1,
-            &CoordinateLookupKey::dictionary_code(2),
-            lookup_options,
-        )
+        .coordinate_lookup(1, &CoordinateLookupKey::dictionary_code(2), lookup_options)
         .expect("Coordinate v2 dictionary-code lookup");
     assert_eq!(code_lookup.status, CoordinateLookupResultStatus::Unique);
     assert_eq!(code_lookup.unique_position(), Some(1));
@@ -618,10 +605,7 @@ fn safe_wrapper_coordinate_v2_append_with_coordinates_success() {
         let meta = file
             .coordinate_metadata()
             .expect("numeric append-coordinate metadata");
-        assert_eq!(
-            meta[0].value_domain,
-            CoordinateValueDomain::AppendSequence
-        );
+        assert_eq!(meta[0].value_domain, CoordinateValueDomain::AppendSequence);
         assert_eq!(meta[0].numeric_dtype, CoordinateDType::I32);
         assert_eq!(meta[0].length, 2);
     }
@@ -686,21 +670,31 @@ fn safe_wrapper_coordinate_v2_append_with_coordinates_success() {
         .with_revision(1);
     dictionary_summary.entry_count = 2;
     let dictionary_entries = vec![
-        CoordinateDictionaryEntry::new(1, Some("instrument-a".to_string()), Some("AAA".to_string())),
-        CoordinateDictionaryEntry::new(2, Some("instrument-b".to_string()), Some("BBB".to_string())),
+        CoordinateDictionaryEntry::new(
+            1,
+            Some("instrument-a".to_string()),
+            Some("AAA".to_string()),
+        ),
+        CoordinateDictionaryEntry::new(
+            2,
+            Some("instrument-b".to_string()),
+            Some("BBB".to_string()),
+        ),
     ];
-    let dict_coordinates = vec![AxisCoordinateInput::append_dictionary_codes(
-        0,
-        CoordinateCodeDType::U16,
-        fixed_layout,
-        dictionary_summary,
-        dictionary_entries,
-    )
-    .expect("append dictionary descriptor")
-    .with_descriptor_id("append-instrument-v2")
-    .with_name("append_instrument")
-    .with_kind(CoordinateKind::LabelId)
-    .with_required(true)];
+    let dict_coordinates = vec![
+        AxisCoordinateInput::append_dictionary_codes(
+            0,
+            CoordinateCodeDType::U16,
+            fixed_layout,
+            dictionary_summary,
+            dictionary_entries,
+        )
+        .expect("append dictionary descriptor")
+        .with_descriptor_id("append-instrument-v2")
+        .with_name("append_instrument")
+        .with_kind(CoordinateKind::LabelId)
+        .with_required(true),
+    ];
     {
         let mut file = TensorFile::create_with_coordinates(
             &dict_path,
@@ -761,10 +755,14 @@ fn safe_wrapper_coordinate_v2_append_with_coordinates_success() {
             .expect("duplicate dictionary extension append codes")
             .with_descriptor_id("append-instrument-v2"),
         ]);
-        assert!(file
-            .append_f32_with_coordinates(&[40.0], &[1, 1], &invalid_extension)
-            .is_err());
-        assert_eq!(file.dim_lens().expect("dict dims after failed append"), vec![3, 1]);
+        assert!(
+            file.append_f32_with_coordinates(&[40.0], &[1, 1], &invalid_extension)
+                .is_err()
+        );
+        assert_eq!(
+            file.dim_lens().expect("dict dims after failed append"),
+            vec![3, 1]
+        );
     }
 
     let _ = fs::remove_file(numeric_path);
@@ -1339,6 +1337,167 @@ fn safe_wrapper_exports_arrow_c_data_and_allows_later_reads() {
 
     drop(file);
     let _ = fs::remove_file(path);
+}
+
+#[cfg(feature = "arrow")]
+#[test]
+fn tensor_arrow_record_batch_and_ipc_roundtrip_owned_values() {
+    let tensor = Tensor::from_dense_f32(vec![2, 3], vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0])
+        .expect("valid f32 tensor");
+
+    let batch = tensor
+        .to_arrow_record_batch()
+        .expect("convert tensor to Arrow record batch");
+    assert_eq!(batch.num_rows(), 2);
+    assert_eq!(
+        batch
+            .schema()
+            .metadata()
+            .get("arcadia_tio_dim_lens")
+            .map(String::as_str),
+        Some("2,3")
+    );
+    assert_eq!(
+        batch
+            .schema()
+            .metadata()
+            .get("arcadia_tio_order")
+            .map(String::as_str),
+        Some("row-major")
+    );
+    assert_eq!(
+        Tensor::from_arrow_record_batch(&batch).expect("decode Arrow record batch"),
+        tensor
+    );
+
+    let ipc = tensor.to_arrow_ipc().expect("encode Arrow IPC");
+    assert!(!ipc.is_empty());
+    assert_eq!(
+        Tensor::from_arrow_ipc(&ipc).expect("decode Arrow IPC"),
+        tensor
+    );
+
+    let int_tensor = Tensor::from_dense_i64(vec![3], vec![10, 20, 30]).expect("valid i64 tensor");
+    assert_eq!(
+        Tensor::from_arrow_ipc(&int_tensor.to_arrow_ipc().expect("encode i64 IPC"))
+            .expect("decode i64 IPC"),
+        int_tensor
+    );
+}
+
+#[cfg(feature = "arrow")]
+#[test]
+fn tensor_arrow_record_batch_rejects_shape_metadata_mismatch() {
+    use std::collections::HashMap;
+    use std::sync::Arc;
+
+    use arrow_array::{
+        Array as _, ArrayRef, FixedSizeListArray, Float32Array, RecordBatch, UInt32Array,
+    };
+    use arrow_schema::{DataType, Field, Schema};
+
+    let time_ids = Arc::new(UInt32Array::from_iter_values([0_u32])) as ArrayRef;
+    let values = Arc::new(Float32Array::from(vec![1.0_f32, 2.0])) as ArrayRef;
+    let value_field = Arc::new(Field::new("item", DataType::Float32, false));
+    let list_array = FixedSizeListArray::try_new(value_field, 2, values, None)
+        .expect("valid fixed-size list array");
+
+    let mut metadata = HashMap::new();
+    metadata.insert("arcadia_tio_dim_lens".to_string(), "1,3".to_string());
+    metadata.insert("arcadia_tio_order".to_string(), "row-major".to_string());
+    let schema = Schema::new_with_metadata(
+        vec![
+            Field::new("time_id", DataType::UInt32, false),
+            Field::new("values", list_array.data_type().clone(), false),
+        ],
+        metadata,
+    );
+    let batch = RecordBatch::try_new(
+        Arc::new(schema),
+        vec![time_ids, Arc::new(list_array) as ArrayRef],
+    )
+    .expect("valid record batch with intentionally mismatched metadata");
+
+    let err = Tensor::from_arrow_record_batch(&batch).expect_err("metadata mismatch rejects");
+    assert_eq!(err.code(), ErrorCode::InvalidArgument);
+}
+
+#[cfg(feature = "ndarray")]
+#[test]
+fn tensor_ndarray_roundtrips_supported_dtypes() {
+    let f32_tensor = Tensor::from_dense_f32(vec![2, 3], vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0])
+        .expect("valid f32 tensor");
+    let f32_array = f32_tensor.to_ndarray_f32().expect("f32 tensor to ndarray");
+    assert_eq!(f32_array.shape(), &[2_usize, 3]);
+    assert_eq!(
+        f32_array.iter().copied().collect::<Vec<_>>(),
+        vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0]
+    );
+    assert_eq!(
+        Tensor::from_ndarray_f32(f32_array).expect("f32 ndarray to tensor"),
+        f32_tensor
+    );
+
+    let f64_array =
+        ndarray::ArrayD::from_shape_vec(ndarray::IxDyn(&[1_usize, 2, 2]), vec![1.5, 2.5, 3.5, 4.5])
+            .expect("valid f64 ndarray");
+    let f64_tensor = Tensor::from_ndarray_f64(f64_array).expect("f64 ndarray to tensor");
+    assert_eq!(f64_tensor.shape, vec![1, 2, 2]);
+    assert_eq!(f64_tensor.data, TensorData::F64(vec![1.5, 2.5, 3.5, 4.5]));
+    assert_eq!(
+        f64_tensor
+            .to_ndarray_f64()
+            .expect("f64 tensor to ndarray")
+            .iter()
+            .copied()
+            .collect::<Vec<_>>(),
+        vec![1.5, 2.5, 3.5, 4.5]
+    );
+
+    let i32_tensor =
+        Tensor::from_dense_i32(vec![4], vec![10, 20, 30, 40]).expect("valid i32 tensor");
+    assert_eq!(
+        Tensor::from_ndarray_i32(i32_tensor.to_ndarray_i32().expect("i32 tensor to ndarray"))
+            .expect("i32 ndarray to tensor"),
+        i32_tensor
+    );
+
+    let i64_tensor =
+        Tensor::from_dense_i64(vec![2, 2], vec![100, 200, 300, 400]).expect("valid i64 tensor");
+    assert_eq!(
+        Tensor::from_ndarray_i64(i64_tensor.to_ndarray_i64().expect("i64 tensor to ndarray"))
+            .expect("i64 ndarray to tensor"),
+        i64_tensor
+    );
+}
+
+#[cfg(feature = "ndarray")]
+#[test]
+fn tensor_ndarray_rejects_dtype_shape_and_rank_mismatches() {
+    let dtype_mismatch = Tensor {
+        dtype: DType::F64,
+        shape: vec![2],
+        data: TensorData::F32(vec![1.0, 2.0]),
+    };
+    let err = dtype_mismatch
+        .to_ndarray_f32()
+        .expect_err("dtype mismatch rejects");
+    assert_eq!(err.code(), ErrorCode::InvalidArgument);
+
+    let shape_mismatch = Tensor {
+        dtype: DType::F32,
+        shape: vec![2, 2],
+        data: TensorData::F32(vec![1.0, 2.0]),
+    };
+    let err = shape_mismatch
+        .to_ndarray_f32()
+        .expect_err("shape mismatch rejects");
+    assert_eq!(err.code(), ErrorCode::InvalidArgument);
+
+    let scalar = ndarray::ArrayD::from_shape_vec(ndarray::IxDyn(&[]), vec![1.0_f32])
+        .expect("valid ndarray scalar");
+    let err = Tensor::from_ndarray_f32(scalar).expect_err("rank-0 ndarray rejects");
+    assert_eq!(err.code(), ErrorCode::InvalidArgument);
 }
 
 #[test]

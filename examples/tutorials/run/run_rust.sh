@@ -60,8 +60,16 @@ fi
 for source in "${sources[@]}"; do
   stem="$(basename "${source%.rs}")"
   example="tutorial_${stem}"
-  echo "==> cargo run --manifest-path $crate_manifest --example $example"
-  cargo run --manifest-path "$crate_manifest" --example "$example"
+  case "$stem" in
+    09_tensor_ops_conversions)
+      echo "==> cargo run --manifest-path $crate_manifest --features arrow,ndarray --example $example"
+      cargo run --manifest-path "$crate_manifest" --features arrow,ndarray --example "$example"
+      ;;
+    *)
+      echo "==> cargo run --manifest-path $crate_manifest --example $example"
+      cargo run --manifest-path "$crate_manifest" --example "$example"
+      ;;
+  esac
 done
 
 echo "Rust tutorial runner passed (${#sources[@]} examples)."

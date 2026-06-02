@@ -10,8 +10,9 @@ consumer build path.
 The API slice is intentionally bounded but now covers the agreed public Rust
 17-family parity scope for beta workflows: safe lifecycle ownership, owned
 error strings, create/open metadata types, policy/inferred create helpers,
-write-forward compression selection, bulk tensor I/O helpers, f32/f64/i32/i64
-sparse-intent analysis and append helpers, universe-aware create/append
+write-forward compression selection, bulk tensor I/O helpers, owned in-memory
+shape/index/math/reduction tensor operation helpers for f32/f64/i32/i64 dense
+payloads, sparse-intent analysis and append helpers, universe-aware create/append
 authoring, bounded Current coordinate create/read/lookup/append helpers,
 current read options and shape policies, historical
 `read_at_commit` options and shape policies, retained-history head/list helpers,
@@ -25,10 +26,13 @@ It also exposes opt-in current-read query-attribution helpers
 (`read_with_options_attributed` and `read_with_options_dense_attributed`) that
 return the normal tensor/dense output plus native diagnostic trace JSON copied
 into Rust-owned memory, plus bounded low-level interop helpers for native
-`read_index` selection and Arrow C Data value export. Query attribution and
-Arrow export are API-completeness/interoperability surfaces only: they are not
-benchmark evidence and do not create performance, phase-percentage, zero-copy,
-storage, cache, layout, or release-readiness claims.
+`read_index` selection and Arrow C Data value export. Optional non-default
+`arrow` and `ndarray` Cargo features add owned-copy `Tensor` conversions to
+Arrow `RecordBatch`/IPC bytes and Rust `ndarray::ArrayD<T>` for dense
+f32/f64/i32/i64 payloads. Query attribution, Arrow C Data export, and owned
+conversion helpers are API-completeness/interoperability surfaces only: they are
+not benchmark evidence and do not create performance, phase-percentage,
+zero-copy, storage, cache, layout, or release-readiness claims.
 
 Append, sparse-intent analysis, mutation, reform, compaction, diagnostics, and
 attributed read helpers borrow Rust slices/paths/trace-context strings only for
@@ -39,8 +43,12 @@ native-owned tensor/mask/report/trace outputs into Rust-owned values and
 immediately free the C allocation. `read_values_arrow` is the exception: it
 returns an `ArrowCData` RAII owner for the Arrow C Data release callbacks;
 borrowed Arrow pointers are valid only while that owner is alive and are
-released exactly once when it is dropped. This slice does not expose generic
-zero-copy borrowed views over native buffers.
+released exactly once when it is dropped. The public `ops` namespace provides
+owned-copy in-memory helpers over dense `TensorData`; optional conversion
+features are also owned-copy only. This slice still does not expose generic
+zero-copy borrowed views over native buffers, private/core tensor view types,
+Arrow CSV/Parquet adapters, direct Python NumPy integration, or C++ convenience
+APIs.
 
 Inline numeric coordinate authoring and lookup are exposed for validated
 `i32`/`i64` axis coordinates. `CreateOptions::coordinates` can be used with
@@ -93,6 +101,101 @@ The public Rust wrapper does not dereference external references and does not ad
 variable-length strings, locale/collation/case folding, broad calendar or
 resolver semantics, lookup-composed coordinate reads, or
 benchmark/release/readiness claims.
+
+## In-memory tensor operations
+
+The `ops` module works entirely over Rust-owned `Tensor`/`TensorData` values and
+is independent of the native C ABI after data has been read or constructed.
+It supports dense `f32`, `f64`, `i32`, and `i64` payloads for row-major shape
+helpers (`reshape`, `flatten`, `expand_dims`, `squeeze`, `permute_axes`,
+`swap_axes`, `transpose`, `move_axis`, and `broadcast_to`), axis indexing
+(`slice_axis`, `slice_axis_step`, `take_axis`, and `index_axis`), exact-dtype
+scalar/binary arithmetic with binary broadcasting (`add`, `sub`, `mul`, `div`
+and the `*_scalar` variants), and `sum`/`mean`/`min`/`max` reductions over
+selected axes.
+
+```rust,no_run
+# use arcadia_tio_rs::{ops, Scalar, Tensor, TensorData};
+# fn main() -> arcadia_tio_rs::Result<()> {
+let tensor = Tensor::from_dense_f64(vec![2, 3], vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0])?;
+let transposed = ops::transpose(&tensor)?;
+assert_eq!(transposed.shape, vec![3, 2]);
+assert_eq!(transposed.data, TensorData::F64(vec![1.0, 4.0, 2.0, 5.0, 3.0, 6.0]));
+
+let shifted = ops::add_scalar(&tensor, Scalar::F64(10.0))?;
+assert_eq!(shifted.values_f64()?[0], 11.0);
+
+let row_sums = ops::sum(&tensor, Some(&[1]), false)?;
+assert_eq!(row_sums.data, TensorData::F64(vec![6.0, 15.0]));
+# Ok(())
+# }
+```
+
+These helpers validate dtype/shape/payload consistency before operating and
+materialize new owned row-major tensors. They do not propagate dense validity
+masks, null bitmaps, Arrow arrays, borrowed native buffers, or private view
+semantics. Binary operations require exact dtype matching; integer arithmetic is
+checked; integer division by zero returns an error; and integer `mean` returns an
+`f64` tensor because fractional results cannot be represented in the original
+integer dtype.
+
+## Optional Arrow and ndarray conversion features
+
+Default features remain empty. Enable `arrow` and/or `ndarray` only when an
+application wants the extra public Rust ecosystem dependencies:
+
+```toml
+[dependencies]
+arcadia-tio-rs = { path = "crates/arcadia-tio-rs", features = ["arrow", "ndarray"] }
+```
+
+The `arrow` feature converts owned dense `Tensor` values to a companion Arrow
+`RecordBatch` layout or Arrow IPC file bytes and back. This is separate from
+`TensorFile::read_values_arrow()`, which exports native Arrow C Data pointers
+with RAII release callbacks tied to the returned owner.
+
+```rust,no_run
+# use arcadia_tio_rs::{Tensor, TensorData};
+# fn main() -> arcadia_tio_rs::Result<()> {
+# #[cfg(feature = "arrow")]
+# {
+let tensor = Tensor::from_dense_f32(vec![2, 2], vec![1.0, 2.0, 3.0, 4.0])?;
+let batch = tensor.to_arrow_record_batch()?;
+assert_eq!(batch.num_rows(), 2);
+
+let ipc = tensor.to_arrow_ipc()?;
+let decoded = Tensor::from_arrow_ipc(&ipc)?;
+assert_eq!(decoded.data, TensorData::F32(vec![1.0, 2.0, 3.0, 4.0]));
+# }
+# Ok(())
+# }
+```
+
+The `ndarray` feature converts owned dense f32/f64/i32/i64 tensors to and from
+Rust `ndarray::ArrayD<T>` values with dtype, rank, shape, and payload-length
+validation. It does not add NumPy, PyO3, or Python bindings.
+
+```rust,no_run
+# use arcadia_tio_rs::{Tensor, TensorData};
+# fn main() -> arcadia_tio_rs::Result<()> {
+# #[cfg(feature = "ndarray")]
+# {
+let tensor = Tensor::from_dense_i64(vec![2, 2], vec![10, 20, 30, 40])?;
+let array = tensor.to_ndarray_i64()?;
+assert_eq!(array.shape(), &[2, 2]);
+
+let rebuilt = Tensor::from_ndarray_i64(array)?;
+assert_eq!(rebuilt.data, TensorData::I64(vec![10, 20, 30, 40]));
+# }
+# Ok(())
+# }
+```
+
+Run feature tests explicitly when using these conversions:
+
+```sh
+cargo test -p arcadia-tio-rs --features arrow,ndarray
+```
 
 ## Example
 
@@ -226,11 +329,15 @@ public Rust capability families for the agreed beta workflow scope. TP-370's
 source-only handoff review rechecked coordinate authoring, exact integer sparse
 predicates, coordinate read conveniences, generated signatures, and FFI
 ownership, and accepted no runtime ownership/parity blocker for this wrapper
-slice. This is not broad parity with every private Rust maintainer hook. It
-currently covers bulk create/open/append/read, f32/f64 sparse-intent
-analysis/append plus bounded i32/i64 zero/null/exact-integer sparse-intent
-analysis/append, RegularChunked policy create, inferred create, inline numeric
-coordinate-bearing policy/inferred create,
+slice. This is not broad parity with every private Rust maintainer hook, private
+zero-copy tensor view, typed tensor wrapper, Arrow CSV/Parquet adapters beyond
+the owned RecordBatch/IPC feature, Python NumPy/Arrow convenience, or C++
+DenseTensor helper.
+It currently covers bulk create/open/append/read, owned in-memory
+shape/index/math/reduction tensor ops over dense f32/f64/i32/i64 `TensorData`,
+f32/f64 sparse-intent analysis/append plus bounded i32/i64
+zero/null/exact-integer sparse-intent analysis/append, RegularChunked policy
+create, inferred create, inline numeric coordinate-bearing policy/inferred create,
 universe-aware authoring, current and historical read options, current and
 historical read-shape policies, write-forward compression controls (default
 create options inherit the native persisted Auto/Zstd policy unless callers
@@ -240,11 +347,14 @@ index checkpoint/chunk-plan administration, non-precise reform/compaction
 workflows including retained-history compaction reports, and V4
 diagnostics/precise-accounting report APIs. Diagnostic current
 query-attribution helpers are available as API-completeness access to native
-trace JSON, and bounded read-index/Arrow C Data helpers expose native interop
-vocabulary outside the original 17-family score. These remain outside
-benchmark/performance evidence. This crate does not expose generic zero-copy
-native views or compressed storage-accounting eligibility claims. Legacy numeric
-coordinate lookup/read conveniences remain inline numeric-only for fixed axes:
+trace JSON, bounded read-index/Arrow C Data helpers expose native interop
+vocabulary outside the original 17-family score, and optional Arrow/ndarray
+feature conversions expose owned-copy Rust ecosystem handoffs. These remain
+outside benchmark/performance evidence. Tensor ops and conversion helpers are
+owned-copy conveniences only and do not expose generic zero-copy native views,
+mask/null propagation, direct NumPy integration, or compressed storage-accounting
+eligibility claims. Legacy numeric coordinate lookup/read
+conveniences remain inline numeric-only for fixed axes:
 exact/range coordinate read helpers compose lookup with ordinary axis-range reads
 and do not imply coordinate-index acceleration. Current coordinate create/read
 wrappers cover only the implemented descriptor/value/dictionary/status/lookup
@@ -270,16 +380,21 @@ manifest:
 | `tutorial_06_mutation_history_universe` | Mutation/history helpers and explicit universe-aware remap reads |
 | `tutorial_07_reform_compaction_diagnostics` | Reform, compaction, and native diagnostic report wrappers |
 | `tutorial_08_compression_interop` | Compression controls, read-index lowering, and Arrow C Data interop |
+| `tutorial_09_tensor_ops_conversions` | Owned dense tensor ops plus optional Arrow RecordBatch/IPC and ndarray conversions |
 
 ```sh
 cargo run --example tutorial_01_quickstart_create_append_read
 cargo run --example tutorial_08_compression_interop
+cargo run --features arrow,ndarray --example tutorial_09_tensor_ops_conversions
 ```
 
-Use the native-library environment below when running them. The examples create
-tiny `.tio` files under OS temp directories and clean them up; do not copy native
-libraries, Cargo build output, or generated `.tio` data into the tutorial tree
-or source-only public checkout.
+Use the native-library environment below when running them. Default tutorial
+examples build with empty default features; `tutorial_09_tensor_ops_conversions`
+requires the opt-in `arrow,ndarray` features. The examples create tiny `.tio`
+files and, for the feature-gated tutorial, a tiny Arrow IPC payload under OS temp
+directories and clean them up; do not copy native libraries, Cargo build output,
+generated `.tio` data, or generated IPC data into the tutorial tree or
+source-only public checkout.
 
 ## Production integration checklist
 

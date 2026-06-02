@@ -16,10 +16,10 @@ use arcadia_tio_rs::{
     AppendCoordinateBatch, AppendCoordinateEntry, AxisCoordinateInput, AxisKind,
     CoordinateAvailability, CoordinateCodeDType, CoordinateDType, CoordinateDictionaryEntry,
     CoordinateDictionarySummary, CoordinateEncoding, CoordinateExternalBinding,
-    CoordinateFixedTextLayout, CoordinateKind, CoordinateLookupKey,
-    CoordinateLookupResultStatus, CoordinateMonotonicity, CoordinateOrdering,
-    CoordinateSourceKind, CoordinateStatusCategory, CoordinateUniqueness, CoordinateOptions,
-    CoordinateValueDomain, CreateOptions, DType, DimSpec, ErrorCode, TensorData, TensorFile,
+    CoordinateFixedTextLayout, CoordinateKind, CoordinateLookupKey, CoordinateLookupResultStatus,
+    CoordinateMonotonicity, CoordinateOptions, CoordinateOrdering, CoordinateSourceKind,
+    CoordinateStatusCategory, CoordinateUniqueness, CoordinateValueDomain, CreateOptions, DType,
+    DimSpec, ErrorCode, TensorData, TensorFile,
 };
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -101,18 +101,14 @@ fn demo_numeric_and_fixed_text(root: &Path) -> Result<(), Box<dyn std::error::Er
     assert_eq!(numeric_values.data, i32_bytes(&[10, 20]));
 
     let fixed_values = file.read_coordinate_axis(2, CoordinateOptions::default())?;
-    assert_eq!(
-        fixed_values.value_domain,
-        CoordinateValueDomain::FixedText
-    );
+    assert_eq!(fixed_values.value_domain, CoordinateValueDomain::FixedText);
     assert_eq!(fixed_values.fixed_text_width, 4);
     assert_eq!(fixed_values.len, 2);
     assert_eq!(fixed_values.data, b"BID ASK ".to_vec());
 
     // Step 5: run exact/range lookups and preserve ordinary status outcomes.
     let lookup_options = CoordinateOptions::authoritative_scan();
-    let numeric_exact =
-        file.coordinate_lookup(1, &CoordinateLookupKey::i32(20), lookup_options)?;
+    let numeric_exact = file.coordinate_lookup(1, &CoordinateLookupKey::i32(20), lookup_options)?;
     assert_eq!(numeric_exact.status, CoordinateLookupResultStatus::Unique);
     assert_eq!(numeric_exact.unique_position(), Some(1));
 
@@ -201,10 +197,7 @@ fn demo_dictionary_codes(root: &Path) -> Result<(), Box<dyn std::error::Error>> 
     // Step 3: verify dictionary metadata and code values.
     let meta = file.coordinate_metadata()?;
     assert_eq!(meta.len(), 1);
-    assert_eq!(
-        meta[0].value_domain,
-        CoordinateValueDomain::DictionaryCode
-    );
+    assert_eq!(meta[0].value_domain, CoordinateValueDomain::DictionaryCode);
     assert_eq!(
         meta[0].dictionary.dictionary_id.as_deref(),
         Some("symbol-dict")
@@ -235,11 +228,8 @@ fn demo_dictionary_codes(root: &Path) -> Result<(), Box<dyn std::error::Error>> 
 
     // Step 5: look up by code, stable id, and display label.
     let lookup_options = CoordinateOptions::authoritative_scan();
-    let code_lookup = file.coordinate_lookup(
-        1,
-        &CoordinateLookupKey::dictionary_code(2),
-        lookup_options,
-    )?;
+    let code_lookup =
+        file.coordinate_lookup(1, &CoordinateLookupKey::dictionary_code(2), lookup_options)?;
     assert_eq!(code_lookup.status, CoordinateLookupResultStatus::Unique);
     assert_eq!(code_lookup.unique_position(), Some(1));
 

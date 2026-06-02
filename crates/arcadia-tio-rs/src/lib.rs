@@ -394,6 +394,87 @@ impl TensorData {
     pub fn is_empty(&self) -> bool {
         self.len() == 0
     }
+
+    /// Borrow the payload as `f32` values.
+    pub fn as_f32(&self) -> Result<&[f32]> {
+        match self {
+            Self::F32(values) => Ok(values),
+            _ => Err(TioError::invalid_argument("tensor data is not f32")),
+        }
+    }
+
+    /// Borrow the payload as `f64` values.
+    pub fn as_f64(&self) -> Result<&[f64]> {
+        match self {
+            Self::F64(values) => Ok(values),
+            _ => Err(TioError::invalid_argument("tensor data is not f64")),
+        }
+    }
+
+    /// Borrow the payload as `i32` values.
+    pub fn as_i32(&self) -> Result<&[i32]> {
+        match self {
+            Self::I32(values) => Ok(values),
+            _ => Err(TioError::invalid_argument("tensor data is not i32")),
+        }
+    }
+
+    /// Borrow the payload as `i64` values.
+    pub fn as_i64(&self) -> Result<&[i64]> {
+        match self {
+            Self::I64(values) => Ok(values),
+            _ => Err(TioError::invalid_argument("tensor data is not i64")),
+        }
+    }
+}
+
+/// Scalar value used by public in-memory tensor arithmetic helpers.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum Scalar {
+    /// f32 scalar value.
+    F32(f32),
+    /// f64 scalar value.
+    F64(f64),
+    /// i32 scalar value.
+    I32(i32),
+    /// i64 scalar value.
+    I64(i64),
+}
+
+impl Scalar {
+    /// Returns the scalar dtype.
+    pub fn dtype(&self) -> DType {
+        match self {
+            Self::F32(_) => DType::F32,
+            Self::F64(_) => DType::F64,
+            Self::I32(_) => DType::I32,
+            Self::I64(_) => DType::I64,
+        }
+    }
+}
+
+impl From<f32> for Scalar {
+    fn from(value: f32) -> Self {
+        Self::F32(value)
+    }
+}
+
+impl From<f64> for Scalar {
+    fn from(value: f64) -> Self {
+        Self::F64(value)
+    }
+}
+
+impl From<i32> for Scalar {
+    fn from(value: i32) -> Self {
+        Self::I32(value)
+    }
+}
+
+impl From<i64> for Scalar {
+    fn from(value: i64) -> Self {
+        Self::I64(value)
+    }
 }
 
 /// Owned tensor copied into Rust memory.
@@ -408,9 +489,1729 @@ pub struct Tensor {
 }
 
 impl Tensor {
+    /// Builds a dense f32 tensor and validates that `shape` matches `values.len()`.
+    pub fn from_dense_f32(shape: Vec<u64>, values: Vec<f32>) -> Result<Self> {
+        Self::from_dense_data(DType::F32, shape, TensorData::F32(values))
+    }
+
+    /// Builds a dense f64 tensor and validates that `shape` matches `values.len()`.
+    pub fn from_dense_f64(shape: Vec<u64>, values: Vec<f64>) -> Result<Self> {
+        Self::from_dense_data(DType::F64, shape, TensorData::F64(values))
+    }
+
+    /// Builds a dense i32 tensor and validates that `shape` matches `values.len()`.
+    pub fn from_dense_i32(shape: Vec<u64>, values: Vec<i32>) -> Result<Self> {
+        Self::from_dense_data(DType::I32, shape, TensorData::I32(values))
+    }
+
+    /// Builds a dense i64 tensor and validates that `shape` matches `values.len()`.
+    pub fn from_dense_i64(shape: Vec<u64>, values: Vec<i64>) -> Result<Self> {
+        Self::from_dense_data(DType::I64, shape, TensorData::I64(values))
+    }
+
     /// Returns the number of scalar values implied by the shape.
     pub fn element_len(&self) -> Result<usize> {
         shape_element_len(&self.shape)
+    }
+
+    /// Validates that dtype, shape, and owned payload length agree.
+    pub fn validate(&self) -> Result<()> {
+        validate_tensor_parts(self.dtype, &self.shape, &self.data)
+    }
+
+    /// Borrow tensor values as `f32`, validating the tensor dtype and payload kind.
+    pub fn values_f32(&self) -> Result<&[f32]> {
+        self.validate_dtype(DType::F32)?;
+        self.data.as_f32()
+    }
+
+    /// Borrow tensor values as `f64`, validating the tensor dtype and payload kind.
+    pub fn values_f64(&self) -> Result<&[f64]> {
+        self.validate_dtype(DType::F64)?;
+        self.data.as_f64()
+    }
+
+    /// Borrow tensor values as `i32`, validating the tensor dtype and payload kind.
+    pub fn values_i32(&self) -> Result<&[i32]> {
+        self.validate_dtype(DType::I32)?;
+        self.data.as_i32()
+    }
+
+    /// Borrow tensor values as `i64`, validating the tensor dtype and payload kind.
+    pub fn values_i64(&self) -> Result<&[i64]> {
+        self.validate_dtype(DType::I64)?;
+        self.data.as_i64()
+    }
+
+    /// Convert this owned tensor into an Arrow [`RecordBatch`](arrow_array::RecordBatch).
+    ///
+    /// This opt-in `arrow` feature API is separate from [`TensorFile::read_values_arrow`]: it
+    /// copies public [`TensorData`] values into Arrow crate-owned arrays instead of exposing native
+    /// Arrow C Data release callbacks. The conversion preserves row-major shape metadata and is
+    /// designed for dense f32/f64/i32/i64 payloads.
+    #[cfg(feature = "arrow")]
+    pub fn to_arrow_record_batch(&self) -> Result<arrow_array::RecordBatch> {
+        tensor_to_arrow_record_batch(self)
+    }
+
+    /// Build an owned tensor from an Arrow [`RecordBatch`](arrow_array::RecordBatch).
+    ///
+    /// The accepted record-batch layout is the companion to [`Tensor::to_arrow_record_batch`]: a
+    /// `time_id` column plus a dense `values` column with Arcadia TIO shape metadata.
+    #[cfg(feature = "arrow")]
+    pub fn from_arrow_record_batch(batch: &arrow_array::RecordBatch) -> Result<Self> {
+        tensor_from_arrow_record_batch(batch)
+    }
+
+    /// Serialize this owned tensor to an Arrow IPC file payload using the `arrow` feature.
+    #[cfg(feature = "arrow")]
+    pub fn to_arrow_ipc(&self) -> Result<Vec<u8>> {
+        let batch = self.to_arrow_record_batch()?;
+        let mut out = Vec::new();
+        {
+            let mut writer =
+                arrow_ipc::writer::FileWriter::try_new(&mut out, batch.schema().as_ref())
+                    .map_err(arrow_err)?;
+            writer.write(&batch).map_err(arrow_err)?;
+            writer.finish().map_err(arrow_err)?;
+        }
+        Ok(out)
+    }
+
+    /// Decode an owned tensor from an Arrow IPC file payload using the `arrow` feature.
+    #[cfg(feature = "arrow")]
+    pub fn from_arrow_ipc(bytes: &[u8]) -> Result<Self> {
+        let cursor = std::io::Cursor::new(bytes);
+        let mut reader = arrow_ipc::reader::FileReaderBuilder::new()
+            .build(cursor)
+            .map_err(arrow_err)?;
+        let mut batches = Vec::new();
+        for batch in reader.by_ref() {
+            batches.push(batch.map_err(arrow_err)?);
+        }
+        if batches.is_empty() {
+            return Err(TioError::invalid_argument("no record batches found"));
+        }
+        if batches.len() > 1 {
+            return Err(TioError::invalid_argument("expected a single record batch"));
+        }
+        Self::from_arrow_record_batch(&batches.remove(0))
+    }
+
+    /// Convert this owned tensor into an owned row-major [`ndarray::ArrayD<f32>`].
+    ///
+    /// This opt-in `ndarray` feature API validates that the tensor dtype is [`DType::F32`], that
+    /// dtype/shape/payload metadata agree, and that every tensor dimension fits `usize` before it
+    /// copies values into an ndarray-owned dynamic-dimensional array.
+    #[cfg(feature = "ndarray")]
+    pub fn to_ndarray_f32(&self) -> Result<ndarray::ArrayD<f32>> {
+        self.validate()?;
+        self.validate_dtype(DType::F32)?;
+        tensor_to_ndarray(&self.shape, self.data.as_f32()?)
+    }
+
+    /// Convert this owned tensor into an owned row-major [`ndarray::ArrayD<f64>`].
+    ///
+    /// This opt-in `ndarray` feature API validates that the tensor dtype is [`DType::F64`], that
+    /// dtype/shape/payload metadata agree, and that every tensor dimension fits `usize` before it
+    /// copies values into an ndarray-owned dynamic-dimensional array.
+    #[cfg(feature = "ndarray")]
+    pub fn to_ndarray_f64(&self) -> Result<ndarray::ArrayD<f64>> {
+        self.validate()?;
+        self.validate_dtype(DType::F64)?;
+        tensor_to_ndarray(&self.shape, self.data.as_f64()?)
+    }
+
+    /// Convert this owned tensor into an owned row-major [`ndarray::ArrayD<i32>`].
+    ///
+    /// This opt-in `ndarray` feature API validates that the tensor dtype is [`DType::I32`], that
+    /// dtype/shape/payload metadata agree, and that every tensor dimension fits `usize` before it
+    /// copies values into an ndarray-owned dynamic-dimensional array.
+    #[cfg(feature = "ndarray")]
+    pub fn to_ndarray_i32(&self) -> Result<ndarray::ArrayD<i32>> {
+        self.validate()?;
+        self.validate_dtype(DType::I32)?;
+        tensor_to_ndarray(&self.shape, self.data.as_i32()?)
+    }
+
+    /// Convert this owned tensor into an owned row-major [`ndarray::ArrayD<i64>`].
+    ///
+    /// This opt-in `ndarray` feature API validates that the tensor dtype is [`DType::I64`], that
+    /// dtype/shape/payload metadata agree, and that every tensor dimension fits `usize` before it
+    /// copies values into an ndarray-owned dynamic-dimensional array.
+    #[cfg(feature = "ndarray")]
+    pub fn to_ndarray_i64(&self) -> Result<ndarray::ArrayD<i64>> {
+        self.validate()?;
+        self.validate_dtype(DType::I64)?;
+        tensor_to_ndarray(&self.shape, self.data.as_i64()?)
+    }
+
+    /// Build an owned f32 tensor from an owned row-major [`ndarray::ArrayD<f32>`].
+    ///
+    /// The conversion records the ndarray shape as public tensor dimensions, rejects dimensions that
+    /// do not fit `u64`, and validates that the resulting [`TensorData::F32`] length matches the
+    /// shape product. Python NumPy integration remains outside this Rust feature boundary.
+    #[cfg(feature = "ndarray")]
+    pub fn from_ndarray_f32(array: ndarray::ArrayD<f32>) -> Result<Self> {
+        let shape = ndarray_shape_to_tensor_shape(array.shape())?;
+        Tensor::from_dense_f32(shape, array.iter().copied().collect())
+    }
+
+    /// Build an owned f64 tensor from an owned row-major [`ndarray::ArrayD<f64>`].
+    ///
+    /// The conversion records the ndarray shape as public tensor dimensions, rejects dimensions that
+    /// do not fit `u64`, and validates that the resulting [`TensorData::F64`] length matches the
+    /// shape product. Python NumPy integration remains outside this Rust feature boundary.
+    #[cfg(feature = "ndarray")]
+    pub fn from_ndarray_f64(array: ndarray::ArrayD<f64>) -> Result<Self> {
+        let shape = ndarray_shape_to_tensor_shape(array.shape())?;
+        Tensor::from_dense_f64(shape, array.iter().copied().collect())
+    }
+
+    /// Build an owned i32 tensor from an owned row-major [`ndarray::ArrayD<i32>`].
+    ///
+    /// The conversion records the ndarray shape as public tensor dimensions, rejects dimensions that
+    /// do not fit `u64`, and validates that the resulting [`TensorData::I32`] length matches the
+    /// shape product. Python NumPy integration remains outside this Rust feature boundary.
+    #[cfg(feature = "ndarray")]
+    pub fn from_ndarray_i32(array: ndarray::ArrayD<i32>) -> Result<Self> {
+        let shape = ndarray_shape_to_tensor_shape(array.shape())?;
+        Tensor::from_dense_i32(shape, array.iter().copied().collect())
+    }
+
+    /// Build an owned i64 tensor from an owned row-major [`ndarray::ArrayD<i64>`].
+    ///
+    /// The conversion records the ndarray shape as public tensor dimensions, rejects dimensions that
+    /// do not fit `u64`, and validates that the resulting [`TensorData::I64`] length matches the
+    /// shape product. Python NumPy integration remains outside this Rust feature boundary.
+    #[cfg(feature = "ndarray")]
+    pub fn from_ndarray_i64(array: ndarray::ArrayD<i64>) -> Result<Self> {
+        let shape = ndarray_shape_to_tensor_shape(array.shape())?;
+        Tensor::from_dense_i64(shape, array.iter().copied().collect())
+    }
+
+    fn from_dense_data(dtype: DType, shape: Vec<u64>, data: TensorData) -> Result<Self> {
+        validate_tensor_parts(dtype, &shape, &data)?;
+        Ok(Self { dtype, shape, data })
+    }
+
+    fn validate_dtype(&self, expected: DType) -> Result<()> {
+        if self.dtype != expected {
+            return Err(TioError::invalid_argument(format!(
+                "tensor dtype {:?} does not match expected {:?}",
+                self.dtype, expected
+            )));
+        }
+        Ok(())
+    }
+}
+
+#[cfg(feature = "arrow")]
+const ARROW_META_DIM_LENS: &str = "arcadia_tio_dim_lens";
+#[cfg(feature = "arrow")]
+const ARROW_META_ORDER: &str = "arcadia_tio_order";
+
+#[cfg(feature = "arrow")]
+fn tensor_to_arrow_record_batch(tensor: &Tensor) -> Result<arrow_array::RecordBatch> {
+    use std::collections::HashMap;
+    use std::sync::Arc;
+
+    use arrow_array::{
+        Array as _, ArrayRef, FixedSizeListArray, Float32Array, Float64Array, Int32Array,
+        Int64Array, UInt32Array,
+    };
+    use arrow_schema::{DataType, Field, Schema};
+
+    tensor.validate()?;
+    let entry_count = arrow_u64_to_usize(tensor.shape[0], "entry length")?;
+    let row_width = arrow_row_width_for_shape(&tensor.shape)?;
+    if row_width == 0 {
+        return Err(TioError::invalid_argument(
+            "tensor has zero-sized inner dimensions",
+        ));
+    }
+    let expected_len = entry_count
+        .checked_mul(row_width)
+        .ok_or_else(|| TioError::invalid_argument("shape product overflow"))?;
+    if expected_len != tensor.data.len() {
+        return Err(TioError::invalid_argument(
+            "values length does not match shape",
+        ));
+    }
+    let entry_count_u32 = u32::try_from(entry_count)
+        .map_err(|_| TioError::invalid_argument("entry length exceeds u32"))?;
+    let row_width_i32 = i32::try_from(row_width)
+        .map_err(|_| TioError::invalid_argument("entry width exceeds i32"))?;
+
+    let time_ids = UInt32Array::from_iter_values(0..entry_count_u32);
+    let time_field = Field::new("time_id", DataType::UInt32, false);
+
+    let values_array: ArrayRef = match &tensor.data {
+        TensorData::F32(values) => Arc::new(Float32Array::from(values.clone())) as ArrayRef,
+        TensorData::F64(values) => Arc::new(Float64Array::from(values.clone())) as ArrayRef,
+        TensorData::I32(values) => Arc::new(Int32Array::from(values.clone())) as ArrayRef,
+        TensorData::I64(values) => Arc::new(Int64Array::from(values.clone())) as ArrayRef,
+    };
+    let value_field = Arc::new(Field::new("item", values_array.data_type().clone(), false));
+    let list_array = FixedSizeListArray::try_new(value_field, row_width_i32, values_array, None)
+        .map_err(arrow_err)?;
+    let values_field = Field::new("values", list_array.data_type().clone(), false);
+
+    let mut metadata = HashMap::new();
+    metadata.insert(
+        ARROW_META_DIM_LENS.to_string(),
+        arrow_encode_dim_lens(&tensor.shape)?,
+    );
+    metadata.insert(ARROW_META_ORDER.to_string(), "row-major".to_string());
+
+    let schema = Schema::new_with_metadata(vec![time_field, values_field], metadata);
+    arrow_array::RecordBatch::try_new(
+        Arc::new(schema),
+        vec![
+            Arc::new(time_ids) as ArrayRef,
+            Arc::new(list_array) as ArrayRef,
+        ],
+    )
+    .map_err(arrow_err)
+}
+
+#[cfg(feature = "arrow")]
+fn tensor_from_arrow_record_batch(batch: &arrow_array::RecordBatch) -> Result<Tensor> {
+    use arrow_array::{
+        Array as _, FixedSizeListArray, Float32Array, Float64Array, Int32Array, Int64Array,
+        UInt32Array,
+    };
+    use arrow_schema::DataType;
+
+    let schema = batch.schema();
+    let metadata = schema.metadata();
+    if let Some(order) = metadata.get(ARROW_META_ORDER) {
+        if order != "row-major" {
+            return Err(TioError::invalid_argument(
+                "arcadia_tio_order metadata must be row-major",
+            ));
+        }
+    }
+
+    let time_idx = schema.index_of("time_id").map_err(arrow_err)?;
+    let values_idx = schema.index_of("values").map_err(arrow_err)?;
+    let time_array = batch.column(time_idx);
+    let values_array = batch.column(values_idx);
+
+    let time_array = time_array
+        .as_any()
+        .downcast_ref::<UInt32Array>()
+        .ok_or_else(|| TioError::invalid_argument("time_id must be UInt32"))?;
+    let list_array = values_array
+        .as_any()
+        .downcast_ref::<FixedSizeListArray>()
+        .ok_or_else(|| TioError::invalid_argument("values must be FixedSizeList"))?;
+
+    if time_array.null_count() != 0 {
+        return Err(TioError::invalid_argument("time_id contains nulls"));
+    }
+    if list_array.null_count() != 0 {
+        return Err(TioError::invalid_argument("values contains null lists"));
+    }
+
+    let entry_count = list_array.len();
+    if time_array.len() != entry_count {
+        return Err(TioError::invalid_argument(
+            "time_id length does not match values length",
+        ));
+    }
+    if entry_count > u32::MAX as usize {
+        return Err(TioError::invalid_argument("entry length exceeds u32"));
+    }
+    for row in 0..entry_count {
+        if time_array.value(row) != row as u32 {
+            return Err(TioError::invalid_argument(
+                "time_id values must be exactly 0..entry_count-1 in row order",
+            ));
+        }
+    }
+
+    let list_size = usize::try_from(list_array.value_length())
+        .map_err(|_| TioError::invalid_argument("values FixedSizeList width is negative"))?;
+    if list_size == 0 {
+        return Err(TioError::invalid_argument(
+            "values FixedSizeList width must be positive",
+        ));
+    }
+    let shape = match metadata.get(ARROW_META_DIM_LENS) {
+        Some(value) => arrow_parse_dim_lens(value, entry_count, list_size)?,
+        None => arrow_infer_shape(entry_count, list_size)?,
+    };
+
+    let expected_len = entry_count
+        .checked_mul(list_size)
+        .ok_or_else(|| TioError::invalid_argument("shape product overflow"))?;
+    let values = list_array.values();
+    if values.len() != expected_len {
+        return Err(TioError::invalid_argument(
+            "values length does not match shape",
+        ));
+    }
+    if values.null_count() != 0 {
+        return Err(TioError::invalid_argument("values contains null scalars"));
+    }
+
+    match values.data_type() {
+        DataType::Float32 => {
+            let values = values
+                .as_any()
+                .downcast_ref::<Float32Array>()
+                .ok_or_else(|| TioError::invalid_argument("values must be Float32"))?;
+            Tensor::from_dense_f32(
+                shape,
+                (0..expected_len).map(|idx| values.value(idx)).collect(),
+            )
+        }
+        DataType::Float64 => {
+            let values = values
+                .as_any()
+                .downcast_ref::<Float64Array>()
+                .ok_or_else(|| TioError::invalid_argument("values must be Float64"))?;
+            Tensor::from_dense_f64(
+                shape,
+                (0..expected_len).map(|idx| values.value(idx)).collect(),
+            )
+        }
+        DataType::Int32 => {
+            let values = values
+                .as_any()
+                .downcast_ref::<Int32Array>()
+                .ok_or_else(|| TioError::invalid_argument("values must be Int32"))?;
+            Tensor::from_dense_i32(
+                shape,
+                (0..expected_len).map(|idx| values.value(idx)).collect(),
+            )
+        }
+        DataType::Int64 => {
+            let values = values
+                .as_any()
+                .downcast_ref::<Int64Array>()
+                .ok_or_else(|| TioError::invalid_argument("values must be Int64"))?;
+            Tensor::from_dense_i64(
+                shape,
+                (0..expected_len).map(|idx| values.value(idx)).collect(),
+            )
+        }
+        other => Err(TioError::invalid_argument(format!(
+            "unsupported Arrow values dtype {other:?}"
+        ))),
+    }
+}
+
+#[cfg(feature = "arrow")]
+fn arrow_row_width_for_shape(shape: &[u64]) -> Result<usize> {
+    if shape.is_empty() {
+        return Err(TioError::invalid_argument("tensor rank must be >= 1"));
+    }
+    shape_element_len(&shape[1..])
+}
+
+#[cfg(feature = "arrow")]
+fn arrow_encode_dim_lens(shape: &[u64]) -> Result<String> {
+    if shape.is_empty() {
+        return Err(TioError::invalid_argument("tensor rank must be >= 1"));
+    }
+    Ok(shape
+        .iter()
+        .map(u64::to_string)
+        .collect::<Vec<_>>()
+        .join(","))
+}
+
+#[cfg(feature = "arrow")]
+fn arrow_parse_dim_lens(value: &str, entry_count: usize, list_size: usize) -> Result<Vec<u64>> {
+    let mut dims = Vec::new();
+    for part in value.split(',') {
+        let part = part.trim();
+        if part.is_empty() {
+            return Err(TioError::invalid_argument("invalid dim lens metadata"));
+        }
+        dims.push(
+            part.parse::<u64>()
+                .map_err(|_| TioError::invalid_argument("invalid dim lens metadata"))?,
+        );
+    }
+    if dims.is_empty() {
+        return Err(TioError::invalid_argument("dim lens metadata is empty"));
+    }
+    let entry_count_u64 = u64::try_from(entry_count)
+        .map_err(|_| TioError::invalid_argument("entry length exceeds u64"))?;
+    if dims[0] != entry_count_u64 {
+        return Err(TioError::invalid_argument(
+            "entry length does not match batch entry count",
+        ));
+    }
+    let expected = shape_element_len(&dims[1..])?;
+    if expected != list_size {
+        return Err(TioError::invalid_argument(
+            "list size does not match dim lens metadata",
+        ));
+    }
+    Ok(dims)
+}
+
+#[cfg(feature = "arrow")]
+fn arrow_infer_shape(entry_count: usize, list_size: usize) -> Result<Vec<u64>> {
+    let entry_count = u64::try_from(entry_count)
+        .map_err(|_| TioError::invalid_argument("entry length exceeds u64"))?;
+    let list_size = u64::try_from(list_size)
+        .map_err(|_| TioError::invalid_argument("entry width exceeds u64"))?;
+    if list_size <= 1 {
+        Ok(vec![entry_count])
+    } else {
+        Ok(vec![entry_count, list_size])
+    }
+}
+
+#[cfg(feature = "arrow")]
+fn arrow_u64_to_usize(value: u64, label: &str) -> Result<usize> {
+    usize::try_from(value).map_err(|_| TioError::invalid_argument(format!("{label} exceeds usize")))
+}
+
+#[cfg(feature = "arrow")]
+fn arrow_err<E: std::fmt::Display>(err: E) -> TioError {
+    TioError {
+        code: ErrorCode::Io,
+        message: err.to_string(),
+    }
+}
+
+#[cfg(feature = "ndarray")]
+fn tensor_to_ndarray<T: Clone>(shape: &[u64], values: &[T]) -> Result<ndarray::ArrayD<T>> {
+    let shape = ndarray_shape_to_usize(shape)?;
+    ndarray::ArrayD::from_shape_vec(ndarray::IxDyn(&shape), values.to_vec()).map_err(ndarray_err)
+}
+
+#[cfg(feature = "ndarray")]
+fn ndarray_shape_to_usize(shape: &[u64]) -> Result<Vec<usize>> {
+    if shape.is_empty() {
+        return Err(TioError::invalid_argument("tensor rank must be >= 1"));
+    }
+    shape
+        .iter()
+        .map(|&dim| {
+            usize::try_from(dim)
+                .map_err(|_| TioError::invalid_argument("shape dimension does not fit usize"))
+        })
+        .collect()
+}
+
+#[cfg(feature = "ndarray")]
+fn ndarray_shape_to_tensor_shape(shape: &[usize]) -> Result<Vec<u64>> {
+    if shape.is_empty() {
+        return Err(TioError::invalid_argument("tensor rank must be >= 1"));
+    }
+    shape
+        .iter()
+        .map(|&dim| {
+            u64::try_from(dim)
+                .map_err(|_| TioError::invalid_argument("shape dimension does not fit u64"))
+        })
+        .collect()
+}
+
+#[cfg(feature = "ndarray")]
+fn ndarray_err<E: std::fmt::Display>(err: E) -> TioError {
+    TioError::invalid_argument(err.to_string())
+}
+
+/// Owned in-memory tensor operations over [`Tensor`] values.
+///
+/// The public wrapper's tensor-operation surface is intentionally source-visible and owned-copy:
+/// helpers accept borrowed [`Tensor`] values, validate dtype/shape/payload consistency, and return
+/// new owned [`Tensor`] values. The first-pass surface is the bounded dense-payload subset from
+/// TP-430 Slice B:
+///
+/// - row-major shape helpers such as reshape, flatten/ravel aliases, expand/squeeze, axis
+///   permutation, transpose, move-axis, and broadcast materialization;
+/// - indexing helpers for half-open slices, stepped slices, explicit takes, and single-index takes;
+/// - scalar and binary elementwise arithmetic with exact dtype matching and binary broadcasting;
+/// - reductions for sum/mean/min/max over selected axes where the owned dense dtype can represent
+///   the result.
+///
+/// Shape functions materialize output rather than promising zero-copy views; `*_view` aliases keep
+/// parity with private/C++ naming while preserving the same owned-copy behavior. The supported
+/// payload dtypes are the public dense [`TensorData`] variants (`f32`, `f64`, `i32`, and `i64`).
+/// Dense read masks remain on [`DenseTensor`]; these helpers operate on the owned payload only and
+/// do not propagate or inspect validity masks, null bitmaps, Arrow arrays, or borrowed native views.
+pub mod ops {
+    use super::{
+        DType, Result, Scalar, Tensor, TensorData, TioError, shape_element_len,
+        validate_tensor_parts,
+    };
+
+    /// Reshape a tensor in row-major order, preserving dtype and payload order.
+    pub fn reshape(tensor: &Tensor, shape: Vec<u64>) -> Result<Tensor> {
+        tensor.validate()?;
+        validate_shape_rank(&shape)?;
+        let expected = shape_element_len(&shape)?;
+        if expected != tensor.data.len() {
+            return Err(TioError::invalid_argument(format!(
+                "reshape element count {expected} does not match tensor element count {}",
+                tensor.data.len()
+            )));
+        }
+        tensor_from_data(tensor.dtype, shape, tensor.data.clone())
+    }
+
+    /// Flatten a tensor to a one-dimensional owned tensor.
+    pub fn flatten(tensor: &Tensor) -> Result<Tensor> {
+        tensor.validate()?;
+        reshape(tensor, vec![usize_to_u64(tensor.data.len())?])
+    }
+
+    /// Owned alias for [`flatten`].
+    pub fn ravel_view(tensor: &Tensor) -> Result<Tensor> {
+        flatten(tensor)
+    }
+
+    /// Insert a length-1 axis at `axis`.
+    pub fn expand_dims(tensor: &Tensor, axis: isize) -> Result<Tensor> {
+        tensor.validate()?;
+        let mut shape = tensor.shape.clone();
+        let axis = normalize_insert_axis(axis, shape.len())?;
+        shape.insert(axis, 1);
+        tensor_from_data(tensor.dtype, shape, tensor.data.clone())
+    }
+
+    /// Remove all length-1 axes.
+    pub fn squeeze(tensor: &Tensor) -> Result<Tensor> {
+        tensor.validate()?;
+        let shape: Vec<u64> = tensor
+            .shape
+            .iter()
+            .copied()
+            .filter(|&dim| dim != 1)
+            .collect();
+        if shape.is_empty() {
+            return Err(TioError::invalid_argument(
+                "squeeze would produce a rank-0 tensor",
+            ));
+        }
+        tensor_from_data(tensor.dtype, shape, tensor.data.clone())
+    }
+
+    /// Remove a length-1 axis.
+    pub fn squeeze_axis(tensor: &Tensor, axis: isize) -> Result<Tensor> {
+        tensor.validate()?;
+        let axis = normalize_axis(axis, tensor.shape.len())?;
+        if tensor.shape[axis] != 1 {
+            return Err(TioError::invalid_argument(
+                "squeeze axis must have length 1",
+            ));
+        }
+        let mut shape = tensor.shape.clone();
+        shape.remove(axis);
+        if shape.is_empty() {
+            return Err(TioError::invalid_argument(
+                "squeeze would produce a rank-0 tensor",
+            ));
+        }
+        tensor_from_data(tensor.dtype, shape, tensor.data.clone())
+    }
+
+    /// Permute axes and materialize row-major output.
+    pub fn permute_axes(tensor: &Tensor, axes: &[isize]) -> Result<Tensor> {
+        let shape = validated_shape(tensor)?;
+        if axes.len() != shape.len() {
+            return Err(TioError::invalid_argument(
+                "permute axes length must equal tensor rank",
+            ));
+        }
+        let normalized = normalize_axes(axes.iter().copied(), shape.len())?;
+        let out_shape_usize: Vec<usize> = normalized.iter().map(|&axis| shape[axis]).collect();
+        let out_shape = shape_usize_to_u64(&out_shape_usize)?;
+        let data = match &tensor.data {
+            TensorData::F32(values) => TensorData::F32(permute_values(
+                values,
+                &shape,
+                &normalized,
+                &out_shape_usize,
+            )?),
+            TensorData::F64(values) => TensorData::F64(permute_values(
+                values,
+                &shape,
+                &normalized,
+                &out_shape_usize,
+            )?),
+            TensorData::I32(values) => TensorData::I32(permute_values(
+                values,
+                &shape,
+                &normalized,
+                &out_shape_usize,
+            )?),
+            TensorData::I64(values) => TensorData::I64(permute_values(
+                values,
+                &shape,
+                &normalized,
+                &out_shape_usize,
+            )?),
+        };
+        tensor_from_data(tensor.dtype, out_shape, data)
+    }
+
+    /// Owned alias for [`permute_axes`].
+    pub fn permute_axes_view(tensor: &Tensor, axes: &[isize]) -> Result<Tensor> {
+        permute_axes(tensor, axes)
+    }
+
+    /// Swap two axes and materialize row-major output.
+    pub fn swap_axes(tensor: &Tensor, axis_a: isize, axis_b: isize) -> Result<Tensor> {
+        tensor.validate()?;
+        let rank = tensor.shape.len();
+        let axis_a = normalize_axis(axis_a, rank)?;
+        let axis_b = normalize_axis(axis_b, rank)?;
+        let mut axes: Vec<isize> = (0..rank)
+            .map(|axis| {
+                isize::try_from(axis).map_err(|_| TioError::invalid_argument("rank overflow"))
+            })
+            .collect::<Result<Vec<_>>>()?;
+        axes.swap(axis_a, axis_b);
+        permute_axes(tensor, &axes)
+    }
+
+    /// Owned alias for [`swap_axes`].
+    pub fn swap_axes_view(tensor: &Tensor, axis_a: isize, axis_b: isize) -> Result<Tensor> {
+        swap_axes(tensor, axis_a, axis_b)
+    }
+
+    /// Reverse axis order and materialize row-major output.
+    pub fn transpose(tensor: &Tensor) -> Result<Tensor> {
+        tensor.validate()?;
+        let rank = tensor.shape.len();
+        let axes: Vec<isize> = (0..rank)
+            .rev()
+            .map(|axis| {
+                isize::try_from(axis).map_err(|_| TioError::invalid_argument("rank overflow"))
+            })
+            .collect::<Result<Vec<_>>>()?;
+        permute_axes(tensor, &axes)
+    }
+
+    /// Owned alias for [`transpose`].
+    pub fn transpose_view(tensor: &Tensor) -> Result<Tensor> {
+        transpose(tensor)
+    }
+
+    /// Move one axis to a new position and materialize row-major output.
+    pub fn move_axis(tensor: &Tensor, source: isize, destination: isize) -> Result<Tensor> {
+        tensor.validate()?;
+        let rank = tensor.shape.len();
+        let source = normalize_axis(source, rank)?;
+        let destination = normalize_axis(destination, rank)?;
+        let mut axes: Vec<usize> = (0..rank).collect();
+        let moved = axes.remove(source);
+        axes.insert(destination, moved);
+        let axes: Vec<isize> = axes
+            .into_iter()
+            .map(|axis| {
+                isize::try_from(axis).map_err(|_| TioError::invalid_argument("rank overflow"))
+            })
+            .collect::<Result<Vec<_>>>()?;
+        permute_axes(tensor, &axes)
+    }
+
+    /// Owned alias for [`move_axis`].
+    pub fn move_axis_view(tensor: &Tensor, source: isize, destination: isize) -> Result<Tensor> {
+        move_axis(tensor, source, destination)
+    }
+
+    /// Broadcast a tensor to `shape` and materialize the result.
+    pub fn broadcast_to(tensor: &Tensor, shape: Vec<u64>) -> Result<Tensor> {
+        let input_shape = validated_shape(tensor)?;
+        validate_shape_rank(&shape)?;
+        let target_shape = shape_u64_to_usize(&shape)?;
+        if broadcast_shape(&input_shape, &target_shape)? != target_shape {
+            return Err(TioError::invalid_argument(
+                "target shape is not broadcast-compatible",
+            ));
+        }
+        let data = match &tensor.data {
+            TensorData::F32(values) => {
+                TensorData::F32(broadcast_values(values, &input_shape, &target_shape)?)
+            }
+            TensorData::F64(values) => {
+                TensorData::F64(broadcast_values(values, &input_shape, &target_shape)?)
+            }
+            TensorData::I32(values) => {
+                TensorData::I32(broadcast_values(values, &input_shape, &target_shape)?)
+            }
+            TensorData::I64(values) => {
+                TensorData::I64(broadcast_values(values, &input_shape, &target_shape)?)
+            }
+        };
+        tensor_from_data(tensor.dtype, shape, data)
+    }
+
+    /// Select a half-open range `[start, end)` along one axis.
+    pub fn slice_axis(tensor: &Tensor, axis: isize, start: usize, end: usize) -> Result<Tensor> {
+        let shape = validated_shape(tensor)?;
+        let axis = normalize_axis(axis, shape.len())?;
+        if start > end || end > shape[axis] {
+            return Err(TioError::invalid_argument("slice out of bounds"));
+        }
+        let indices: Vec<usize> = (start..end).collect();
+        take_axis_normalized(tensor, &shape, axis, &indices)
+    }
+
+    /// Select a stepped slice along one axis. Negative starts/ends follow Python-style bounds.
+    pub fn slice_axis_step(
+        tensor: &Tensor,
+        axis: isize,
+        start: isize,
+        end: isize,
+        step: isize,
+    ) -> Result<Tensor> {
+        if step == 0 {
+            return Err(TioError::invalid_argument("slice step cannot be zero"));
+        }
+        let shape = validated_shape(tensor)?;
+        let axis = normalize_axis(axis, shape.len())?;
+        let indices = strided_indices(shape[axis], start, end, step)?;
+        take_axis_normalized(tensor, &shape, axis, &indices)
+    }
+
+    /// Take explicit indices along one axis.
+    pub fn take_axis(tensor: &Tensor, axis: isize, indices: &[usize]) -> Result<Tensor> {
+        let shape = validated_shape(tensor)?;
+        let axis = normalize_axis(axis, shape.len())?;
+        take_axis_normalized(tensor, &shape, axis, indices)
+    }
+
+    /// Take one index along an axis, preserving rank with axis length 1.
+    pub fn index_axis(tensor: &Tensor, axis: isize, index: usize) -> Result<Tensor> {
+        take_axis(tensor, axis, &[index])
+    }
+
+    /// Add a scalar to every tensor element. The scalar dtype must match the tensor dtype.
+    pub fn add_scalar(tensor: &Tensor, rhs: impl Into<Scalar>) -> Result<Tensor> {
+        scalar_op(tensor, rhs.into(), ScalarOp::Add)
+    }
+
+    /// Subtract a scalar from every tensor element. The scalar dtype must match the tensor dtype.
+    pub fn sub_scalar(tensor: &Tensor, rhs: impl Into<Scalar>) -> Result<Tensor> {
+        scalar_op(tensor, rhs.into(), ScalarOp::Sub)
+    }
+
+    /// Multiply every tensor element by a scalar. The scalar dtype must match the tensor dtype.
+    pub fn mul_scalar(tensor: &Tensor, rhs: impl Into<Scalar>) -> Result<Tensor> {
+        scalar_op(tensor, rhs.into(), ScalarOp::Mul)
+    }
+
+    /// Divide every tensor element by a scalar. Integer division is checked and rejects zero.
+    pub fn div_scalar(tensor: &Tensor, rhs: impl Into<Scalar>) -> Result<Tensor> {
+        scalar_op(tensor, rhs.into(), ScalarOp::Div)
+    }
+
+    /// Add tensors with exact dtype matching and NumPy-style broadcasting.
+    pub fn add(lhs: &Tensor, rhs: &Tensor) -> Result<Tensor> {
+        binary_op(lhs, rhs, BinaryOp::Add)
+    }
+
+    /// Subtract tensors with exact dtype matching and NumPy-style broadcasting.
+    pub fn sub(lhs: &Tensor, rhs: &Tensor) -> Result<Tensor> {
+        binary_op(lhs, rhs, BinaryOp::Sub)
+    }
+
+    /// Multiply tensors with exact dtype matching and NumPy-style broadcasting.
+    pub fn mul(lhs: &Tensor, rhs: &Tensor) -> Result<Tensor> {
+        binary_op(lhs, rhs, BinaryOp::Mul)
+    }
+
+    /// Divide tensors with exact dtype matching and NumPy-style broadcasting.
+    pub fn div(lhs: &Tensor, rhs: &Tensor) -> Result<Tensor> {
+        binary_op(lhs, rhs, BinaryOp::Div)
+    }
+
+    /// Sum values across selected axes. `axes = None` reduces all axes.
+    pub fn sum(tensor: &Tensor, axes: Option<&[isize]>, keepdims: bool) -> Result<Tensor> {
+        let shape = validated_shape(tensor)?;
+        let plan = ReductionPlan::new(&shape, axes, keepdims)?;
+        let out_shape = shape_usize_to_u64(&plan.out_shape)?;
+        let data = match &tensor.data {
+            TensorData::F32(values) => TensorData::F32(reduce_sum_values(
+                values,
+                &shape,
+                &plan,
+                0.0_f32,
+                |a, b| Ok(a + b),
+            )?),
+            TensorData::F64(values) => TensorData::F64(reduce_sum_values(
+                values,
+                &shape,
+                &plan,
+                0.0_f64,
+                |a, b| Ok(a + b),
+            )?),
+            TensorData::I32(values) => {
+                TensorData::I32(reduce_sum_values(values, &shape, &plan, 0_i32, |a, b| {
+                    checked_i32(a.checked_add(b), "integer reduction overflow")
+                })?)
+            }
+            TensorData::I64(values) => {
+                TensorData::I64(reduce_sum_values(values, &shape, &plan, 0_i64, |a, b| {
+                    checked_i64(a.checked_add(b), "integer reduction overflow")
+                })?)
+            }
+        };
+        tensor_from_data(tensor.dtype, out_shape, data)
+    }
+
+    /// Mean values across selected axes. Integer means return an `f64` tensor.
+    pub fn mean(tensor: &Tensor, axes: Option<&[isize]>, keepdims: bool) -> Result<Tensor> {
+        let shape = validated_shape(tensor)?;
+        let plan = ReductionPlan::new(&shape, axes, keepdims)?;
+        if plan.reduced_elems == 0 {
+            return Err(TioError::invalid_argument("mean of an empty reduction"));
+        }
+        let divisor = plan.reduced_elems as f64;
+        let out_shape = shape_usize_to_u64(&plan.out_shape)?;
+        match &tensor.data {
+            TensorData::F32(values) => {
+                let mut out = reduce_sum_values(values, &shape, &plan, 0.0_f32, |a, b| Ok(a + b))?;
+                let divisor = plan.reduced_elems as f32;
+                for value in &mut out {
+                    *value /= divisor;
+                }
+                Tensor::from_dense_f32(out_shape, out)
+            }
+            TensorData::F64(values) => {
+                let mut out = reduce_sum_values(values, &shape, &plan, 0.0_f64, |a, b| Ok(a + b))?;
+                for value in &mut out {
+                    *value /= divisor;
+                }
+                Tensor::from_dense_f64(out_shape, out)
+            }
+            TensorData::I32(values) => {
+                let mut out = reduce_sum_mapped_values(values, &shape, &plan, 0.0_f64, |a, b| {
+                    Ok(a + f64::from(b))
+                })?;
+                for value in &mut out {
+                    *value /= divisor;
+                }
+                Tensor::from_dense_f64(out_shape, out)
+            }
+            TensorData::I64(values) => {
+                let mut out = reduce_sum_mapped_values(values, &shape, &plan, 0.0_f64, |a, b| {
+                    Ok(a + b as f64)
+                })?;
+                for value in &mut out {
+                    *value /= divisor;
+                }
+                Tensor::from_dense_f64(out_shape, out)
+            }
+        }
+    }
+
+    /// Minimum values across selected axes.
+    pub fn min(tensor: &Tensor, axes: Option<&[isize]>, keepdims: bool) -> Result<Tensor> {
+        let shape = validated_shape(tensor)?;
+        let plan = ReductionPlan::new(&shape, axes, keepdims)?;
+        let out_shape = shape_usize_to_u64(&plan.out_shape)?;
+        let data = match &tensor.data {
+            TensorData::F32(values) => {
+                TensorData::F32(reduce_extreme_values(values, &shape, &plan, false)?)
+            }
+            TensorData::F64(values) => {
+                TensorData::F64(reduce_extreme_values(values, &shape, &plan, false)?)
+            }
+            TensorData::I32(values) => {
+                TensorData::I32(reduce_extreme_values(values, &shape, &plan, false)?)
+            }
+            TensorData::I64(values) => {
+                TensorData::I64(reduce_extreme_values(values, &shape, &plan, false)?)
+            }
+        };
+        tensor_from_data(tensor.dtype, out_shape, data)
+    }
+
+    /// Maximum values across selected axes.
+    pub fn max(tensor: &Tensor, axes: Option<&[isize]>, keepdims: bool) -> Result<Tensor> {
+        let shape = validated_shape(tensor)?;
+        let plan = ReductionPlan::new(&shape, axes, keepdims)?;
+        let out_shape = shape_usize_to_u64(&plan.out_shape)?;
+        let data = match &tensor.data {
+            TensorData::F32(values) => {
+                TensorData::F32(reduce_extreme_values(values, &shape, &plan, true)?)
+            }
+            TensorData::F64(values) => {
+                TensorData::F64(reduce_extreme_values(values, &shape, &plan, true)?)
+            }
+            TensorData::I32(values) => {
+                TensorData::I32(reduce_extreme_values(values, &shape, &plan, true)?)
+            }
+            TensorData::I64(values) => {
+                TensorData::I64(reduce_extreme_values(values, &shape, &plan, true)?)
+            }
+        };
+        tensor_from_data(tensor.dtype, out_shape, data)
+    }
+
+    #[derive(Clone, Copy)]
+    enum ScalarOp {
+        Add,
+        Sub,
+        Mul,
+        Div,
+    }
+
+    #[derive(Clone, Copy)]
+    enum BinaryOp {
+        Add,
+        Sub,
+        Mul,
+        Div,
+    }
+
+    struct ReductionPlan {
+        reduce_mask: Vec<bool>,
+        keepdims: bool,
+        out_shape: Vec<usize>,
+        out_strides: Vec<usize>,
+        out_elems: usize,
+        reduced_elems: usize,
+    }
+
+    impl ReductionPlan {
+        fn new(shape: &[usize], axes: Option<&[isize]>, keepdims: bool) -> Result<Self> {
+            let reduced_axes = match axes {
+                Some(values) => normalize_axes(values.iter().copied(), shape.len())?,
+                None => (0..shape.len()).collect(),
+            };
+            let mut reduce_mask = vec![false; shape.len()];
+            for axis in reduced_axes {
+                reduce_mask[axis] = true;
+            }
+            if !keepdims && reduce_mask.iter().all(|&reduced| reduced) {
+                return Err(TioError::invalid_argument(
+                    "reduction would produce a rank-0 tensor; set keepdims=true",
+                ));
+            }
+            let mut reduced_elems = 1usize;
+            for (axis, &dim) in shape.iter().enumerate() {
+                if reduce_mask[axis] {
+                    reduced_elems = reduced_elems
+                        .checked_mul(dim)
+                        .ok_or_else(|| TioError::invalid_argument("shape product overflow"))?;
+                }
+            }
+            let mut out_shape = Vec::new();
+            for (axis, &dim) in shape.iter().enumerate() {
+                if reduce_mask[axis] {
+                    if keepdims {
+                        out_shape.push(1);
+                    }
+                } else {
+                    out_shape.push(dim);
+                }
+            }
+            if out_shape.is_empty() {
+                return Err(TioError::invalid_argument(
+                    "reduction would produce a rank-0 tensor",
+                ));
+            }
+            let out_strides = row_major_strides(&out_shape)?;
+            let out_elems = shape_product_usize(&out_shape)?;
+            Ok(Self {
+                reduce_mask,
+                keepdims,
+                out_shape,
+                out_strides,
+                out_elems,
+                reduced_elems,
+            })
+        }
+
+        fn out_index(&self, in_indices: &[usize]) -> Result<usize> {
+            let mut out_linear = 0usize;
+            if self.keepdims {
+                for (axis, &in_index) in in_indices.iter().enumerate() {
+                    if self.reduce_mask[axis] {
+                        continue;
+                    }
+                    let term = in_index
+                        .checked_mul(self.out_strides[axis])
+                        .ok_or_else(|| TioError::invalid_argument("index overflow"))?;
+                    out_linear = out_linear
+                        .checked_add(term)
+                        .ok_or_else(|| TioError::invalid_argument("index overflow"))?;
+                }
+                return Ok(out_linear);
+            }
+            let mut out_axis = 0usize;
+            for (axis, &in_index) in in_indices.iter().enumerate() {
+                if self.reduce_mask[axis] {
+                    continue;
+                }
+                let term = in_index
+                    .checked_mul(self.out_strides[out_axis])
+                    .ok_or_else(|| TioError::invalid_argument("index overflow"))?;
+                out_linear = out_linear
+                    .checked_add(term)
+                    .ok_or_else(|| TioError::invalid_argument("index overflow"))?;
+                out_axis += 1;
+            }
+            Ok(out_linear)
+        }
+    }
+
+    fn validate_shape_rank(shape: &[u64]) -> Result<()> {
+        if shape.is_empty() {
+            return Err(TioError::invalid_argument("tensor rank must be >= 1"));
+        }
+        Ok(())
+    }
+
+    fn validated_shape(tensor: &Tensor) -> Result<Vec<usize>> {
+        tensor.validate()?;
+        shape_u64_to_usize(&tensor.shape)
+    }
+
+    fn tensor_from_data(dtype: DType, shape: Vec<u64>, data: TensorData) -> Result<Tensor> {
+        validate_tensor_parts(dtype, &shape, &data)?;
+        Ok(Tensor { dtype, shape, data })
+    }
+
+    fn shape_u64_to_usize(shape: &[u64]) -> Result<Vec<usize>> {
+        shape.iter().copied().map(dim_to_usize).collect()
+    }
+
+    fn shape_usize_to_u64(shape: &[usize]) -> Result<Vec<u64>> {
+        shape.iter().copied().map(usize_to_u64).collect()
+    }
+
+    fn dim_to_usize(dim: u64) -> Result<usize> {
+        usize::try_from(dim)
+            .map_err(|_| TioError::invalid_argument("shape dimension does not fit usize"))
+    }
+
+    fn usize_to_u64(value: usize) -> Result<u64> {
+        u64::try_from(value).map_err(|_| TioError::invalid_argument("value does not fit u64"))
+    }
+
+    fn shape_product_usize(shape: &[usize]) -> Result<usize> {
+        shape.iter().try_fold(1usize, |product, &dim| {
+            product
+                .checked_mul(dim)
+                .ok_or_else(|| TioError::invalid_argument("shape product overflow"))
+        })
+    }
+
+    fn row_major_strides(shape: &[usize]) -> Result<Vec<usize>> {
+        let mut strides = vec![1usize; shape.len()];
+        for axis in (0..shape.len().saturating_sub(1)).rev() {
+            strides[axis] = shape[axis + 1]
+                .checked_mul(strides[axis + 1])
+                .ok_or_else(|| TioError::invalid_argument("stride overflow"))?;
+        }
+        Ok(strides)
+    }
+
+    fn normalize_axis(axis: isize, rank: usize) -> Result<usize> {
+        let rank =
+            isize::try_from(rank).map_err(|_| TioError::invalid_argument("rank overflow"))?;
+        let normalized = if axis < 0 {
+            rank.checked_add(axis)
+                .ok_or_else(|| TioError::invalid_argument("axis overflow"))?
+        } else {
+            axis
+        };
+        if normalized < 0 || normalized >= rank {
+            return Err(TioError::invalid_argument("axis out of bounds"));
+        }
+        usize::try_from(normalized).map_err(|_| TioError::invalid_argument("axis overflow"))
+    }
+
+    fn normalize_insert_axis(axis: isize, rank: usize) -> Result<usize> {
+        let rank =
+            isize::try_from(rank).map_err(|_| TioError::invalid_argument("rank overflow"))?;
+        let normalized = if axis < 0 {
+            rank.checked_add(axis)
+                .and_then(|value| value.checked_add(1))
+                .ok_or_else(|| TioError::invalid_argument("axis overflow"))?
+        } else {
+            axis
+        };
+        if normalized < 0 || normalized > rank {
+            return Err(TioError::invalid_argument("axis out of bounds"));
+        }
+        usize::try_from(normalized).map_err(|_| TioError::invalid_argument("axis overflow"))
+    }
+
+    fn normalize_axes<I>(axes: I, rank: usize) -> Result<Vec<usize>>
+    where
+        I: IntoIterator<Item = isize>,
+    {
+        let mut out = Vec::new();
+        for axis in axes {
+            let normalized = normalize_axis(axis, rank)?;
+            if out.contains(&normalized) {
+                return Err(TioError::invalid_argument("duplicate axis"));
+            }
+            out.push(normalized);
+        }
+        Ok(out)
+    }
+
+    fn broadcast_shape(lhs: &[usize], rhs: &[usize]) -> Result<Vec<usize>> {
+        let rank = lhs.len().max(rhs.len());
+        let mut out = Vec::with_capacity(rank);
+        for offset in 0..rank {
+            let lhs_dim = lhs
+                .len()
+                .checked_sub(offset + 1)
+                .map(|index| lhs[index])
+                .unwrap_or(1);
+            let rhs_dim = rhs
+                .len()
+                .checked_sub(offset + 1)
+                .map(|index| rhs[index])
+                .unwrap_or(1);
+            if lhs_dim == rhs_dim || lhs_dim == 1 {
+                out.push(rhs_dim);
+            } else if rhs_dim == 1 {
+                out.push(lhs_dim);
+            } else {
+                return Err(TioError::invalid_argument(
+                    "shapes are not broadcast-compatible",
+                ));
+            }
+        }
+        out.reverse();
+        Ok(out)
+    }
+
+    fn linear_from_indices(indices: &[usize], strides: &[usize], shape: &[usize]) -> Result<usize> {
+        if indices.len() != strides.len() || indices.len() != shape.len() {
+            return Err(TioError::invalid_argument("indices rank mismatch"));
+        }
+        let mut linear = 0usize;
+        for ((&index, &stride), &dim) in indices.iter().zip(strides).zip(shape) {
+            if index >= dim {
+                return Err(TioError::invalid_argument("index out of bounds"));
+            }
+            let term = index
+                .checked_mul(stride)
+                .ok_or_else(|| TioError::invalid_argument("index overflow"))?;
+            linear = linear
+                .checked_add(term)
+                .ok_or_else(|| TioError::invalid_argument("index overflow"))?;
+        }
+        Ok(linear)
+    }
+
+    fn increment_indices(indices: &mut [usize], shape: &[usize]) {
+        for axis in (0..indices.len()).rev() {
+            indices[axis] += 1;
+            if indices[axis] < shape[axis] {
+                return;
+            }
+            indices[axis] = 0;
+        }
+    }
+
+    fn permute_values<T: Copy>(
+        values: &[T],
+        input_shape: &[usize],
+        axes: &[usize],
+        out_shape: &[usize],
+    ) -> Result<Vec<T>> {
+        let out_elems = shape_product_usize(out_shape)?;
+        let in_strides = row_major_strides(input_shape)?;
+        let mut out = Vec::with_capacity(out_elems);
+        let mut out_indices = vec![0usize; out_shape.len()];
+        let mut in_indices = vec![0usize; input_shape.len()];
+        for _ in 0..out_elems {
+            for (out_axis, &in_axis) in axes.iter().enumerate() {
+                in_indices[in_axis] = out_indices[out_axis];
+            }
+            let in_linear = linear_from_indices(&in_indices, &in_strides, input_shape)?;
+            out.push(
+                *values
+                    .get(in_linear)
+                    .ok_or_else(|| TioError::invalid_argument("index out of bounds"))?,
+            );
+            increment_indices(&mut out_indices, out_shape);
+        }
+        Ok(out)
+    }
+
+    fn broadcast_values<T: Copy>(
+        values: &[T],
+        input_shape: &[usize],
+        out_shape: &[usize],
+    ) -> Result<Vec<T>> {
+        let out_elems = shape_product_usize(out_shape)?;
+        let in_strides = row_major_strides(input_shape)?;
+        let offset = out_shape
+            .len()
+            .checked_sub(input_shape.len())
+            .ok_or_else(|| TioError::invalid_argument("broadcast rank mismatch"))?;
+        let mut out = Vec::with_capacity(out_elems);
+        let mut out_indices = vec![0usize; out_shape.len()];
+        for _ in 0..out_elems {
+            let mut in_indices = vec![0usize; input_shape.len()];
+            for axis in 0..input_shape.len() {
+                let out_index = out_indices[offset + axis];
+                in_indices[axis] = if input_shape[axis] == 1 { 0 } else { out_index };
+            }
+            let in_linear = linear_from_indices(&in_indices, &in_strides, input_shape)?;
+            out.push(
+                *values
+                    .get(in_linear)
+                    .ok_or_else(|| TioError::invalid_argument("index out of bounds"))?,
+            );
+            increment_indices(&mut out_indices, out_shape);
+        }
+        Ok(out)
+    }
+
+    fn take_axis_normalized(
+        tensor: &Tensor,
+        shape: &[usize],
+        axis: usize,
+        indices: &[usize],
+    ) -> Result<Tensor> {
+        for &index in indices {
+            if index >= shape[axis] {
+                return Err(TioError::invalid_argument("index out of bounds"));
+            }
+        }
+        let mut out_shape_usize = shape.to_vec();
+        out_shape_usize[axis] = indices.len();
+        let out_shape = shape_usize_to_u64(&out_shape_usize)?;
+        let data = match &tensor.data {
+            TensorData::F32(values) => TensorData::F32(take_axis_values(
+                values,
+                shape,
+                axis,
+                indices,
+                &out_shape_usize,
+            )?),
+            TensorData::F64(values) => TensorData::F64(take_axis_values(
+                values,
+                shape,
+                axis,
+                indices,
+                &out_shape_usize,
+            )?),
+            TensorData::I32(values) => TensorData::I32(take_axis_values(
+                values,
+                shape,
+                axis,
+                indices,
+                &out_shape_usize,
+            )?),
+            TensorData::I64(values) => TensorData::I64(take_axis_values(
+                values,
+                shape,
+                axis,
+                indices,
+                &out_shape_usize,
+            )?),
+        };
+        tensor_from_data(tensor.dtype, out_shape, data)
+    }
+
+    fn take_axis_values<T: Copy>(
+        values: &[T],
+        input_shape: &[usize],
+        axis: usize,
+        indices: &[usize],
+        out_shape: &[usize],
+    ) -> Result<Vec<T>> {
+        let out_elems = shape_product_usize(out_shape)?;
+        let in_strides = row_major_strides(input_shape)?;
+        let mut out = Vec::with_capacity(out_elems);
+        let mut out_indices = vec![0usize; out_shape.len()];
+        for _ in 0..out_elems {
+            let mut in_indices = out_indices.clone();
+            let take_pos = out_indices[axis];
+            in_indices[axis] = indices[take_pos];
+            let in_linear = linear_from_indices(&in_indices, &in_strides, input_shape)?;
+            out.push(
+                *values
+                    .get(in_linear)
+                    .ok_or_else(|| TioError::invalid_argument("index out of bounds"))?,
+            );
+            increment_indices(&mut out_indices, out_shape);
+        }
+        Ok(out)
+    }
+
+    fn strided_indices(len: usize, start: isize, end: isize, step: isize) -> Result<Vec<usize>> {
+        let len =
+            isize::try_from(len).map_err(|_| TioError::invalid_argument("axis length overflow"))?;
+        let mut out = Vec::new();
+        if step > 0 {
+            let mut current = if start < 0 {
+                start
+                    .checked_add(len)
+                    .ok_or_else(|| TioError::invalid_argument("slice start overflow"))?
+            } else {
+                start
+            };
+            let end = if end < 0 {
+                end.checked_add(len)
+                    .ok_or_else(|| TioError::invalid_argument("slice end overflow"))?
+            } else {
+                end
+            };
+            current = current.clamp(0, len);
+            let end = end.clamp(0, len);
+            while current < end {
+                out.push(
+                    usize::try_from(current)
+                        .map_err(|_| TioError::invalid_argument("slice index overflow"))?,
+                );
+                current = current
+                    .checked_add(step)
+                    .ok_or_else(|| TioError::invalid_argument("slice index overflow"))?;
+            }
+        } else {
+            let mut current = if start < 0 {
+                start
+                    .checked_add(len)
+                    .ok_or_else(|| TioError::invalid_argument("slice start overflow"))?
+            } else {
+                start
+            };
+            let end = if end < 0 {
+                end.checked_add(len)
+                    .ok_or_else(|| TioError::invalid_argument("slice end overflow"))?
+            } else {
+                end
+            };
+            current = current.clamp(-1, len.saturating_sub(1));
+            let end = end.clamp(-1, len.saturating_sub(1));
+            while current > end {
+                if current >= 0 {
+                    out.push(
+                        usize::try_from(current)
+                            .map_err(|_| TioError::invalid_argument("slice index overflow"))?,
+                    );
+                }
+                current = current
+                    .checked_add(step)
+                    .ok_or_else(|| TioError::invalid_argument("slice index overflow"))?;
+            }
+        }
+        Ok(out)
+    }
+
+    fn scalar_op(tensor: &Tensor, rhs: Scalar, op: ScalarOp) -> Result<Tensor> {
+        tensor.validate()?;
+        match (&tensor.data, rhs) {
+            (TensorData::F32(values), Scalar::F32(rhs)) => Tensor::from_dense_f32(
+                tensor.shape.clone(),
+                values
+                    .iter()
+                    .copied()
+                    .map(|value| scalar_f32(value, rhs, op))
+                    .collect(),
+            ),
+            (TensorData::F64(values), Scalar::F64(rhs)) => Tensor::from_dense_f64(
+                tensor.shape.clone(),
+                values
+                    .iter()
+                    .copied()
+                    .map(|value| scalar_f64(value, rhs, op))
+                    .collect(),
+            ),
+            (TensorData::I32(values), Scalar::I32(rhs)) => Tensor::from_dense_i32(
+                tensor.shape.clone(),
+                values
+                    .iter()
+                    .copied()
+                    .map(|value| scalar_i32(value, rhs, op))
+                    .collect::<Result<Vec<_>>>()?,
+            ),
+            (TensorData::I64(values), Scalar::I64(rhs)) => Tensor::from_dense_i64(
+                tensor.shape.clone(),
+                values
+                    .iter()
+                    .copied()
+                    .map(|value| scalar_i64(value, rhs, op))
+                    .collect::<Result<Vec<_>>>()?,
+            ),
+            _ => Err(TioError::invalid_argument("scalar dtype mismatch")),
+        }
+    }
+
+    fn scalar_f32(lhs: f32, rhs: f32, op: ScalarOp) -> f32 {
+        match op {
+            ScalarOp::Add => lhs + rhs,
+            ScalarOp::Sub => lhs - rhs,
+            ScalarOp::Mul => lhs * rhs,
+            ScalarOp::Div => lhs / rhs,
+        }
+    }
+
+    fn scalar_f64(lhs: f64, rhs: f64, op: ScalarOp) -> f64 {
+        match op {
+            ScalarOp::Add => lhs + rhs,
+            ScalarOp::Sub => lhs - rhs,
+            ScalarOp::Mul => lhs * rhs,
+            ScalarOp::Div => lhs / rhs,
+        }
+    }
+
+    fn scalar_i32(lhs: i32, rhs: i32, op: ScalarOp) -> Result<i32> {
+        match op {
+            ScalarOp::Add => checked_i32(lhs.checked_add(rhs), "integer addition overflow"),
+            ScalarOp::Sub => checked_i32(lhs.checked_sub(rhs), "integer subtraction overflow"),
+            ScalarOp::Mul => checked_i32(lhs.checked_mul(rhs), "integer multiplication overflow"),
+            ScalarOp::Div => checked_i32(lhs.checked_div(rhs), "integer division failed"),
+        }
+    }
+
+    fn scalar_i64(lhs: i64, rhs: i64, op: ScalarOp) -> Result<i64> {
+        match op {
+            ScalarOp::Add => checked_i64(lhs.checked_add(rhs), "integer addition overflow"),
+            ScalarOp::Sub => checked_i64(lhs.checked_sub(rhs), "integer subtraction overflow"),
+            ScalarOp::Mul => checked_i64(lhs.checked_mul(rhs), "integer multiplication overflow"),
+            ScalarOp::Div => checked_i64(lhs.checked_div(rhs), "integer division failed"),
+        }
+    }
+
+    fn binary_op(lhs: &Tensor, rhs: &Tensor, op: BinaryOp) -> Result<Tensor> {
+        let lhs_shape = validated_shape(lhs)?;
+        let rhs_shape = validated_shape(rhs)?;
+        if lhs.dtype != rhs.dtype {
+            return Err(TioError::invalid_argument("tensor dtype mismatch"));
+        }
+        let out_shape_usize = broadcast_shape(&lhs_shape, &rhs_shape)?;
+        let out_shape = shape_usize_to_u64(&out_shape_usize)?;
+        match (&lhs.data, &rhs.data) {
+            (TensorData::F32(lhs_values), TensorData::F32(rhs_values)) => Tensor::from_dense_f32(
+                out_shape,
+                binary_broadcast_values(
+                    lhs_values,
+                    &lhs_shape,
+                    rhs_values,
+                    &rhs_shape,
+                    &out_shape_usize,
+                    |a, b| Ok(binary_f32(a, b, op)),
+                )?,
+            ),
+            (TensorData::F64(lhs_values), TensorData::F64(rhs_values)) => Tensor::from_dense_f64(
+                out_shape,
+                binary_broadcast_values(
+                    lhs_values,
+                    &lhs_shape,
+                    rhs_values,
+                    &rhs_shape,
+                    &out_shape_usize,
+                    |a, b| Ok(binary_f64(a, b, op)),
+                )?,
+            ),
+            (TensorData::I32(lhs_values), TensorData::I32(rhs_values)) => Tensor::from_dense_i32(
+                out_shape,
+                binary_broadcast_values(
+                    lhs_values,
+                    &lhs_shape,
+                    rhs_values,
+                    &rhs_shape,
+                    &out_shape_usize,
+                    |a, b| binary_i32(a, b, op),
+                )?,
+            ),
+            (TensorData::I64(lhs_values), TensorData::I64(rhs_values)) => Tensor::from_dense_i64(
+                out_shape,
+                binary_broadcast_values(
+                    lhs_values,
+                    &lhs_shape,
+                    rhs_values,
+                    &rhs_shape,
+                    &out_shape_usize,
+                    |a, b| binary_i64(a, b, op),
+                )?,
+            ),
+            _ => Err(TioError::invalid_argument("tensor payload dtype mismatch")),
+        }
+    }
+
+    fn binary_f32(lhs: f32, rhs: f32, op: BinaryOp) -> f32 {
+        match op {
+            BinaryOp::Add => lhs + rhs,
+            BinaryOp::Sub => lhs - rhs,
+            BinaryOp::Mul => lhs * rhs,
+            BinaryOp::Div => lhs / rhs,
+        }
+    }
+
+    fn binary_f64(lhs: f64, rhs: f64, op: BinaryOp) -> f64 {
+        match op {
+            BinaryOp::Add => lhs + rhs,
+            BinaryOp::Sub => lhs - rhs,
+            BinaryOp::Mul => lhs * rhs,
+            BinaryOp::Div => lhs / rhs,
+        }
+    }
+
+    fn binary_i32(lhs: i32, rhs: i32, op: BinaryOp) -> Result<i32> {
+        match op {
+            BinaryOp::Add => checked_i32(lhs.checked_add(rhs), "integer addition overflow"),
+            BinaryOp::Sub => checked_i32(lhs.checked_sub(rhs), "integer subtraction overflow"),
+            BinaryOp::Mul => checked_i32(lhs.checked_mul(rhs), "integer multiplication overflow"),
+            BinaryOp::Div => checked_i32(lhs.checked_div(rhs), "integer division failed"),
+        }
+    }
+
+    fn binary_i64(lhs: i64, rhs: i64, op: BinaryOp) -> Result<i64> {
+        match op {
+            BinaryOp::Add => checked_i64(lhs.checked_add(rhs), "integer addition overflow"),
+            BinaryOp::Sub => checked_i64(lhs.checked_sub(rhs), "integer subtraction overflow"),
+            BinaryOp::Mul => checked_i64(lhs.checked_mul(rhs), "integer multiplication overflow"),
+            BinaryOp::Div => checked_i64(lhs.checked_div(rhs), "integer division failed"),
+        }
+    }
+
+    fn binary_broadcast_values<T: Copy, F>(
+        lhs: &[T],
+        lhs_shape: &[usize],
+        rhs: &[T],
+        rhs_shape: &[usize],
+        out_shape: &[usize],
+        mut op: F,
+    ) -> Result<Vec<T>>
+    where
+        F: FnMut(T, T) -> Result<T>,
+    {
+        let out_elems = shape_product_usize(out_shape)?;
+        let lhs_strides = row_major_strides(lhs_shape)?;
+        let rhs_strides = row_major_strides(rhs_shape)?;
+        let lhs_offset = out_shape
+            .len()
+            .checked_sub(lhs_shape.len())
+            .ok_or_else(|| TioError::invalid_argument("broadcast rank mismatch"))?;
+        let rhs_offset = out_shape
+            .len()
+            .checked_sub(rhs_shape.len())
+            .ok_or_else(|| TioError::invalid_argument("broadcast rank mismatch"))?;
+        let mut out = Vec::with_capacity(out_elems);
+        let mut out_indices = vec![0usize; out_shape.len()];
+        for _ in 0..out_elems {
+            let lhs_linear =
+                broadcast_linear_index(&out_indices, lhs_shape, &lhs_strides, lhs_offset)?;
+            let rhs_linear =
+                broadcast_linear_index(&out_indices, rhs_shape, &rhs_strides, rhs_offset)?;
+            let lhs_value = *lhs
+                .get(lhs_linear)
+                .ok_or_else(|| TioError::invalid_argument("index out of bounds"))?;
+            let rhs_value = *rhs
+                .get(rhs_linear)
+                .ok_or_else(|| TioError::invalid_argument("index out of bounds"))?;
+            out.push(op(lhs_value, rhs_value)?);
+            increment_indices(&mut out_indices, out_shape);
+        }
+        Ok(out)
+    }
+
+    fn broadcast_linear_index(
+        out_indices: &[usize],
+        in_shape: &[usize],
+        in_strides: &[usize],
+        offset: usize,
+    ) -> Result<usize> {
+        let mut in_linear = 0usize;
+        for axis in 0..in_shape.len() {
+            let out_index = out_indices[offset + axis];
+            let index = if in_shape[axis] == 1 { 0 } else { out_index };
+            if index >= in_shape[axis] {
+                return Err(TioError::invalid_argument("broadcast index out of bounds"));
+            }
+            let term = index
+                .checked_mul(in_strides[axis])
+                .ok_or_else(|| TioError::invalid_argument("index overflow"))?;
+            in_linear = in_linear
+                .checked_add(term)
+                .ok_or_else(|| TioError::invalid_argument("index overflow"))?;
+        }
+        Ok(in_linear)
+    }
+
+    fn reduce_sum_values<T: Copy, F>(
+        values: &[T],
+        shape: &[usize],
+        plan: &ReductionPlan,
+        zero: T,
+        mut add: F,
+    ) -> Result<Vec<T>>
+    where
+        F: FnMut(T, T) -> Result<T>,
+    {
+        let mut out = vec![zero; plan.out_elems];
+        let mut in_indices = vec![0usize; shape.len()];
+        for &value in values {
+            let out_index = plan.out_index(&in_indices)?;
+            out[out_index] = add(out[out_index], value)?;
+            increment_indices(&mut in_indices, shape);
+        }
+        Ok(out)
+    }
+
+    fn reduce_sum_mapped_values<I: Copy, O: Copy, F>(
+        values: &[I],
+        shape: &[usize],
+        plan: &ReductionPlan,
+        zero: O,
+        mut add: F,
+    ) -> Result<Vec<O>>
+    where
+        F: FnMut(O, I) -> Result<O>,
+    {
+        let mut out = vec![zero; plan.out_elems];
+        let mut in_indices = vec![0usize; shape.len()];
+        for &value in values {
+            let out_index = plan.out_index(&in_indices)?;
+            out[out_index] = add(out[out_index], value)?;
+            increment_indices(&mut in_indices, shape);
+        }
+        Ok(out)
+    }
+
+    fn reduce_extreme_values<T: Copy + PartialOrd>(
+        values: &[T],
+        shape: &[usize],
+        plan: &ReductionPlan,
+        take_max: bool,
+    ) -> Result<Vec<T>> {
+        if plan.reduced_elems == 0 && plan.out_elems > 0 {
+            return Err(TioError::invalid_argument("cannot reduce an empty axis"));
+        }
+        let mut out = vec![None; plan.out_elems];
+        let mut in_indices = vec![0usize; shape.len()];
+        for &value in values {
+            let out_index = plan.out_index(&in_indices)?;
+            match &mut out[out_index] {
+                Some(current) => {
+                    if (take_max && value > *current) || (!take_max && value < *current) {
+                        *current = value;
+                    }
+                }
+                slot @ None => *slot = Some(value),
+            }
+            increment_indices(&mut in_indices, shape);
+        }
+        out.into_iter()
+            .map(|value| {
+                value.ok_or_else(|| TioError::invalid_argument("cannot reduce an empty axis"))
+            })
+            .collect()
+    }
+
+    fn checked_i32(value: Option<i32>, message: &'static str) -> Result<i32> {
+        value.ok_or_else(|| TioError::invalid_argument(message))
+    }
+
+    fn checked_i64(value: Option<i64>, message: &'static str) -> Result<i64> {
+        value.ok_or_else(|| TioError::invalid_argument(message))
     }
 }
 
@@ -5569,7 +7370,8 @@ impl<'a> PreparedAppendCoordinateEntryV2<'a> {
             .values
             .pointer_count_element_size(entry.fixed_text_width)?;
         let values = if count == 0 { ptr::null() } else { values };
-        let dictionary_entries = PreparedCoordinateDictionaryEntriesV2::new(&entry.dictionary_entries)?;
+        let dictionary_entries =
+            PreparedCoordinateDictionaryEntriesV2::new(&entry.dictionary_entries)?;
         Ok(Self {
             raw: sys::ArcadiaTioAppendCoordinateEntryV2 {
                 version: sys::ARCADIA_TIO_COORDINATE_V2_ABI_VERSION,
@@ -6096,7 +7898,7 @@ fn validate_append_entry_v2(entry: &AppendCoordinateEntryV2) -> Result<()> {
                     "Coordinate v2 append fixed-text values are required for fixed-text entries",
                 )),
             }
-        },
+        }
         CoordinateValueDomainV2::DictionaryCode => {
             if entry.fixed_text_width != 0 {
                 return Err(TioError::invalid_argument(
@@ -9324,6 +11126,27 @@ fn shape_element_len(shape: &[u64]) -> Result<usize> {
     Ok(product)
 }
 
+fn validate_tensor_parts(dtype: DType, shape: &[u64], data: &TensorData) -> Result<()> {
+    if shape.is_empty() {
+        return Err(TioError::invalid_argument("tensor rank must be >= 1"));
+    }
+    let data_dtype = data.dtype();
+    if data_dtype != dtype {
+        return Err(TioError::invalid_argument(format!(
+            "tensor dtype {:?} does not match payload dtype {:?}",
+            dtype, data_dtype
+        )));
+    }
+    let expected = shape_element_len(shape)?;
+    let actual = data.len();
+    if expected != actual {
+        return Err(TioError::invalid_argument(format!(
+            "tensor data length {actual} does not match shape element count {expected}"
+        )));
+    }
+    Ok(())
+}
+
 fn validate_create_with_coordinates_v2_options(
     options: &CreateOptions,
     coordinate_options: CoordinateV2Options,
@@ -11230,6 +13053,156 @@ fn coordinate_input(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn tensor_constructors_validate_shape_and_accessors() {
+        let tensor =
+            Tensor::from_dense_i32(vec![2, 2], vec![1, 2, 3, 4]).expect("valid dense i32 tensor");
+        assert_eq!(tensor.dtype, DType::I32);
+        assert_eq!(tensor.element_len().expect("element len"), 4);
+        assert_eq!(tensor.values_i32().expect("i32 values"), &[1, 2, 3, 4]);
+        assert_eq!(tensor.data.dtype(), DType::I32);
+
+        let err = Tensor::from_dense_i32(vec![3], vec![1, 2]).expect_err("shape mismatch rejects");
+        assert_eq!(err.code(), ErrorCode::InvalidArgument);
+
+        let mismatched = Tensor {
+            dtype: DType::F32,
+            shape: vec![1],
+            data: TensorData::I32(vec![1]),
+        };
+        assert_eq!(
+            mismatched
+                .validate()
+                .expect_err("dtype mismatch rejects")
+                .code(),
+            ErrorCode::InvalidArgument
+        );
+    }
+
+    #[test]
+    fn tensor_ops_shape_index_and_broadcast_success() {
+        let tensor = Tensor::from_dense_f32(vec![2, 3], vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0])
+            .expect("input tensor");
+
+        let reshaped = ops::reshape(&tensor, vec![3, 2]).expect("reshape");
+        assert_eq!(reshaped.shape, vec![3, 2]);
+        assert_eq!(reshaped.data, tensor.data);
+
+        let transposed = ops::transpose(&tensor).expect("transpose");
+        assert_eq!(transposed.shape, vec![3, 2]);
+        assert_eq!(
+            transposed.data,
+            TensorData::F32(vec![1.0, 4.0, 2.0, 5.0, 3.0, 6.0])
+        );
+
+        let sliced = ops::slice_axis(&tensor, 1, 1, 3).expect("slice axis");
+        assert_eq!(sliced.shape, vec![2, 2]);
+        assert_eq!(sliced.data, TensorData::F32(vec![2.0, 3.0, 5.0, 6.0]));
+
+        let taken = ops::take_axis(&tensor, 0, &[1, 0]).expect("take axis");
+        assert_eq!(taken.shape, vec![2, 3]);
+        assert_eq!(
+            taken.data,
+            TensorData::F32(vec![4.0, 5.0, 6.0, 1.0, 2.0, 3.0])
+        );
+
+        let indexed = ops::index_axis(&tensor, -1, 0).expect("index axis");
+        assert_eq!(indexed.shape, vec![2, 1]);
+        assert_eq!(indexed.data, TensorData::F32(vec![1.0, 4.0]));
+
+        let broadcasted = ops::broadcast_to(
+            &Tensor::from_dense_i32(vec![2, 1], vec![10, 20]).expect("broadcast input"),
+            vec![2, 3],
+        )
+        .expect("broadcast");
+        assert_eq!(broadcasted.shape, vec![2, 3]);
+        assert_eq!(
+            broadcasted.data,
+            TensorData::I32(vec![10, 10, 10, 20, 20, 20])
+        );
+    }
+
+    #[test]
+    fn tensor_ops_math_and_reductions_cover_public_dtypes() {
+        let lhs =
+            Tensor::from_dense_f64(vec![2, 3], vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0]).expect("lhs");
+        let rhs = Tensor::from_dense_f64(vec![3], vec![10.0, 20.0, 30.0]).expect("rhs");
+        let added = ops::add(&lhs, &rhs).expect("broadcast add");
+        assert_eq!(added.shape, vec![2, 3]);
+        assert_eq!(
+            added.data,
+            TensorData::F64(vec![11.0, 22.0, 33.0, 14.0, 25.0, 36.0])
+        );
+
+        let scaled = ops::mul_scalar(&lhs, 2.0_f64).expect("scalar multiply");
+        assert_eq!(
+            scaled.data,
+            TensorData::F64(vec![2.0, 4.0, 6.0, 8.0, 10.0, 12.0])
+        );
+
+        let ints = Tensor::from_dense_i64(vec![2, 3], vec![1, 2, 3, 4, 5, 6]).expect("i64");
+        let int_sums = ops::sum(&ints, Some(&[1]), false).expect("i64 sum");
+        assert_eq!(int_sums.shape, vec![2]);
+        assert_eq!(int_sums.data, TensorData::I64(vec![6, 15]));
+
+        let int_mean = ops::mean(
+            &Tensor::from_dense_i32(vec![2, 2], vec![1, 2, 3, 4]).expect("i32 mean input"),
+            Some(&[0]),
+            true,
+        )
+        .expect("i32 mean promotes to f64");
+        assert_eq!(int_mean.dtype, DType::F64);
+        assert_eq!(int_mean.shape, vec![1, 2]);
+        assert_eq!(int_mean.data, TensorData::F64(vec![2.0, 3.0]));
+
+        let floats = Tensor::from_dense_f32(vec![2, 2], vec![3.0, 1.0, 4.0, 2.0]).expect("f32");
+        assert_eq!(
+            ops::min(&floats, Some(&[1]), false).expect("f32 min").data,
+            TensorData::F32(vec![1.0, 2.0])
+        );
+        assert_eq!(
+            ops::max(&floats, Some(&[0]), false).expect("f32 max").data,
+            TensorData::F32(vec![4.0, 2.0])
+        );
+    }
+
+    #[test]
+    fn tensor_ops_validation_failures_are_reported() {
+        let f32_tensor = Tensor::from_dense_f32(vec![2], vec![1.0, 2.0]).expect("f32 tensor");
+        let f64_tensor = Tensor::from_dense_f64(vec![2], vec![1.0, 2.0]).expect("f64 tensor");
+
+        assert_eq!(
+            ops::add(&f32_tensor, &f64_tensor)
+                .expect_err("dtype mismatch")
+                .code(),
+            ErrorCode::InvalidArgument
+        );
+        assert_eq!(
+            ops::add_scalar(&f32_tensor, Scalar::F64(1.0))
+                .expect_err("scalar mismatch")
+                .code(),
+            ErrorCode::InvalidArgument
+        );
+        assert!(ops::broadcast_to(&f32_tensor, vec![3]).is_err());
+        assert!(ops::reshape(&f32_tensor, vec![3]).is_err());
+        assert!(ops::permute_axes(&f32_tensor, &[0, 0]).is_err());
+        assert!(
+            ops::permute_axes(
+                &Tensor::from_dense_f32(vec![1, 2], vec![1.0, 2.0]).expect("rank-2 tensor"),
+                &[0],
+            )
+            .is_err()
+        );
+        assert!(ops::sum(&f32_tensor, None, false).is_err());
+        assert!(
+            ops::div_scalar(
+                &Tensor::from_dense_i32(vec![1], vec![1]).expect("i32 tensor"),
+                0_i32,
+            )
+            .is_err()
+        );
+    }
 
     #[test]
     fn create_options_validation_rejects_empty_rank() {
