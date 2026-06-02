@@ -1812,8 +1812,12 @@ pub struct ArcadiaTioAppendCoordinateEntryV2 {
     pub element_size: usize,
     /// Fixed text width in bytes.
     pub fixed_text_width: usize,
+    /// Borrowed append-time dictionary-extension entries for dictionary-code append entries.
+    pub dictionary_entries: *const ArcadiaTioCoordinateDictionaryEntryV2,
+    /// Number of append-time dictionary-extension entries.
+    pub dictionary_entries_len: usize,
     /// Reserved words; callers set to zero.
-    pub reserved: [u64; 4],
+    pub reserved: [u64; 2],
 }
 
 /// Coordinate v2 append-axis coordinate batch.

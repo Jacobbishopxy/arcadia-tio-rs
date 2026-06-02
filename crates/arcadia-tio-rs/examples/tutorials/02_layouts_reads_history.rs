@@ -18,8 +18,6 @@ use arcadia_tio_rs::{
 };
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
-    // Use one isolated directory and create dedicated files for each layout/read
-    // path to keep assertions independent and easy to reason about.
     let temp = TutorialTempDir::new("layouts_reads_history")?;
 
     create_streaming(&temp.path().join("streaming.tio"))?;
@@ -36,7 +34,6 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 }
 
 fn create_streaming(path: &Path) -> Result<(), Box<dyn std::error::Error>> {
-    // Streaming layout: fixed schema and append-only progression.
     let options = CreateOptions::streaming(
         DType::F32,
         vec![
@@ -56,8 +53,6 @@ fn create_streaming(path: &Path) -> Result<(), Box<dyn std::error::Error>> {
 }
 
 fn create_random_access(path: &Path) -> Result<(), Box<dyn std::error::Error>> {
-    // Random-access layout: supports non-monotonic read patterns and random
-    // slice revisits while preserving same rank/shape contract.
     let options = CreateOptions::random_access(
         DType::I32,
         vec![
@@ -73,8 +68,6 @@ fn create_random_access(path: &Path) -> Result<(), Box<dyn std::error::Error>> {
 }
 
 fn create_with_bounded_policy(path: &Path) -> Result<(), Box<dyn std::error::Error>> {
-    // Bounded policy: fixed axes are chunked with explicit arity to keep page
-    // geometry predictable for deterministic tests.
     let mut options = CreateOptions::streaming(
         DType::F32,
         vec![
@@ -97,8 +90,6 @@ fn create_with_bounded_policy(path: &Path) -> Result<(), Box<dyn std::error::Err
 }
 
 fn create_inferred(path: &Path) -> Result<(), Box<dyn std::error::Error>> {
-    // Inferred layout lets storage hinting and access behavior be selected from
-    // runtime policy while still asserting the logical tensor shape.
     let options = CreateOptions::streaming(
         DType::F64,
         vec![
@@ -117,7 +108,6 @@ fn create_inferred(path: &Path) -> Result<(), Box<dyn std::error::Error>> {
 }
 
 fn read_selectors_options_shape_and_history(path: &Path) -> Result<(), Box<dyn std::error::Error>> {
-    // Exercise selector-based reads and all three history/shape-policy families.
     let options = CreateOptions::streaming(
         DType::F32,
         vec![
@@ -128,13 +118,11 @@ fn read_selectors_options_shape_and_history(path: &Path) -> Result<(), Box<dyn s
     );
     let mut file = TensorFile::create(path, options)?;
     file.append_f32(&[1.0, 2.0, 3.0, 4.0], &[2, 2])?;
-    // Capture sequential commit IDs and then create divergence via append.
     let first_commit = file.head_commit()?.commit_seq;
     file.append_f32(&[5.0, 6.0], &[1, 2])?;
     let second_commit = file.head_commit()?.commit_seq;
     assert!(second_commit > first_commit);
 
-    // Selector read with explicit parallelism demonstrates request-scoped options.
     let selected = file.read_with_options(
         &[
             EntrySelector::Range { start: 1, end: 3 },
@@ -149,7 +137,6 @@ fn read_selectors_options_shape_and_history(path: &Path) -> Result<(), Box<dyn s
     );
     assert_eq!(selected.execution.query_max_threads, 2);
 
-    // Dense shape-policy read exercises dense fill behavior for an explicit shape.
     let explicit = file.read_with_shape_policy_dense(
         &[],
         ReadWithShapePolicyOptions::serial(ReadShapePolicy::ExplicitExtents(vec![3])),
@@ -164,7 +151,6 @@ fn read_selectors_options_shape_and_history(path: &Path) -> Result<(), Box<dyn s
         assert_eq!(mask, &[1, 1, 0, 1, 1, 0, 1, 1, 0]);
     }
 
-    // Verify historic visibility while still asserting ordering and retention.
     let history = file.list_commits(None)?;
     assert!(
         history

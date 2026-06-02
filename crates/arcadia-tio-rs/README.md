@@ -65,7 +65,8 @@ coordinate declarations, and descriptor-only external-reference summaries.
 `AppendCoordinateEntryV2`/`AppendCoordinateBatchV2` carry append-time coordinate
 values for append-axis descriptors: numeric `i32`/`i64` vectors, fixed-width
 ASCII/right-space-padded byte buffers or strings, and dictionary code vectors
-whose codes must already exist in the descriptor-bound dictionary revision.
+that may include append-time dictionary-extension entries attached with
+`with_dictionary_entries`/`dictionary_codes_*_with_entries`.
 `TensorFile::append_f32_with_coordinates_v2`, `append_f64_with_coordinates_v2`,
 `append_i32_with_coordinates_v2`, and `append_i64_with_coordinates_v2` append the
 payload plus a batch and return the native half-open `AppendRange`; missing

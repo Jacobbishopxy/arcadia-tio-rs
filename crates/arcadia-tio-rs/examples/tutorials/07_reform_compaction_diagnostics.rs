@@ -17,7 +17,6 @@ use arcadia_tio_rs::{
 };
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
-    // Use one staging directory and move through source -> reform -> compaction.
     let temp = TutorialTempDir::new("reform_compaction_diagnostics")?;
     let paths = Paths::new(temp.path());
 
@@ -33,7 +32,6 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 }
 
 fn create_source(path: &Path) -> Result<(), Box<dyn std::error::Error>> {
-    // Build a small source file with a rewrite to ensure reform input has history.
     let options = CreateOptions::streaming(
         DType::F32,
         vec![
@@ -54,13 +52,11 @@ fn create_source(path: &Path) -> Result<(), Box<dyn std::error::Error>> {
 }
 
 fn demonstrate_reform(paths: &Paths) -> Result<(), Box<dyn std::error::Error>> {
-    // Reform across two target layouts and assert output parity.
     let mut source = TensorFile::open(&paths.source)?;
     source.reform_to(
         &paths.regular_reform,
         ReformOptions::regular_chunked(vec![1, 2]),
     )?;
-    // Re-open each destination to validate deterministic shape and values.
     let mut regular = TensorFile::open(&paths.regular_reform)?;
     regular.reform_to(&paths.wau_reform, ReformOptions::whole_append_unit())?;
 
@@ -73,8 +69,6 @@ fn demonstrate_reform(paths: &Paths) -> Result<(), Box<dyn std::error::Error>> {
         );
     }
 
-    // Trigger a diagnostically reported invalid reform to verify failure is
-    // returned as status-bearing error path.
     let invalid_report = regular
         .reform_to_ex(
             &paths.invalid_reform,
@@ -87,8 +81,6 @@ fn demonstrate_reform(paths: &Paths) -> Result<(), Box<dyn std::error::Error>> {
 }
 
 fn demonstrate_compaction_and_reports(paths: &Paths) -> Result<(), Box<dyn std::error::Error>> {
-    // Inspect analysis/report outputs before compaction so diagnostics can be
-    // compared against post-compaction file state.
     let mut source = TensorFile::open(&paths.source)?;
 
     let shallow = source.analyze_compaction()?;

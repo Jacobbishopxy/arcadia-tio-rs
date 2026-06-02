@@ -5170,6 +5170,8 @@ pub struct AppendCoordinateEntryV2 {
     pub values: CoordinateInputValuesV2,
     /// Fixed-text width for fixed-text append values.
     pub fixed_text_width: usize,
+    /// Append-time dictionary-extension entries for dictionary-code append values.
+    pub dictionary_entries: Vec<CoordinateDictionaryEntryV2>,
 }
 
 impl AppendCoordinateEntryV2 {
@@ -5185,6 +5187,7 @@ impl AppendCoordinateEntryV2 {
             code_dtype: CoordinateCodeDTypeV2::U32,
             values: CoordinateInputValuesV2::I32(values),
             fixed_text_width: 0,
+            dictionary_entries: Vec::new(),
         }
     }
 
@@ -5217,6 +5220,7 @@ impl AppendCoordinateEntryV2 {
             code_dtype: CoordinateCodeDTypeV2::U32,
             values: CoordinateInputValuesV2::FixedText(bytes),
             fixed_text_width: layout.width,
+            dictionary_entries: Vec::new(),
         })
     }
 
@@ -5233,8 +5237,8 @@ impl AppendCoordinateEntryV2 {
 
     /// Creates a dictionary-code append-coordinate entry from Rust-owned code values.
     ///
-    /// The codes must refer to entries in the descriptor-bound dictionary revision. Append-time
-    /// dictionary extension is intentionally not implemented by this public Rust wrapper.
+    /// The codes must refer to entries in the descriptor-bound dictionary revision unless matching
+    /// append-time dictionary-extension entries are attached with `with_dictionary_entries`.
     pub fn dictionary_codes(
         axis: usize,
         code_dtype: CoordinateCodeDTypeV2,
@@ -5251,6 +5255,7 @@ impl AppendCoordinateEntryV2 {
             code_dtype,
             values,
             fixed_text_width: 0,
+            dictionary_entries: Vec::new(),
         })
     }
 
@@ -5326,10 +5331,58 @@ impl AppendCoordinateEntryV2 {
         ))
     }
 
-    /// Rejects unsupported append-time dictionary extension explicitly.
+    /// Attaches append-time dictionary-extension entries to a dictionary-code append entry.
+    pub fn with_dictionary_entries(mut self, entries: Vec<CoordinateDictionaryEntryV2>) -> Self {
+        self.dictionary_entries = entries;
+        self
+    }
+
+    /// Appends one append-time dictionary-extension entry to a dictionary-code append entry.
+    pub fn with_dictionary_entry(mut self, entry: CoordinateDictionaryEntryV2) -> Self {
+        self.dictionary_entries.push(entry);
+        self
+    }
+
+    /// Creates a dictionary-code append-coordinate entry with `u8` codes and extension entries.
+    pub fn dictionary_codes_u8_with_entries(
+        axis: usize,
+        values: Vec<u8>,
+        entries: Vec<CoordinateDictionaryEntryV2>,
+    ) -> Result<Self> {
+        Ok(Self::dictionary_codes_u8(axis, values)?.with_dictionary_entries(entries))
+    }
+
+    /// Creates a dictionary-code append-coordinate entry with `u16` codes and extension entries.
+    pub fn dictionary_codes_u16_with_entries(
+        axis: usize,
+        values: Vec<u16>,
+        entries: Vec<CoordinateDictionaryEntryV2>,
+    ) -> Result<Self> {
+        Ok(Self::dictionary_codes_u16(axis, values)?.with_dictionary_entries(entries))
+    }
+
+    /// Creates a dictionary-code append-coordinate entry with `u32` codes and extension entries.
+    pub fn dictionary_codes_u32_with_entries(
+        axis: usize,
+        values: Vec<u32>,
+        entries: Vec<CoordinateDictionaryEntryV2>,
+    ) -> Result<Self> {
+        Ok(Self::dictionary_codes_u32(axis, values)?.with_dictionary_entries(entries))
+    }
+
+    /// Creates a dictionary-code append-coordinate entry with `u64` codes and extension entries.
+    pub fn dictionary_codes_u64_with_entries(
+        axis: usize,
+        values: Vec<u64>,
+        entries: Vec<CoordinateDictionaryEntryV2>,
+    ) -> Result<Self> {
+        Ok(Self::dictionary_codes_u64(axis, values)?.with_dictionary_entries(entries))
+    }
+
+    /// Rejects standalone append-time dictionary extension without accompanying codes explicitly.
     pub fn dictionary_extension(_axis: usize) -> Result<Self> {
         Err(TioError::unimplemented(
-            "Coordinate v2 append-time dictionary extension is not supported by the public Rust wrapper; append dictionary codes must already exist in the descriptor-bound dictionary revision",
+            "Coordinate v2 append-time dictionary extension entries must be attached to a dictionary-code append entry with with_dictionary_entries",
         ))
     }
 
@@ -5435,9 +5488,10 @@ impl<'a> PreparedAppendCoordinateBatchV2<'a> {
 }
 
 struct PreparedAppendCoordinateEntryV2<'a> {
-    // Keep descriptor/name C strings alive for raw C ABI pointers in `raw`.
+    // Keep descriptor/name C strings and dictionary-entry strings alive for raw C ABI pointers in `raw`.
     _descriptor_id: Option<CString>,
     _name: Option<CString>,
+    _dictionary_entries: PreparedCoordinateDictionaryEntriesV2,
     raw: sys::ArcadiaTioAppendCoordinateEntryV2,
     _entry: PhantomData<&'a AppendCoordinateEntryV2>,
 }
@@ -5452,6 +5506,7 @@ impl<'a> PreparedAppendCoordinateEntryV2<'a> {
             .values
             .pointer_count_element_size(entry.fixed_text_width)?;
         let values = if count == 0 { ptr::null() } else { values };
+        let dictionary_entries = PreparedCoordinateDictionaryEntriesV2::new(&entry.dictionary_entries)?;
         Ok(Self {
             raw: sys::ArcadiaTioAppendCoordinateEntryV2 {
                 version: sys::ARCADIA_TIO_COORDINATE_V2_ABI_VERSION,
@@ -5467,10 +5522,13 @@ impl<'a> PreparedAppendCoordinateEntryV2<'a> {
                 count,
                 element_size,
                 fixed_text_width: entry.fixed_text_width,
-                reserved: [0; 4],
+                dictionary_entries: dictionary_entries.ptr(),
+                dictionary_entries_len: dictionary_entries.len(),
+                reserved: [0; 2],
             },
             _descriptor_id: descriptor_id,
             _name: name,
+            _dictionary_entries: dictionary_entries,
             _entry: PhantomData,
         })
     }
@@ -5748,29 +5806,7 @@ fn validate_dictionary_descriptor_v2(input: &AxisCoordinateInputV2) -> Result<()
         ));
     }
     for (idx, entry) in input.dictionary_entries.iter().enumerate() {
-        if entry
-            .stable_id
-            .as_deref()
-            .is_none_or(|value| value.is_empty())
-        {
-            return Err(TioError::invalid_argument(format!(
-                "Coordinate v2 dictionary entry {idx} requires a non-empty stable_id"
-            )));
-        }
-        if entry
-            .display_label
-            .as_deref()
-            .is_none_or(|value| value.is_empty())
-        {
-            return Err(TioError::invalid_argument(format!(
-                "Coordinate v2 dictionary entry {idx} requires a non-empty display_label"
-            )));
-        }
-        if entry.aliases.iter().any(|alias| alias.is_empty()) {
-            return Err(TioError::invalid_argument(format!(
-                "Coordinate v2 dictionary entry {idx} aliases cannot be empty"
-            )));
-        }
+        validate_dictionary_entry_v2(entry, idx)?;
     }
     if dictionary.code_dtype != input.code_dtype {
         return Err(TioError::invalid_argument(
@@ -5778,6 +5814,33 @@ fn validate_dictionary_descriptor_v2(input: &AxisCoordinateInputV2) -> Result<()
         ));
     }
     validate_fixed_text_layout_v2(input.fixed_text)?;
+    Ok(())
+}
+
+fn validate_dictionary_entry_v2(entry: &CoordinateDictionaryEntryV2, idx: usize) -> Result<()> {
+    if entry
+        .stable_id
+        .as_deref()
+        .is_none_or(|value| value.is_empty())
+    {
+        return Err(TioError::invalid_argument(format!(
+            "Coordinate v2 dictionary entry {idx} requires a non-empty stable_id"
+        )));
+    }
+    if entry
+        .display_label
+        .as_deref()
+        .is_none_or(|value| value.is_empty())
+    {
+        return Err(TioError::invalid_argument(format!(
+            "Coordinate v2 dictionary entry {idx} requires a non-empty display_label"
+        )));
+    }
+    if entry.aliases.iter().any(|alias| alias.is_empty()) {
+        return Err(TioError::invalid_argument(format!(
+            "Coordinate v2 dictionary entry {idx} aliases cannot be empty"
+        )));
+    }
     Ok(())
 }
 
@@ -5935,6 +5998,11 @@ fn validate_append_entry_v2(entry: &AppendCoordinateEntryV2) -> Result<()> {
     }
     match entry.value_domain {
         CoordinateValueDomainV2::InlineNumeric => {
+            if !entry.dictionary_entries.is_empty() {
+                return Err(TioError::invalid_argument(
+                    "Coordinate v2 append dictionary-extension entries are only valid for dictionary-code entries",
+                ));
+            }
             if entry.fixed_text_width != 0 {
                 return Err(TioError::invalid_argument(
                     "Coordinate v2 append numeric entries must not carry fixed-text width",
@@ -5948,15 +6016,23 @@ fn validate_append_entry_v2(entry: &AppendCoordinateEntryV2) -> Result<()> {
                 )),
             }
         }
-        CoordinateValueDomainV2::FixedText => match &entry.values {
-            CoordinateInputValuesV2::FixedText(bytes) => {
-                let layout =
-                    CoordinateFixedTextLayoutV2::ascii_right_space_padded(entry.fixed_text_width)?;
-                validate_fixed_text_bytes_v2(bytes, layout)
+        CoordinateValueDomainV2::FixedText => {
+            if !entry.dictionary_entries.is_empty() {
+                return Err(TioError::invalid_argument(
+                    "Coordinate v2 append dictionary-extension entries are only valid for dictionary-code entries",
+                ));
             }
-            _ => Err(TioError::invalid_argument(
-                "Coordinate v2 append fixed-text values are required for fixed-text entries",
-            )),
+            match &entry.values {
+                CoordinateInputValuesV2::FixedText(bytes) => {
+                    let layout = CoordinateFixedTextLayoutV2::ascii_right_space_padded(
+                        entry.fixed_text_width,
+                    )?;
+                    validate_fixed_text_bytes_v2(bytes, layout)
+                }
+                _ => Err(TioError::invalid_argument(
+                    "Coordinate v2 append fixed-text values are required for fixed-text entries",
+                )),
+            }
         },
         CoordinateValueDomainV2::DictionaryCode => {
             if entry.fixed_text_width != 0 {
@@ -5964,7 +6040,11 @@ fn validate_append_entry_v2(entry: &AppendCoordinateEntryV2) -> Result<()> {
                     "Coordinate v2 append dictionary-code entries must not carry fixed-text width",
                 ));
             }
-            validate_dictionary_values_v2(&entry.values, entry.code_dtype)
+            validate_dictionary_values_v2(&entry.values, entry.code_dtype)?;
+            for (idx, dictionary_entry) in entry.dictionary_entries.iter().enumerate() {
+                validate_dictionary_entry_v2(dictionary_entry, idx)?;
+            }
+            Ok(())
         }
         CoordinateValueDomainV2::AppendSequence | CoordinateValueDomainV2::ExternalReference => {
             Err(TioError::invalid_argument(

@@ -570,6 +570,7 @@ fn safe_wrapper_coordinate_v2_dictionary_roundtrip() {
 fn safe_wrapper_coordinate_v2_append_with_coordinates_success() {
     let numeric_path = unique_path("safe-wrapper-coordinate-v2-append-numeric.tio");
     let fixed_path = unique_path("safe-wrapper-coordinate-v2-append-fixed.tio");
+    let dict_path = unique_path("safe-wrapper-coordinate-v2-append-dictionary.tio");
 
     let numeric_options = CreateOptions::streaming(
         DType::F32,
@@ -672,8 +673,103 @@ fn safe_wrapper_coordinate_v2_append_with_coordinates_success() {
         assert_eq!(fixed_lookup.unique_position(), Some(1));
     }
 
+    let dict_options = CreateOptions::streaming(
+        DType::F32,
+        vec![
+            DimSpec::new(AxisKind::Time, 0).with_name("time"),
+            DimSpec::new(AxisKind::Channel, 1).with_name("channel"),
+        ],
+        0,
+    );
+    let mut dictionary_summary = CoordinateDictionarySummaryV2::new(CoordinateCodeDTypeV2::U16)
+        .with_dictionary_id("instrument-dictionary")
+        .with_revision(1);
+    dictionary_summary.entry_count = 2;
+    let dictionary_entries = vec![
+        CoordinateDictionaryEntryV2::new(1, Some("instrument-a".to_string()), Some("AAA".to_string())),
+        CoordinateDictionaryEntryV2::new(2, Some("instrument-b".to_string()), Some("BBB".to_string())),
+    ];
+    let dict_coordinates = vec![AxisCoordinateInputV2::append_dictionary_codes(
+        0,
+        CoordinateCodeDTypeV2::U16,
+        fixed_layout,
+        dictionary_summary,
+        dictionary_entries,
+    )
+    .expect("append dictionary descriptor")
+    .with_descriptor_id("append-instrument-v2")
+    .with_name("append_instrument")
+    .with_kind(CoordinateKind::LabelId)
+    .with_required(true)];
+    {
+        let mut file = TensorFile::create_with_coordinates_v2(
+            &dict_path,
+            dict_options,
+            &dict_coordinates,
+            CoordinateV2Options::default(),
+        )
+        .expect("create append dictionary Coordinate v2 file");
+        let batch = AppendCoordinateBatchV2::new(vec![
+            AppendCoordinateEntryV2::dictionary_codes_u16(0, vec![1, 2])
+                .expect("dictionary append codes")
+                .with_descriptor_id("append-instrument-v2"),
+        ]);
+        assert_eq!(
+            file.append_f32_with_coordinates_v2(&[10.0, 20.0], &[2, 1], &batch)
+                .expect("append dictionary codes")
+                .end,
+            2
+        );
+        let extension_batch = AppendCoordinateBatchV2::new(vec![
+            AppendCoordinateEntryV2::dictionary_codes_u16_with_entries(
+                0,
+                vec![3],
+                vec![CoordinateDictionaryEntryV2::new(
+                    3,
+                    Some("instrument-c".to_string()),
+                    Some("CCC".to_string()),
+                )],
+            )
+            .expect("dictionary extension append codes")
+            .with_descriptor_id("append-instrument-v2"),
+        ]);
+        assert_eq!(
+            file.append_f32_with_coordinates_v2(&[30.0], &[1, 1], &extension_batch)
+                .expect("append dictionary extension")
+                .start,
+            2
+        );
+        let lookup = file
+            .coordinate_lookup_v2(
+                0,
+                &CoordinateLookupKeyV2::stable_id("instrument-c"),
+                CoordinateV2Options::authoritative_scan(),
+            )
+            .expect("lookup appended dictionary entry");
+        assert_eq!(lookup.status, CoordinateLookupResultStatusV2::Unique);
+        assert_eq!(lookup.unique_position(), Some(2));
+        let invalid_extension = AppendCoordinateBatchV2::new(vec![
+            AppendCoordinateEntryV2::dictionary_codes_u16_with_entries(
+                0,
+                vec![3],
+                vec![CoordinateDictionaryEntryV2::new(
+                    3,
+                    Some("instrument-c-again".to_string()),
+                    Some("CC2".to_string()),
+                )],
+            )
+            .expect("duplicate dictionary extension append codes")
+            .with_descriptor_id("append-instrument-v2"),
+        ]);
+        assert!(file
+            .append_f32_with_coordinates_v2(&[40.0], &[1, 1], &invalid_extension)
+            .is_err());
+        assert_eq!(file.dim_lens().expect("dict dims after failed append"), vec![3, 1]);
+    }
+
     let _ = fs::remove_file(numeric_path);
     let _ = fs::remove_file(fixed_path);
+    let _ = fs::remove_file(dict_path);
 }
 
 #[test]
