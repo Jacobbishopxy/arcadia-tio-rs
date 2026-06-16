@@ -19,12 +19,13 @@ v2 create/metadata/value/dictionary/lookup/append wrappers for implemented
 private-storage domains, bulk f32/f64/i32/i64 append/read helpers, owned
 in-memory tensor operations and typed tensor wrappers, optional owned Arrow
 RecordBatch/IPC, Rust ndarray, and CSV/Parquet companion conversion features,
-bounded exact-integer
-sparse-intent analysis and append helpers, universe-aware authoring, current and
-historical read options and shape policies, write-forward compression controls,
-scoped f32/f64
-rewrite/clear-block mutation helpers, scoped reform/compaction workflows, and V4
-diagnostics/precise-accounting reports. External value resolution, arbitrary
+bounded exact-integer sparse-intent analysis and append helpers, appendable OCB
+(Ordered Column Bundle) create/append/open/metadata/dictionary/read/cleanup
+wrappers behind the non-default `format-ocb` feature, universe-aware authoring,
+current and historical read options and shape policies, write-forward
+compression controls, scoped f32/f64 rewrite/clear-block mutation helpers,
+scoped reform/compaction workflows, and V4 diagnostics/precise-accounting
+reports. External value resolution, arbitrary
 dereference, zero-copy native views, coordinate-index acceleration,
 generic/private native maintainer hooks, direct NumPy/Python integration, native
 artifact publication, release actions, and performance/storage/capacity claims
@@ -39,6 +40,7 @@ Before using the public Rust wrapper in an application build:
 3. Run `cargo make ci` (format, all-feature check, and the default/no-default/optional/all-feature test matrix) plus `bash examples/tutorials/run/run_rust.sh` against that native library. A committed Cargo target runner automatically adds `ARCADIA_TIO_CAPI_LIB_DIR` or `native/x86_64-unknown-linux-gnu/lib` to the runtime loader path for common Linux/macOS `cargo run` and `cargo test` invocations.
 4. Keep generated `.tio` files, native libraries, package archives, and local `native/` copies out of source control unless a separate release task approves them.
 5. Treat Coordinate external references as metadata/status summaries only; this wrapper does not add dereference, variable-length string, broad calendar/session, lookup-acceleration, or release/performance claims.
+6. Treat OCB as one appendable Ordered Column Bundle format; this wrapper does not expose public binary revision names, market-data/domain-specific APIs, or performance/storage/capacity/layout claims.
 
 ## Using from another Rust project
 
@@ -61,7 +63,7 @@ only when needed:
 
 ```toml
 [dependencies]
-arcadia-tio-rs = { path = "arcadia-tio-rs/crates/arcadia-tio-rs", features = ["arrow", "ndarray", "csv", "parquet"] }
+arcadia-tio-rs = { path = "arcadia-tio-rs/crates/arcadia-tio-rs", features = ["arrow", "ndarray", "csv", "parquet", "format-ocb"] }
 ```
 
 `arrow` provides owned `Tensor` conversions to/from Arrow `RecordBatch` and IPC
@@ -70,7 +72,11 @@ bytes; it is separate from native Arrow C Data `read_values_arrow()` ownership.
 f32/f64/i32/i64 tensor payloads and does not add NumPy, PyO3, or Python
 bindings. `csv` and `parquet` provide companion owned `Tensor` conversions with
 explicit dtype/shape/order metadata; they are not native `.tio` storage formats
-or file-to-file native conversion shortcuts.
+or file-to-file native conversion shortcuts. `format-ocb` exposes
+`arcadia_tio_rs::ocb` safe wrappers and matching raw sys declarations for OCB
+create/append/open/metadata/dictionary/read/cleanup. OCB read results own copied
+Rust values, dictionary-coded columns return primitive codes, and decoded
+dictionaries are explicit via `dictionary_values`.
 
 The Rust wrapper links to the native C ABI library, so the consuming build must
 also provide `libarcadia_tio_capi`/`arcadia_tio_capi`. Point link discovery and
@@ -121,6 +127,8 @@ cargo make test-matrix
 bash examples/tutorials/run/run_rust.sh
 cargo run -p arcadia-tio-rs --example tutorial_01_quickstart_create_append_read
 cargo run -p arcadia-tio-rs --features arrow,ndarray,csv,parquet --example tutorial_09_tensor_ops_conversions
+cargo test -p arcadia-tio-rs --features format-ocb --test ocb
+cargo run -p arcadia-tio-rs --features format-ocb --example ocb_roundtrip
 cargo make test-csv-parquet
 ```
 
@@ -129,7 +137,8 @@ present and prints its resolved path, size, and SHA-256 checksum for local
 freshness checks.
 
 The public cargo-make matrix runs `test-default`, explicit `test-no-default`,
-`test-arrow-ndarray`, `test-csv-parquet`, and `test-all-features`; `ci` runs
+`test-arrow-ndarray`, `test-csv-parquet`, and `test-all-features`; OCB can also
+be exercised directly with `--features format-ocb`; `ci` runs
 `fmt`, all-feature `check`, and that matrix. The feature-gated tensor
 ops/conversions tutorial uses owned tensor ops, typed wrappers, owned Arrow
 RecordBatch/IPC, ndarray, and CSV/Parquet companion conversions with tiny

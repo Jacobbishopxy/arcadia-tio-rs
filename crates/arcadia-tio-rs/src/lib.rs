@@ -15592,6 +15592,1395 @@ fn coordinate_input(
     }
 }
 
+/// Safe Rust wrappers for the appendable OCB (Ordered Column Bundle) C ABI.
+#[cfg(feature = "format-ocb")]
+pub mod ocb {
+    use super::{ErrorCode, TioError, path_to_cstring};
+    use arcadia_tio_sys as sys;
+    use std::ffi::{CStr, CString};
+    use std::fmt;
+    use std::mem;
+    use std::os::raw::{c_char, c_void};
+    use std::path::Path;
+    use std::ptr::{self, NonNull};
+    use std::slice;
+
+    /// Result type returned by OCB safe wrappers.
+    pub type OcbResult<T> = std::result::Result<T, OcbError>;
+
+    /// Structured OCB error with the ordinary C ABI code plus OCB-specific metadata.
+    #[derive(Debug, Clone, PartialEq, Eq)]
+    pub struct OcbError {
+        code: ErrorCode,
+        kind: ErrorKind,
+        cause: Option<FailureCause>,
+        message: String,
+    }
+
+    impl OcbError {
+        fn last(fallback: &str) -> Self {
+            let raw_code = unsafe { sys::arcadia_tio_last_error_code() };
+            let raw_kind = unsafe { sys::arcadia_tio_ocb_last_error_kind() };
+            let raw_cause = unsafe { sys::arcadia_tio_ocb_last_error_cause() };
+            let raw_message = unsafe { sys::arcadia_tio_last_error_message() };
+            let message = if raw_message.is_null() {
+                fallback.to_string()
+            } else {
+                unsafe { CStr::from_ptr(raw_message) }
+                    .to_string_lossy()
+                    .into_owned()
+            };
+            Self {
+                code: ErrorCode::from_raw(raw_code),
+                kind: ErrorKind::from_raw(raw_kind),
+                cause: FailureCause::from_raw(raw_cause),
+                message,
+            }
+        }
+
+        fn invalid_input(message: impl Into<String>) -> Self {
+            Self {
+                code: ErrorCode::InvalidArgument,
+                kind: ErrorKind::InvalidInput,
+                cause: Some(FailureCause::InvalidInput),
+                message: message.into(),
+            }
+        }
+
+        fn from_tio_error(err: TioError) -> Self {
+            Self {
+                code: err.code(),
+                kind: ErrorKind::InvalidInput,
+                cause: Some(FailureCause::InvalidInput),
+                message: err.message().to_string(),
+            }
+        }
+
+        /// Ordinary C ABI error code.
+        pub fn code(&self) -> ErrorCode {
+            self.code
+        }
+
+        /// OCB-specific error kind.
+        pub fn kind(&self) -> ErrorKind {
+            self.kind
+        }
+
+        /// OCB-specific failure cause when present.
+        pub fn cause(&self) -> Option<FailureCause> {
+            self.cause
+        }
+
+        /// Human diagnostic message.
+        pub fn message(&self) -> &str {
+            &self.message
+        }
+    }
+
+    impl fmt::Display for OcbError {
+        fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+            write!(f, "{}", self.message)
+        }
+    }
+
+    impl std::error::Error for OcbError {}
+
+    /// OCB structured error kind.
+    #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+    pub enum ErrorKind {
+        /// No OCB error.
+        None,
+        /// Invalid caller input.
+        InvalidInput,
+        /// Unsupported format or option.
+        UnsupportedFormat,
+        /// Corrupt file contents.
+        CorruptFile,
+        /// Lock was unavailable.
+        LockUnavailable,
+        /// Low-level I/O failure.
+        Io,
+        /// Unknown forward-compatible raw value.
+        Unknown(i32),
+    }
+
+    impl ErrorKind {
+        fn from_raw(raw: sys::ArcadiaTioOcbErrorKind) -> Self {
+            match raw {
+                sys::ARCADIA_TIO_OCB_ERROR_KIND_NONE => Self::None,
+                sys::ARCADIA_TIO_OCB_ERROR_KIND_INVALID_INPUT => Self::InvalidInput,
+                sys::ARCADIA_TIO_OCB_ERROR_KIND_UNSUPPORTED_FORMAT => Self::UnsupportedFormat,
+                sys::ARCADIA_TIO_OCB_ERROR_KIND_CORRUPT_FILE => Self::CorruptFile,
+                sys::ARCADIA_TIO_OCB_ERROR_KIND_LOCK_UNAVAILABLE => Self::LockUnavailable,
+                sys::ARCADIA_TIO_OCB_ERROR_KIND_IO => Self::Io,
+                other => Self::Unknown(other),
+            }
+        }
+    }
+
+    /// OCB structured failure cause.
+    #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+    pub enum FailureCause {
+        /// Invalid caller input.
+        InvalidInput,
+        /// Unsupported OCB format.
+        UnsupportedFormat,
+        /// Corrupt file contents.
+        CorruptFile,
+        /// Lock was unavailable.
+        LockUnavailable,
+        /// Unknown forward-compatible raw value.
+        Unknown(i32),
+    }
+
+    impl FailureCause {
+        fn from_raw(raw: sys::ArcadiaTioOcbFailureCause) -> Option<Self> {
+            match raw {
+                sys::ARCADIA_TIO_OCB_FAILURE_CAUSE_NONE => None,
+                sys::ARCADIA_TIO_OCB_FAILURE_CAUSE_INVALID_INPUT => Some(Self::InvalidInput),
+                sys::ARCADIA_TIO_OCB_FAILURE_CAUSE_UNSUPPORTED_FORMAT => {
+                    Some(Self::UnsupportedFormat)
+                }
+                sys::ARCADIA_TIO_OCB_FAILURE_CAUSE_CORRUPT_FILE => Some(Self::CorruptFile),
+                sys::ARCADIA_TIO_OCB_FAILURE_CAUSE_LOCK_UNAVAILABLE => Some(Self::LockUnavailable),
+                other => Some(Self::Unknown(other)),
+            }
+        }
+    }
+
+    /// Primitive physical type supported by OCB columns.
+    #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+    pub enum PhysicalType {
+        /// 32-bit signed integer.
+        I32,
+        /// 64-bit signed integer.
+        I64,
+        /// 32-bit float.
+        F32,
+        /// 64-bit float.
+        F64,
+        /// Unknown forward-compatible raw value.
+        Unknown(i32),
+    }
+
+    impl PhysicalType {
+        fn to_raw(self) -> sys::ArcadiaTioOcbPhysicalType {
+            match self {
+                Self::I32 => sys::ARCADIA_TIO_OCB_PHYSICAL_TYPE_I32,
+                Self::I64 => sys::ARCADIA_TIO_OCB_PHYSICAL_TYPE_I64,
+                Self::F32 => sys::ARCADIA_TIO_OCB_PHYSICAL_TYPE_F32,
+                Self::F64 => sys::ARCADIA_TIO_OCB_PHYSICAL_TYPE_F64,
+                Self::Unknown(raw) => raw,
+            }
+        }
+
+        fn from_raw(raw: sys::ArcadiaTioOcbPhysicalType) -> Self {
+            match raw {
+                sys::ARCADIA_TIO_OCB_PHYSICAL_TYPE_I32 => Self::I32,
+                sys::ARCADIA_TIO_OCB_PHYSICAL_TYPE_I64 => Self::I64,
+                sys::ARCADIA_TIO_OCB_PHYSICAL_TYPE_F32 => Self::F32,
+                sys::ARCADIA_TIO_OCB_PHYSICAL_TYPE_F64 => Self::F64,
+                other => Self::Unknown(other),
+            }
+        }
+    }
+
+    /// Logical kind attached to an OCB column.
+    #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+    pub enum LogicalKind {
+        /// Plain primitive values.
+        Plain,
+        /// Timestamp-nanos-like integer values.
+        TimestampNanosLike,
+        /// Scaled integer values.
+        ScaledInteger,
+        /// Dictionary-code values.
+        DictionaryCode,
+        /// Enum-code values.
+        EnumCode,
+        /// Opaque ordering key values.
+        OpaqueKey,
+        /// Unknown forward-compatible raw value.
+        Unknown(i32),
+    }
+
+    impl LogicalKind {
+        fn to_raw(self) -> sys::ArcadiaTioOcbLogicalKind {
+            match self {
+                Self::Plain => sys::ARCADIA_TIO_OCB_LOGICAL_KIND_PLAIN,
+                Self::TimestampNanosLike => sys::ARCADIA_TIO_OCB_LOGICAL_KIND_TIMESTAMP_NANOS_LIKE,
+                Self::ScaledInteger => sys::ARCADIA_TIO_OCB_LOGICAL_KIND_SCALED_INTEGER,
+                Self::DictionaryCode => sys::ARCADIA_TIO_OCB_LOGICAL_KIND_DICTIONARY_CODE,
+                Self::EnumCode => sys::ARCADIA_TIO_OCB_LOGICAL_KIND_ENUM_CODE,
+                Self::OpaqueKey => sys::ARCADIA_TIO_OCB_LOGICAL_KIND_OPAQUE_KEY,
+                Self::Unknown(raw) => raw,
+            }
+        }
+
+        fn from_raw(raw: sys::ArcadiaTioOcbLogicalKind) -> Self {
+            match raw {
+                sys::ARCADIA_TIO_OCB_LOGICAL_KIND_PLAIN => Self::Plain,
+                sys::ARCADIA_TIO_OCB_LOGICAL_KIND_TIMESTAMP_NANOS_LIKE => Self::TimestampNanosLike,
+                sys::ARCADIA_TIO_OCB_LOGICAL_KIND_SCALED_INTEGER => Self::ScaledInteger,
+                sys::ARCADIA_TIO_OCB_LOGICAL_KIND_DICTIONARY_CODE => Self::DictionaryCode,
+                sys::ARCADIA_TIO_OCB_LOGICAL_KIND_ENUM_CODE => Self::EnumCode,
+                sys::ARCADIA_TIO_OCB_LOGICAL_KIND_OPAQUE_KEY => Self::OpaqueKey,
+                other => Self::Unknown(other),
+            }
+        }
+    }
+
+    /// OCB dictionary decoded value kind.
+    #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+    pub enum DictionaryValueKind {
+        /// UTF-8 string values.
+        Utf8,
+        /// Variable-length byte values.
+        Bytes,
+        /// Fixed-width byte values.
+        FixedBytes,
+        /// Enum-label string values.
+        EnumLabels,
+        /// Unknown forward-compatible raw value.
+        Unknown(i32),
+    }
+
+    impl DictionaryValueKind {
+        fn to_raw(self) -> sys::ArcadiaTioOcbDictionaryValueKind {
+            match self {
+                Self::Utf8 => sys::ARCADIA_TIO_OCB_DICTIONARY_VALUE_KIND_UTF8,
+                Self::Bytes => sys::ARCADIA_TIO_OCB_DICTIONARY_VALUE_KIND_BYTES,
+                Self::FixedBytes => sys::ARCADIA_TIO_OCB_DICTIONARY_VALUE_KIND_FIXED_BYTES,
+                Self::EnumLabels => sys::ARCADIA_TIO_OCB_DICTIONARY_VALUE_KIND_ENUM_LABELS,
+                Self::Unknown(raw) => raw,
+            }
+        }
+
+        fn from_raw(raw: sys::ArcadiaTioOcbDictionaryValueKind) -> Self {
+            match raw {
+                sys::ARCADIA_TIO_OCB_DICTIONARY_VALUE_KIND_UTF8 => Self::Utf8,
+                sys::ARCADIA_TIO_OCB_DICTIONARY_VALUE_KIND_BYTES => Self::Bytes,
+                sys::ARCADIA_TIO_OCB_DICTIONARY_VALUE_KIND_FIXED_BYTES => Self::FixedBytes,
+                sys::ARCADIA_TIO_OCB_DICTIONARY_VALUE_KIND_ENUM_LABELS => Self::EnumLabels,
+                other => Self::Unknown(other),
+            }
+        }
+    }
+
+    /// Ordering direction for OCB ordering keys.
+    #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+    pub enum OrderingDirection {
+        /// Ascending order.
+        Ascending,
+        /// Descending order.
+        Descending,
+        /// Unknown forward-compatible raw value.
+        Unknown(i32),
+    }
+
+    impl OrderingDirection {
+        fn to_raw(self) -> sys::ArcadiaTioOcbOrderingDirection {
+            match self {
+                Self::Ascending => sys::ARCADIA_TIO_OCB_ORDERING_DIRECTION_ASCENDING,
+                Self::Descending => sys::ARCADIA_TIO_OCB_ORDERING_DIRECTION_DESCENDING,
+                Self::Unknown(raw) => raw,
+            }
+        }
+
+        fn from_raw(raw: sys::ArcadiaTioOcbOrderingDirection) -> Self {
+            match raw {
+                sys::ARCADIA_TIO_OCB_ORDERING_DIRECTION_ASCENDING => Self::Ascending,
+                sys::ARCADIA_TIO_OCB_ORDERING_DIRECTION_DESCENDING => Self::Descending,
+                other => Self::Unknown(other),
+            }
+        }
+    }
+
+    /// Null ordering for OCB ordering keys.
+    #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+    pub enum NullOrder {
+        /// Nulls compare first.
+        NullsFirst,
+        /// Nulls compare last.
+        NullsLast,
+        /// Column has no nulls for this ordering key.
+        NoNulls,
+        /// Unknown forward-compatible raw value.
+        Unknown(i32),
+    }
+
+    impl NullOrder {
+        fn to_raw(self) -> sys::ArcadiaTioOcbNullOrder {
+            match self {
+                Self::NullsFirst => sys::ARCADIA_TIO_OCB_NULL_ORDER_NULLS_FIRST,
+                Self::NullsLast => sys::ARCADIA_TIO_OCB_NULL_ORDER_NULLS_LAST,
+                Self::NoNulls => sys::ARCADIA_TIO_OCB_NULL_ORDER_NO_NULLS,
+                Self::Unknown(raw) => raw,
+            }
+        }
+
+        fn from_raw(raw: sys::ArcadiaTioOcbNullOrder) -> Self {
+            match raw {
+                sys::ARCADIA_TIO_OCB_NULL_ORDER_NULLS_FIRST => Self::NullsFirst,
+                sys::ARCADIA_TIO_OCB_NULL_ORDER_NULLS_LAST => Self::NullsLast,
+                sys::ARCADIA_TIO_OCB_NULL_ORDER_NO_NULLS => Self::NoNulls,
+                other => Self::Unknown(other),
+            }
+        }
+    }
+
+    /// OCB primitive payload values.
+    #[derive(Debug, Clone, PartialEq)]
+    pub enum PrimitiveValues {
+        /// i32 values.
+        I32(Vec<i32>),
+        /// i64 values.
+        I64(Vec<i64>),
+        /// f32 values.
+        F32(Vec<f32>),
+        /// f64 values.
+        F64(Vec<f64>),
+    }
+
+    impl PrimitiveValues {
+        fn physical_type(&self) -> PhysicalType {
+            match self {
+                Self::I32(_) => PhysicalType::I32,
+                Self::I64(_) => PhysicalType::I64,
+                Self::F32(_) => PhysicalType::F32,
+                Self::F64(_) => PhysicalType::F64,
+            }
+        }
+
+        fn len(&self) -> usize {
+            match self {
+                Self::I32(values) => values.len(),
+                Self::I64(values) => values.len(),
+                Self::F32(values) => values.len(),
+                Self::F64(values) => values.len(),
+            }
+        }
+
+        fn data_ptr(&self) -> *const c_void {
+            match self {
+                Self::I32(values) => values.as_ptr().cast(),
+                Self::I64(values) => values.as_ptr().cast(),
+                Self::F32(values) => values.as_ptr().cast(),
+                Self::F64(values) => values.as_ptr().cast(),
+            }
+        }
+
+        fn to_raw(&self) -> sys::ArcadiaTioOcbPrimitiveValues {
+            sys::ArcadiaTioOcbPrimitiveValues {
+                version: sys::ARCADIA_TIO_OCB_ABI_VERSION,
+                struct_size: mem::size_of::<sys::ArcadiaTioOcbPrimitiveValues>(),
+                physical_type: self.physical_type().to_raw(),
+                data: self.data_ptr(),
+                len: self.len(),
+                reserved: [0; 3],
+            }
+        }
+    }
+
+    /// Validity bitmap with least-significant-bit-first bits; bit 1 means valid.
+    #[derive(Debug, Clone, PartialEq, Eq)]
+    pub struct ValidityBitmap {
+        /// Bitmap bytes.
+        pub bytes: Vec<u8>,
+        /// Meaningful row count.
+        pub row_count: u64,
+    }
+
+    /// Column declaration for OCB create/append.
+    #[derive(Debug, Clone, PartialEq, Eq)]
+    pub struct WriteColumn {
+        /// Column name.
+        pub name: String,
+        /// Physical primitive type.
+        pub physical_type: PhysicalType,
+        /// Logical column kind.
+        pub logical_kind: LogicalKind,
+        /// Optional dictionary id for dictionary-coded columns.
+        pub dictionary_id: Option<u32>,
+        /// Decimal scale for scaled-integer logical columns.
+        pub scale: i32,
+        /// Whether values may be null.
+        pub nullable: bool,
+    }
+
+    /// Dictionary declaration for OCB create/append.
+    #[derive(Debug, Clone, PartialEq, Eq)]
+    pub struct WriteDictionary {
+        /// File-local dictionary id.
+        pub dictionary_id: u32,
+        /// Dictionary name.
+        pub name: String,
+        /// Physical code type used by dictionary-coded columns.
+        pub code_physical_type: PhysicalType,
+        /// Decoded value kind.
+        pub value_kind: DictionaryValueKind,
+        /// Fixed byte width when `value_kind` is fixed bytes.
+        pub fixed_width: u32,
+        /// Decoded dictionary entries as bytes.
+        pub entries: Vec<Vec<u8>>,
+    }
+
+    /// Column chunk for one OCB write row group.
+    #[derive(Debug, Clone, PartialEq)]
+    pub struct WriteColumnChunk {
+        /// File-local column id.
+        pub column_id: u32,
+        /// Primitive values.
+        pub values: PrimitiveValues,
+        /// Optional validity bitmap.
+        pub validity: Option<ValidityBitmap>,
+    }
+
+    /// Row group for OCB create/append.
+    #[derive(Debug, Clone, PartialEq)]
+    pub struct WriteRowGroup {
+        /// Column chunks in this row group.
+        pub columns: Vec<WriteColumnChunk>,
+    }
+
+    /// Ordering key declaration for OCB create/append.
+    #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+    pub struct WriteOrderingKey {
+        /// File-local column id.
+        pub column_id: u32,
+        /// Sort direction.
+        pub direction: OrderingDirection,
+        /// Null ordering.
+        pub null_order: NullOrder,
+    }
+
+    /// Complete OCB write specification for create/append.
+    #[derive(Debug, Clone, PartialEq)]
+    pub struct WriteSpec {
+        /// Frozen column schema.
+        pub columns: Vec<WriteColumn>,
+        /// Frozen dictionary declarations.
+        pub dictionaries: Vec<WriteDictionary>,
+        /// Row groups to publish in this commit.
+        pub row_groups: Vec<WriteRowGroup>,
+        /// Ordering keys.
+        pub ordering_keys: Vec<WriteOrderingKey>,
+    }
+
+    /// Metadata for an opened OCB snapshot.
+    #[derive(Debug, Clone, PartialEq, Eq)]
+    pub struct Metadata {
+        /// Format name, currently `OCB`.
+        pub format_name: String,
+        /// Whether the format is appendable.
+        pub appendable: bool,
+        /// Selected root generation.
+        pub root_generation: u64,
+        /// Previous root generation when present.
+        pub previous_root_generation: Option<u64>,
+        /// Visible row count.
+        pub row_count: u64,
+        /// Visible row group count.
+        pub row_group_count: u32,
+        /// Visible column chunk count.
+        pub column_chunk_count: u32,
+        /// Column descriptors.
+        pub columns: Vec<ColumnDescriptor>,
+        /// Dictionary descriptors.
+        pub dictionaries: Vec<DictionaryDescriptor>,
+        /// Ordering keys.
+        pub ordering_keys: Vec<OrderingKey>,
+    }
+
+    /// OCB column metadata descriptor.
+    #[derive(Debug, Clone, PartialEq, Eq)]
+    pub struct ColumnDescriptor {
+        /// File-local column id.
+        pub id: u32,
+        /// Column name.
+        pub name: String,
+        /// Physical type.
+        pub physical_type: PhysicalType,
+        /// Logical kind.
+        pub logical_kind: LogicalKind,
+        /// Dictionary id when present.
+        pub dictionary_id: Option<u32>,
+        /// Decimal scale.
+        pub scale: i32,
+        /// Whether values may be null.
+        pub nullable: bool,
+    }
+
+    /// OCB dictionary metadata descriptor.
+    #[derive(Debug, Clone, PartialEq, Eq)]
+    pub struct DictionaryDescriptor {
+        /// File-local dictionary id.
+        pub dictionary_id: u32,
+        /// Dictionary name.
+        pub name: String,
+        /// Code physical type.
+        pub code_physical_type: PhysicalType,
+        /// Decoded value kind.
+        pub value_kind: DictionaryValueKind,
+        /// Number of entries.
+        pub entry_count: u32,
+    }
+
+    /// OCB ordering-key metadata descriptor.
+    #[derive(Debug, Clone, PartialEq, Eq)]
+    pub struct OrderingKey {
+        /// File-local column id.
+        pub column_id: u32,
+        /// Column name.
+        pub column_name: String,
+        /// Sort direction.
+        pub direction: OrderingDirection,
+        /// Null ordering.
+        pub null_order: NullOrder,
+    }
+
+    /// Decoded dictionary values.
+    #[derive(Debug, Clone, PartialEq, Eq)]
+    pub struct DictionaryValues {
+        /// File-local dictionary id.
+        pub dictionary_id: u32,
+        /// Dictionary name.
+        pub name: String,
+        /// Decoded values.
+        pub values: DecodedDictionaryValues,
+    }
+
+    /// Decoded dictionary payload variants.
+    #[derive(Debug, Clone, PartialEq, Eq)]
+    pub enum DecodedDictionaryValues {
+        /// UTF-8 string values.
+        Utf8(Vec<String>),
+        /// Variable-length byte values.
+        Bytes(Vec<Vec<u8>>),
+        /// Fixed-width byte values.
+        FixedBytes {
+            fixed_width: u32,
+            values: Vec<Vec<u8>>,
+        },
+        /// Enum-label string values.
+        EnumLabels(Vec<String>),
+        /// Unknown value kind with copied raw strings/bytes when possible.
+        Unknown {
+            raw_kind: i32,
+            strings: Vec<String>,
+            bytes: Vec<Vec<u8>>,
+        },
+    }
+
+    /// Column projection for OCB reads.
+    #[derive(Debug, Clone, PartialEq, Eq)]
+    pub enum Projection {
+        /// Select all columns.
+        All,
+        /// Select columns by name.
+        Names(Vec<String>),
+    }
+
+    /// Predicate primitive value.
+    #[derive(Debug, Clone, Copy, PartialEq)]
+    pub enum PredicateValue {
+        /// i32 value.
+        I32(i32),
+        /// i64 value.
+        I64(i64),
+        /// f32 value.
+        F32(f32),
+        /// f64 value.
+        F64(f64),
+    }
+
+    impl PredicateValue {
+        fn to_raw(self) -> sys::ArcadiaTioOcbPredicateValue {
+            let mut raw = sys::ArcadiaTioOcbPredicateValue {
+                version: sys::ARCADIA_TIO_OCB_ABI_VERSION,
+                struct_size: mem::size_of::<sys::ArcadiaTioOcbPredicateValue>(),
+                physical_type: sys::ARCADIA_TIO_OCB_PHYSICAL_TYPE_I32,
+                i32_value: 0,
+                i64_value: 0,
+                f32_value: 0.0,
+                f64_value: 0.0,
+                reserved: [0; 3],
+            };
+            match self {
+                Self::I32(value) => {
+                    raw.physical_type = sys::ARCADIA_TIO_OCB_PHYSICAL_TYPE_I32;
+                    raw.i32_value = value;
+                }
+                Self::I64(value) => {
+                    raw.physical_type = sys::ARCADIA_TIO_OCB_PHYSICAL_TYPE_I64;
+                    raw.i64_value = value;
+                }
+                Self::F32(value) => {
+                    raw.physical_type = sys::ARCADIA_TIO_OCB_PHYSICAL_TYPE_F32;
+                    raw.f32_value = value;
+                }
+                Self::F64(value) => {
+                    raw.physical_type = sys::ARCADIA_TIO_OCB_PHYSICAL_TYPE_F64;
+                    raw.f64_value = value;
+                }
+            }
+            raw
+        }
+    }
+
+    /// Inclusive row-group predicate over one column.
+    #[derive(Debug, Clone, PartialEq)]
+    pub struct RowGroupPredicate {
+        /// Column name.
+        pub column: String,
+        /// Inclusive lower bound when present.
+        pub lower: Option<PredicateValue>,
+        /// Inclusive upper bound when present.
+        pub upper: Option<PredicateValue>,
+    }
+
+    /// OCB read request.
+    #[derive(Debug, Clone, PartialEq)]
+    pub struct ReadRequest {
+        /// Column projection.
+        pub projection: Projection,
+        /// Row-group pruning predicates.
+        pub predicates: Vec<RowGroupPredicate>,
+        /// Requested worker threads.
+        pub max_threads: usize,
+        /// Validate checksums while reading.
+        pub validate_checksums: bool,
+        /// Reserved dictionary decode flag; current reads still return codes.
+        pub decode_dictionaries: bool,
+    }
+
+    impl Default for ReadRequest {
+        fn default() -> Self {
+            Self {
+                projection: Projection::All,
+                predicates: Vec::new(),
+                max_threads: 1,
+                validate_checksums: true,
+                decode_dictionaries: false,
+            }
+        }
+    }
+
+    /// OCB read outcome with owned batches and report.
+    #[derive(Debug, Clone, PartialEq)]
+    pub struct ReadOutcome {
+        /// Returned column batches.
+        pub batches: Vec<ColumnBatch>,
+        /// Read execution report.
+        pub report: ReadReport,
+    }
+
+    /// OCB read execution report.
+    #[derive(Debug, Clone, PartialEq, Eq)]
+    pub struct ReadReport {
+        /// Requested thread count.
+        pub requested_threads: usize,
+        /// Effective thread count.
+        pub effective_threads: usize,
+        /// Selected row groups.
+        pub selected_row_groups: usize,
+        /// Pruned row groups.
+        pub pruned_row_groups: usize,
+        /// Selected column chunks.
+        pub selected_column_chunks: usize,
+        /// Stable fallback reason string when present.
+        pub fallback_reason: Option<String>,
+    }
+
+    /// One returned OCB row-group batch.
+    #[derive(Debug, Clone, PartialEq)]
+    pub struct ColumnBatch {
+        /// File-local row group id.
+        pub row_group_id: u32,
+        /// Base row offset.
+        pub base_row: u64,
+        /// Number of rows.
+        pub row_count: u64,
+        /// Returned columns.
+        pub columns: Vec<ColumnArray>,
+    }
+
+    /// One returned OCB column array.
+    #[derive(Debug, Clone, PartialEq)]
+    pub struct ColumnArray {
+        /// File-local column id.
+        pub column_id: u32,
+        /// Column name.
+        pub name: String,
+        /// Physical type.
+        pub physical_type: PhysicalType,
+        /// Logical kind.
+        pub logical_kind: LogicalKind,
+        /// Dictionary id when present.
+        pub dictionary_id: Option<u32>,
+        /// Primitive values.
+        pub values: PrimitiveValues,
+        /// Optional validity bitmap.
+        pub validity: Option<ValidityBitmap>,
+    }
+
+    /// Result from orphan-tail cleanup.
+    #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+    pub struct CleanupResult {
+        /// Whether orphan tail bytes were truncated.
+        pub truncated: bool,
+    }
+
+    /// OCB file handle bound to one selected committed snapshot.
+    #[derive(Debug)]
+    pub struct ColumnBundleFile {
+        raw: NonNull<sys::ArcadiaTioOcbFile>,
+    }
+
+    impl ColumnBundleFile {
+        /// Open an OCB file and bind this handle to the selected committed snapshot.
+        pub fn open(path: impl AsRef<Path>) -> OcbResult<Self> {
+            open(path)
+        }
+
+        /// Read metadata for the selected snapshot.
+        pub fn metadata(&self) -> OcbResult<Metadata> {
+            let mut raw = empty_metadata();
+            let status = unsafe { sys::arcadia_tio_ocb_metadata(self.raw.as_ptr(), &mut raw) };
+            let guard = MetadataGuard(raw);
+            if status != sys::ARCADIA_TIO_ERROR_OK {
+                return Err(OcbError::last("OCB metadata failed"));
+            }
+            unsafe { metadata_from_raw(&guard.0) }
+        }
+
+        /// Decode one dictionary on the explicit cold path.
+        pub fn dictionary_values(&self, dictionary_id: u32) -> OcbResult<DictionaryValues> {
+            let mut raw = empty_dictionary_values();
+            let status = unsafe {
+                sys::arcadia_tio_ocb_dictionary_values(self.raw.as_ptr(), dictionary_id, &mut raw)
+            };
+            let guard = DictionaryValuesGuard(raw);
+            if status != sys::ARCADIA_TIO_ERROR_OK {
+                return Err(OcbError::last("OCB dictionary_values failed"));
+            }
+            unsafe { dictionary_values_from_raw(&guard.0) }
+        }
+
+        /// Read projected/pruned column batches from the selected snapshot.
+        pub fn read_batches(&self, request: &ReadRequest) -> OcbResult<ReadOutcome> {
+            let raw_request = RawReadRequest::new(request)?;
+            let mut raw_outcome = empty_read_outcome();
+            let status = unsafe {
+                sys::arcadia_tio_ocb_read_batches(
+                    self.raw.as_ptr(),
+                    &raw_request.raw,
+                    &mut raw_outcome,
+                )
+            };
+            let guard = ReadOutcomeGuard(raw_outcome);
+            if status != sys::ARCADIA_TIO_ERROR_OK {
+                return Err(OcbError::last("OCB read_batches failed"));
+            }
+            unsafe { read_outcome_from_raw(&guard.0) }
+        }
+    }
+
+    impl Drop for ColumnBundleFile {
+        fn drop(&mut self) {
+            unsafe { sys::arcadia_tio_ocb_close(self.raw.as_ptr()) };
+        }
+    }
+
+    /// Open an OCB file and bind the returned handle to the selected committed snapshot.
+    pub fn open(path: impl AsRef<Path>) -> OcbResult<ColumnBundleFile> {
+        let path = path_to_cstring(path).map_err(OcbError::from_tio_error)?;
+        let raw = unsafe { sys::arcadia_tio_ocb_open(path.as_ptr()) };
+        NonNull::new(raw)
+            .map(|raw| ColumnBundleFile { raw })
+            .ok_or_else(|| OcbError::last("OCB open failed"))
+    }
+
+    /// Create an appendable OCB file and publish its first committed root.
+    pub fn create(path: impl AsRef<Path>, spec: &WriteSpec) -> OcbResult<()> {
+        write_path(path, spec, true)
+    }
+
+    /// Append one sorted suffix commit to an existing appendable OCB file.
+    pub fn append(path: impl AsRef<Path>, spec: &WriteSpec) -> OcbResult<()> {
+        write_path(path, spec, false)
+    }
+
+    /// Truncate orphan tail bytes after the latest valid appendable OCB root.
+    pub fn cleanup_orphan_tail(path: impl AsRef<Path>) -> OcbResult<CleanupResult> {
+        let path = path_to_cstring(path).map_err(OcbError::from_tio_error)?;
+        let mut raw = sys::ArcadiaTioOcbCleanupResult {
+            version: sys::ARCADIA_TIO_OCB_ABI_VERSION,
+            struct_size: mem::size_of::<sys::ArcadiaTioOcbCleanupResult>(),
+            truncated: 0,
+            reserved: [0; 3],
+        };
+        let status = unsafe { sys::arcadia_tio_ocb_cleanup_orphan_tail(path.as_ptr(), &mut raw) };
+        if status == sys::ARCADIA_TIO_ERROR_OK {
+            Ok(CleanupResult {
+                truncated: raw.truncated != 0,
+            })
+        } else {
+            Err(OcbError::last("OCB cleanup_orphan_tail failed"))
+        }
+    }
+
+    fn write_path(path: impl AsRef<Path>, spec: &WriteSpec, create_file: bool) -> OcbResult<()> {
+        let path = path_to_cstring(path).map_err(OcbError::from_tio_error)?;
+        let raw = RawWriteSpec::new(spec)?;
+        let status = if create_file {
+            unsafe { sys::arcadia_tio_ocb_create(path.as_ptr(), &raw.raw) }
+        } else {
+            unsafe { sys::arcadia_tio_ocb_append(path.as_ptr(), &raw.raw) }
+        };
+        if status == sys::ARCADIA_TIO_ERROR_OK {
+            Ok(())
+        } else {
+            Err(OcbError::last(if create_file {
+                "OCB create failed"
+            } else {
+                "OCB append failed"
+            }))
+        }
+    }
+
+    struct RawWriteSpec {
+        raw: sys::ArcadiaTioOcbWriteSpec,
+        _column_names: Vec<CString>,
+        _dictionary_names: Vec<CString>,
+        _raw_columns: Vec<sys::ArcadiaTioOcbWriteColumn>,
+        _raw_entries: Vec<Vec<sys::ArcadiaTioOcbDictionaryEntry>>,
+        _raw_dictionaries: Vec<sys::ArcadiaTioOcbWriteDictionary>,
+        _raw_validities: Vec<Vec<sys::ArcadiaTioOcbValidityBitmap>>,
+        _raw_chunks: Vec<Vec<sys::ArcadiaTioOcbWriteColumnChunk>>,
+        _raw_rows: Vec<sys::ArcadiaTioOcbWriteRowGroup>,
+        _raw_ordering_keys: Vec<sys::ArcadiaTioOcbWriteOrderingKey>,
+    }
+
+    impl RawWriteSpec {
+        fn new(spec: &WriteSpec) -> OcbResult<Self> {
+            let column_names = spec
+                .columns
+                .iter()
+                .map(|column| cstring(&column.name, "OCB column name"))
+                .collect::<OcbResult<Vec<_>>>()?;
+            let dictionary_names = spec
+                .dictionaries
+                .iter()
+                .map(|dictionary| cstring(&dictionary.name, "OCB dictionary name"))
+                .collect::<OcbResult<Vec<_>>>()?;
+
+            let raw_columns = spec
+                .columns
+                .iter()
+                .zip(column_names.iter())
+                .map(|(column, name)| sys::ArcadiaTioOcbWriteColumn {
+                    version: sys::ARCADIA_TIO_OCB_ABI_VERSION,
+                    struct_size: mem::size_of::<sys::ArcadiaTioOcbWriteColumn>(),
+                    name: name.as_ptr(),
+                    physical_type: column.physical_type.to_raw(),
+                    logical_kind: column.logical_kind.to_raw(),
+                    has_dictionary_id: u8::from(column.dictionary_id.is_some()),
+                    dictionary_id: column.dictionary_id.unwrap_or(0),
+                    scale: column.scale,
+                    nullable: u8::from(column.nullable),
+                    reserved: [0; 3],
+                })
+                .collect::<Vec<_>>();
+
+            let raw_entries = spec
+                .dictionaries
+                .iter()
+                .map(|dictionary| {
+                    dictionary
+                        .entries
+                        .iter()
+                        .map(|entry| sys::ArcadiaTioOcbDictionaryEntry {
+                            version: sys::ARCADIA_TIO_OCB_ABI_VERSION,
+                            struct_size: mem::size_of::<sys::ArcadiaTioOcbDictionaryEntry>(),
+                            data: entry.as_ptr(),
+                            len: entry.len(),
+                            reserved: [0; 3],
+                        })
+                        .collect::<Vec<_>>()
+                })
+                .collect::<Vec<_>>();
+
+            let raw_dictionaries = spec
+                .dictionaries
+                .iter()
+                .zip(dictionary_names.iter())
+                .zip(raw_entries.iter())
+                .map(
+                    |((dictionary, name), entries)| sys::ArcadiaTioOcbWriteDictionary {
+                        version: sys::ARCADIA_TIO_OCB_ABI_VERSION,
+                        struct_size: mem::size_of::<sys::ArcadiaTioOcbWriteDictionary>(),
+                        dictionary_id: dictionary.dictionary_id,
+                        name: name.as_ptr(),
+                        code_physical_type: dictionary.code_physical_type.to_raw(),
+                        value_kind: dictionary.value_kind.to_raw(),
+                        fixed_width: dictionary.fixed_width,
+                        entries: entries.as_ptr(),
+                        entries_len: entries.len(),
+                        reserved: [0; 3],
+                    },
+                )
+                .collect::<Vec<_>>();
+
+            let raw_validities = spec
+                .row_groups
+                .iter()
+                .map(|row| {
+                    row.columns
+                        .iter()
+                        .map(|chunk| match &chunk.validity {
+                            Some(validity) => sys::ArcadiaTioOcbValidityBitmap {
+                                version: sys::ARCADIA_TIO_OCB_ABI_VERSION,
+                                struct_size: mem::size_of::<sys::ArcadiaTioOcbValidityBitmap>(),
+                                data: validity.bytes.as_ptr(),
+                                len: validity.bytes.len(),
+                                row_count: validity.row_count,
+                                reserved: [0; 3],
+                            },
+                            None => sys::ArcadiaTioOcbValidityBitmap {
+                                version: sys::ARCADIA_TIO_OCB_ABI_VERSION,
+                                struct_size: mem::size_of::<sys::ArcadiaTioOcbValidityBitmap>(),
+                                data: ptr::null(),
+                                len: 0,
+                                row_count: 0,
+                                reserved: [0; 3],
+                            },
+                        })
+                        .collect::<Vec<_>>()
+                })
+                .collect::<Vec<_>>();
+
+            let raw_chunks = spec
+                .row_groups
+                .iter()
+                .zip(raw_validities.iter())
+                .map(|(row, validities)| {
+                    row.columns
+                        .iter()
+                        .zip(validities.iter())
+                        .map(|(chunk, validity)| sys::ArcadiaTioOcbWriteColumnChunk {
+                            version: sys::ARCADIA_TIO_OCB_ABI_VERSION,
+                            struct_size: mem::size_of::<sys::ArcadiaTioOcbWriteColumnChunk>(),
+                            column_id: chunk.column_id,
+                            values: chunk.values.to_raw(),
+                            validity: if chunk.validity.is_some() {
+                                validity as *const sys::ArcadiaTioOcbValidityBitmap
+                            } else {
+                                ptr::null()
+                            },
+                            reserved: [0; 3],
+                        })
+                        .collect::<Vec<_>>()
+                })
+                .collect::<Vec<_>>();
+
+            let raw_rows = raw_chunks
+                .iter()
+                .map(|chunks| sys::ArcadiaTioOcbWriteRowGroup {
+                    version: sys::ARCADIA_TIO_OCB_ABI_VERSION,
+                    struct_size: mem::size_of::<sys::ArcadiaTioOcbWriteRowGroup>(),
+                    columns: chunks.as_ptr(),
+                    columns_len: chunks.len(),
+                    reserved: [0; 3],
+                })
+                .collect::<Vec<_>>();
+
+            let raw_ordering_keys = spec
+                .ordering_keys
+                .iter()
+                .map(|key| sys::ArcadiaTioOcbWriteOrderingKey {
+                    version: sys::ARCADIA_TIO_OCB_ABI_VERSION,
+                    struct_size: mem::size_of::<sys::ArcadiaTioOcbWriteOrderingKey>(),
+                    column_id: key.column_id,
+                    direction: key.direction.to_raw(),
+                    null_order: key.null_order.to_raw(),
+                    reserved: [0; 3],
+                })
+                .collect::<Vec<_>>();
+
+            let raw = sys::ArcadiaTioOcbWriteSpec {
+                version: sys::ARCADIA_TIO_OCB_ABI_VERSION,
+                struct_size: mem::size_of::<sys::ArcadiaTioOcbWriteSpec>(),
+                columns: raw_columns.as_ptr(),
+                columns_len: raw_columns.len(),
+                dictionaries: raw_dictionaries.as_ptr(),
+                dictionaries_len: raw_dictionaries.len(),
+                row_groups: raw_rows.as_ptr(),
+                row_groups_len: raw_rows.len(),
+                ordering_keys: raw_ordering_keys.as_ptr(),
+                ordering_keys_len: raw_ordering_keys.len(),
+                reserved: [0; 4],
+            };
+
+            Ok(Self {
+                raw,
+                _column_names: column_names,
+                _dictionary_names: dictionary_names,
+                _raw_columns: raw_columns,
+                _raw_entries: raw_entries,
+                _raw_dictionaries: raw_dictionaries,
+                _raw_validities: raw_validities,
+                _raw_chunks: raw_chunks,
+                _raw_rows: raw_rows,
+                _raw_ordering_keys: raw_ordering_keys,
+            })
+        }
+    }
+
+    struct RawReadRequest {
+        raw: sys::ArcadiaTioOcbReadRequest,
+        _column_names: Vec<CString>,
+        _column_name_ptrs: Vec<*const c_char>,
+        _predicate_columns: Vec<CString>,
+        _predicates: Vec<sys::ArcadiaTioOcbRowGroupPredicate>,
+    }
+
+    impl RawReadRequest {
+        fn new(request: &ReadRequest) -> OcbResult<Self> {
+            let (column_names, column_name_ptrs, projection_kind) = match &request.projection {
+                Projection::All => (Vec::new(), Vec::new(), sys::ARCADIA_TIO_OCB_PROJECTION_ALL),
+                Projection::Names(names) => {
+                    let column_names = names
+                        .iter()
+                        .map(|name| cstring(name, "OCB projection column"))
+                        .collect::<OcbResult<Vec<_>>>()?;
+                    let column_name_ptrs = column_names.iter().map(|name| name.as_ptr()).collect();
+                    (
+                        column_names,
+                        column_name_ptrs,
+                        sys::ARCADIA_TIO_OCB_PROJECTION_NAMES,
+                    )
+                }
+            };
+            let predicate_columns = request
+                .predicates
+                .iter()
+                .map(|predicate| cstring(&predicate.column, "OCB predicate column"))
+                .collect::<OcbResult<Vec<_>>>()?;
+            let predicates = request
+                .predicates
+                .iter()
+                .zip(predicate_columns.iter())
+                .map(|(predicate, column)| sys::ArcadiaTioOcbRowGroupPredicate {
+                    version: sys::ARCADIA_TIO_OCB_ABI_VERSION,
+                    struct_size: mem::size_of::<sys::ArcadiaTioOcbRowGroupPredicate>(),
+                    column: column.as_ptr(),
+                    has_lower: u8::from(predicate.lower.is_some()),
+                    lower: predicate.lower.unwrap_or(PredicateValue::I32(0)).to_raw(),
+                    has_upper: u8::from(predicate.upper.is_some()),
+                    upper: predicate.upper.unwrap_or(PredicateValue::I32(0)).to_raw(),
+                    reserved: [0; 3],
+                })
+                .collect::<Vec<_>>();
+            let raw = sys::ArcadiaTioOcbReadRequest {
+                version: sys::ARCADIA_TIO_OCB_ABI_VERSION,
+                struct_size: mem::size_of::<sys::ArcadiaTioOcbReadRequest>(),
+                projection_kind,
+                column_names: column_name_ptrs.as_ptr(),
+                column_names_len: column_name_ptrs.len(),
+                predicates: predicates.as_ptr(),
+                predicates_len: predicates.len(),
+                max_threads: request.max_threads,
+                validate_checksums: u8::from(request.validate_checksums),
+                decode_dictionaries: u8::from(request.decode_dictionaries),
+                reserved: [0; 4],
+            };
+            Ok(Self {
+                raw,
+                _column_names: column_names,
+                _column_name_ptrs: column_name_ptrs,
+                _predicate_columns: predicate_columns,
+                _predicates: predicates,
+            })
+        }
+    }
+
+    fn cstring(value: &str, label: &str) -> OcbResult<CString> {
+        CString::new(value).map_err(|_| OcbError::invalid_input(format!("{label} contains NUL")))
+    }
+
+    fn empty_metadata() -> sys::ArcadiaTioOcbMetadata {
+        sys::ArcadiaTioOcbMetadata {
+            version: sys::ARCADIA_TIO_OCB_ABI_VERSION,
+            struct_size: mem::size_of::<sys::ArcadiaTioOcbMetadata>(),
+            format_name: ptr::null_mut(),
+            appendable: 0,
+            root_generation: 0,
+            has_previous_root_generation: 0,
+            previous_root_generation: 0,
+            row_count: 0,
+            row_group_count: 0,
+            column_chunk_count: 0,
+            columns: ptr::null_mut(),
+            columns_len: 0,
+            dictionaries: ptr::null_mut(),
+            dictionaries_len: 0,
+            ordering_keys: ptr::null_mut(),
+            ordering_keys_len: 0,
+            reserved: [0; 4],
+        }
+    }
+
+    fn empty_dictionary_values() -> sys::ArcadiaTioOcbDictionaryValues {
+        sys::ArcadiaTioOcbDictionaryValues {
+            version: sys::ARCADIA_TIO_OCB_ABI_VERSION,
+            struct_size: mem::size_of::<sys::ArcadiaTioOcbDictionaryValues>(),
+            dictionary_id: 0,
+            name: ptr::null_mut(),
+            value_kind: sys::ARCADIA_TIO_OCB_DICTIONARY_VALUE_KIND_UTF8,
+            fixed_width: 0,
+            string_values: ptr::null_mut(),
+            string_values_len: 0,
+            byte_values: ptr::null_mut(),
+            byte_values_len: 0,
+            reserved: [0; 4],
+        }
+    }
+
+    fn empty_read_outcome() -> sys::ArcadiaTioOcbReadOutcome {
+        sys::ArcadiaTioOcbReadOutcome {
+            version: sys::ARCADIA_TIO_OCB_ABI_VERSION,
+            struct_size: mem::size_of::<sys::ArcadiaTioOcbReadOutcome>(),
+            batches: ptr::null_mut(),
+            batches_len: 0,
+            report: sys::ArcadiaTioOcbReadReport {
+                version: sys::ARCADIA_TIO_OCB_ABI_VERSION,
+                struct_size: mem::size_of::<sys::ArcadiaTioOcbReadReport>(),
+                requested_threads: 0,
+                effective_threads: 0,
+                selected_row_groups: 0,
+                pruned_row_groups: 0,
+                selected_column_chunks: 0,
+                fallback_reason: ptr::null_mut(),
+                reserved: [0; 4],
+            },
+            reserved: [0; 4],
+        }
+    }
+
+    struct MetadataGuard(sys::ArcadiaTioOcbMetadata);
+    impl Drop for MetadataGuard {
+        fn drop(&mut self) {
+            unsafe { sys::arcadia_tio_ocb_metadata_free(&mut self.0) };
+        }
+    }
+
+    struct DictionaryValuesGuard(sys::ArcadiaTioOcbDictionaryValues);
+    impl Drop for DictionaryValuesGuard {
+        fn drop(&mut self) {
+            unsafe { sys::arcadia_tio_ocb_dictionary_values_free(&mut self.0) };
+        }
+    }
+
+    struct ReadOutcomeGuard(sys::ArcadiaTioOcbReadOutcome);
+    impl Drop for ReadOutcomeGuard {
+        fn drop(&mut self) {
+            unsafe { sys::arcadia_tio_ocb_read_outcome_free(&mut self.0) };
+        }
+    }
+
+    unsafe fn metadata_from_raw(raw: &sys::ArcadiaTioOcbMetadata) -> OcbResult<Metadata> {
+        let columns = unsafe { raw_slice(raw.columns, raw.columns_len) }
+            .iter()
+            .map(|column| ColumnDescriptor {
+                id: column.id,
+                name: raw_string(column.name.cast()),
+                physical_type: PhysicalType::from_raw(column.physical_type),
+                logical_kind: LogicalKind::from_raw(column.logical_kind),
+                dictionary_id: (column.has_dictionary_id != 0).then_some(column.dictionary_id),
+                scale: column.scale,
+                nullable: column.nullable != 0,
+            })
+            .collect();
+        let dictionaries = unsafe { raw_slice(raw.dictionaries, raw.dictionaries_len) }
+            .iter()
+            .map(|dictionary| DictionaryDescriptor {
+                dictionary_id: dictionary.dictionary_id,
+                name: raw_string(dictionary.name.cast()),
+                code_physical_type: PhysicalType::from_raw(dictionary.code_physical_type),
+                value_kind: DictionaryValueKind::from_raw(dictionary.value_kind),
+                entry_count: dictionary.entry_count,
+            })
+            .collect();
+        let ordering_keys = unsafe { raw_slice(raw.ordering_keys, raw.ordering_keys_len) }
+            .iter()
+            .map(|key| OrderingKey {
+                column_id: key.column_id,
+                column_name: raw_string(key.column_name.cast()),
+                direction: OrderingDirection::from_raw(key.direction),
+                null_order: NullOrder::from_raw(key.null_order),
+            })
+            .collect();
+        Ok(Metadata {
+            format_name: raw_string(raw.format_name.cast()),
+            appendable: raw.appendable != 0,
+            root_generation: raw.root_generation,
+            previous_root_generation: (raw.has_previous_root_generation != 0)
+                .then_some(raw.previous_root_generation),
+            row_count: raw.row_count,
+            row_group_count: raw.row_group_count,
+            column_chunk_count: raw.column_chunk_count,
+            columns,
+            dictionaries,
+            ordering_keys,
+        })
+    }
+
+    unsafe fn dictionary_values_from_raw(
+        raw: &sys::ArcadiaTioOcbDictionaryValues,
+    ) -> OcbResult<DictionaryValues> {
+        let strings = unsafe { raw_string_array(raw.string_values, raw.string_values_len) };
+        let bytes = unsafe { raw_byte_slices(raw.byte_values, raw.byte_values_len) };
+        let values = match DictionaryValueKind::from_raw(raw.value_kind) {
+            DictionaryValueKind::Utf8 => DecodedDictionaryValues::Utf8(strings),
+            DictionaryValueKind::Bytes => DecodedDictionaryValues::Bytes(bytes),
+            DictionaryValueKind::FixedBytes => DecodedDictionaryValues::FixedBytes {
+                fixed_width: raw.fixed_width,
+                values: bytes,
+            },
+            DictionaryValueKind::EnumLabels => DecodedDictionaryValues::EnumLabels(strings),
+            DictionaryValueKind::Unknown(raw_kind) => DecodedDictionaryValues::Unknown {
+                raw_kind,
+                strings,
+                bytes,
+            },
+        };
+        Ok(DictionaryValues {
+            dictionary_id: raw.dictionary_id,
+            name: raw_string(raw.name.cast()),
+            values,
+        })
+    }
+
+    unsafe fn read_outcome_from_raw(raw: &sys::ArcadiaTioOcbReadOutcome) -> OcbResult<ReadOutcome> {
+        let batches = unsafe { raw_slice(raw.batches, raw.batches_len) }
+            .iter()
+            .map(|batch| unsafe { column_batch_from_raw(batch) })
+            .collect::<OcbResult<Vec<_>>>()?;
+        Ok(ReadOutcome {
+            batches,
+            report: ReadReport {
+                requested_threads: raw.report.requested_threads,
+                effective_threads: raw.report.effective_threads,
+                selected_row_groups: raw.report.selected_row_groups,
+                pruned_row_groups: raw.report.pruned_row_groups,
+                selected_column_chunks: raw.report.selected_column_chunks,
+                fallback_reason: raw_optional_string(raw.report.fallback_reason.cast()),
+            },
+        })
+    }
+
+    unsafe fn column_batch_from_raw(raw: &sys::ArcadiaTioOcbColumnBatch) -> OcbResult<ColumnBatch> {
+        let columns = unsafe { raw_slice(raw.columns, raw.columns_len) }
+            .iter()
+            .map(|column| unsafe { column_array_from_raw(column) })
+            .collect::<OcbResult<Vec<_>>>()?;
+        Ok(ColumnBatch {
+            row_group_id: raw.row_group_id,
+            base_row: raw.base_row,
+            row_count: raw.row_count,
+            columns,
+        })
+    }
+
+    unsafe fn column_array_from_raw(raw: &sys::ArcadiaTioOcbColumnArray) -> OcbResult<ColumnArray> {
+        Ok(ColumnArray {
+            column_id: raw.column_id,
+            name: raw_string(raw.name.cast()),
+            physical_type: PhysicalType::from_raw(raw.physical_type),
+            logical_kind: LogicalKind::from_raw(raw.logical_kind),
+            dictionary_id: (raw.has_dictionary_id != 0).then_some(raw.dictionary_id),
+            values: unsafe { primitive_values_from_raw(&raw.values) }?,
+            validity: if raw.has_validity != 0 {
+                Some(ValidityBitmap {
+                    bytes: unsafe { raw_bytes(raw.validity.data, raw.validity.len) },
+                    row_count: raw.validity.row_count,
+                })
+            } else {
+                None
+            },
+        })
+    }
+
+    unsafe fn primitive_values_from_raw(
+        raw: &sys::ArcadiaTioOcbPrimitiveValues,
+    ) -> OcbResult<PrimitiveValues> {
+        match PhysicalType::from_raw(raw.physical_type) {
+            PhysicalType::I32 => Ok(PrimitiveValues::I32(unsafe {
+                raw_typed(raw.data.cast(), raw.len)
+            })),
+            PhysicalType::I64 => Ok(PrimitiveValues::I64(unsafe {
+                raw_typed(raw.data.cast(), raw.len)
+            })),
+            PhysicalType::F32 => Ok(PrimitiveValues::F32(unsafe {
+                raw_typed(raw.data.cast(), raw.len)
+            })),
+            PhysicalType::F64 => Ok(PrimitiveValues::F64(unsafe {
+                raw_typed(raw.data.cast(), raw.len)
+            })),
+            PhysicalType::Unknown(raw_type) => Err(OcbError::invalid_input(format!(
+                "unknown OCB primitive physical type {raw_type}"
+            ))),
+        }
+    }
+
+    unsafe fn raw_slice<'a, T>(ptr: *const T, len: usize) -> &'a [T] {
+        if ptr.is_null() || len == 0 {
+            &[]
+        } else {
+            unsafe { slice::from_raw_parts(ptr, len) }
+        }
+    }
+
+    unsafe fn raw_typed<T: Copy>(ptr: *const T, len: usize) -> Vec<T> {
+        unsafe { raw_slice(ptr, len) }.to_vec()
+    }
+
+    fn raw_string(ptr: *const c_char) -> String {
+        raw_optional_string(ptr).unwrap_or_default()
+    }
+
+    fn raw_optional_string(ptr: *const c_char) -> Option<String> {
+        if ptr.is_null() {
+            None
+        } else {
+            Some(
+                unsafe { CStr::from_ptr(ptr) }
+                    .to_string_lossy()
+                    .into_owned(),
+            )
+        }
+    }
+
+    unsafe fn raw_string_array(ptr: *mut *mut c_char, len: usize) -> Vec<String> {
+        unsafe { raw_slice(ptr.cast::<*mut c_char>(), len) }
+            .iter()
+            .map(|value| raw_string((*value).cast()))
+            .collect()
+    }
+
+    unsafe fn raw_byte_slices(ptr: *mut sys::ArcadiaTioOcbByteSlice, len: usize) -> Vec<Vec<u8>> {
+        unsafe { raw_slice(ptr, len) }
+            .iter()
+            .map(|value| unsafe { raw_bytes(value.data, value.len) })
+            .collect()
+    }
+
+    unsafe fn raw_bytes(ptr: *const u8, len: usize) -> Vec<u8> {
+        unsafe { raw_slice(ptr, len) }.to_vec()
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

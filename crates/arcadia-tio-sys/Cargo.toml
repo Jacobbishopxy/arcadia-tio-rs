@@ -13,5 +13,9 @@ build = "build.rs"
 [lib]
 path = "src/lib.rs"
 
+[features]
+default = []
+format-ocb = []
+
 [dependencies]
 

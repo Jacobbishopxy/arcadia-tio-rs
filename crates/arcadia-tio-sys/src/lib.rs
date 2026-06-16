@@ -6,6 +6,9 @@ use core::ffi::{c_char, c_double, c_float, c_int, c_void};
 
 /// Current C ABI version expected by this sys crate.
 pub const ARCADIA_TIO_ABI_VERSION: u32 = 1;
+/// Current OCB C ABI version expected by this sys crate.
+#[cfg(feature = "format-ocb")]
+pub const ARCADIA_TIO_OCB_ABI_VERSION: u32 = 1;
 
 /// V4 precise reason-code taxonomy string exposed by the C ABI.
 pub const ARCADIA_TIO_V4_PRECISE_REASON_CODE_TAXONOMY: &str = "v4.precise.v1";
@@ -18,8 +21,39 @@ pub struct ArcadiaTioHandle {
     _private: [u8; 0],
 }
 
+/// Opaque OCB file handle owned by the native library.
+#[cfg(feature = "format-ocb")]
+#[repr(C)]
+pub struct ArcadiaTioOcbFile {
+    _private: [u8; 0],
+}
+
 /// Thread-local C ABI error code value.
 pub type ArcadiaTioErrorCode = c_int;
+/// OCB structured error-kind value.
+#[cfg(feature = "format-ocb")]
+pub type ArcadiaTioOcbErrorKind = c_int;
+/// OCB structured failure-cause value.
+#[cfg(feature = "format-ocb")]
+pub type ArcadiaTioOcbFailureCause = c_int;
+/// OCB column physical type value.
+#[cfg(feature = "format-ocb")]
+pub type ArcadiaTioOcbPhysicalType = c_int;
+/// OCB column logical-kind value.
+#[cfg(feature = "format-ocb")]
+pub type ArcadiaTioOcbLogicalKind = c_int;
+/// OCB dictionary value-kind selector.
+#[cfg(feature = "format-ocb")]
+pub type ArcadiaTioOcbDictionaryValueKind = c_int;
+/// OCB ordering direction selector.
+#[cfg(feature = "format-ocb")]
+pub type ArcadiaTioOcbOrderingDirection = c_int;
+/// OCB null-order selector.
+#[cfg(feature = "format-ocb")]
+pub type ArcadiaTioOcbNullOrder = c_int;
+/// OCB projection-kind selector.
+#[cfg(feature = "format-ocb")]
+pub type ArcadiaTioOcbProjectionKind = c_int;
 /// Native payload dtype value.
 pub type ArcadiaTioDType = c_int;
 /// Compression mode value.
@@ -135,6 +169,71 @@ raw_constant!(ARCADIA_TIO_ERROR_INVALID_ARGUMENT: ArcadiaTioErrorCode = 1);
 raw_constant!(ARCADIA_TIO_ERROR_UNIMPLEMENTED: ArcadiaTioErrorCode = 2);
 raw_constant!(ARCADIA_TIO_ERROR_IO: ArcadiaTioErrorCode = 3);
 raw_constant!(ARCADIA_TIO_ERROR_FLATBUFFERS: ArcadiaTioErrorCode = 4);
+
+#[cfg(feature = "format-ocb")]
+raw_constant!(ARCADIA_TIO_OCB_ERROR_KIND_NONE: ArcadiaTioOcbErrorKind = 0);
+#[cfg(feature = "format-ocb")]
+raw_constant!(ARCADIA_TIO_OCB_ERROR_KIND_INVALID_INPUT: ArcadiaTioOcbErrorKind = 1);
+#[cfg(feature = "format-ocb")]
+raw_constant!(ARCADIA_TIO_OCB_ERROR_KIND_UNSUPPORTED_FORMAT: ArcadiaTioOcbErrorKind = 2);
+#[cfg(feature = "format-ocb")]
+raw_constant!(ARCADIA_TIO_OCB_ERROR_KIND_CORRUPT_FILE: ArcadiaTioOcbErrorKind = 3);
+#[cfg(feature = "format-ocb")]
+raw_constant!(ARCADIA_TIO_OCB_ERROR_KIND_LOCK_UNAVAILABLE: ArcadiaTioOcbErrorKind = 4);
+#[cfg(feature = "format-ocb")]
+raw_constant!(ARCADIA_TIO_OCB_ERROR_KIND_IO: ArcadiaTioOcbErrorKind = 5);
+#[cfg(feature = "format-ocb")]
+raw_constant!(ARCADIA_TIO_OCB_FAILURE_CAUSE_NONE: ArcadiaTioOcbFailureCause = 0);
+#[cfg(feature = "format-ocb")]
+raw_constant!(ARCADIA_TIO_OCB_FAILURE_CAUSE_INVALID_INPUT: ArcadiaTioOcbFailureCause = 1);
+#[cfg(feature = "format-ocb")]
+raw_constant!(ARCADIA_TIO_OCB_FAILURE_CAUSE_UNSUPPORTED_FORMAT: ArcadiaTioOcbFailureCause = 2);
+#[cfg(feature = "format-ocb")]
+raw_constant!(ARCADIA_TIO_OCB_FAILURE_CAUSE_CORRUPT_FILE: ArcadiaTioOcbFailureCause = 3);
+#[cfg(feature = "format-ocb")]
+raw_constant!(ARCADIA_TIO_OCB_FAILURE_CAUSE_LOCK_UNAVAILABLE: ArcadiaTioOcbFailureCause = 4);
+#[cfg(feature = "format-ocb")]
+raw_constant!(ARCADIA_TIO_OCB_PHYSICAL_TYPE_I32: ArcadiaTioOcbPhysicalType = 0);
+#[cfg(feature = "format-ocb")]
+raw_constant!(ARCADIA_TIO_OCB_PHYSICAL_TYPE_I64: ArcadiaTioOcbPhysicalType = 1);
+#[cfg(feature = "format-ocb")]
+raw_constant!(ARCADIA_TIO_OCB_PHYSICAL_TYPE_F32: ArcadiaTioOcbPhysicalType = 2);
+#[cfg(feature = "format-ocb")]
+raw_constant!(ARCADIA_TIO_OCB_PHYSICAL_TYPE_F64: ArcadiaTioOcbPhysicalType = 3);
+#[cfg(feature = "format-ocb")]
+raw_constant!(ARCADIA_TIO_OCB_LOGICAL_KIND_PLAIN: ArcadiaTioOcbLogicalKind = 0);
+#[cfg(feature = "format-ocb")]
+raw_constant!(ARCADIA_TIO_OCB_LOGICAL_KIND_TIMESTAMP_NANOS_LIKE: ArcadiaTioOcbLogicalKind = 1);
+#[cfg(feature = "format-ocb")]
+raw_constant!(ARCADIA_TIO_OCB_LOGICAL_KIND_SCALED_INTEGER: ArcadiaTioOcbLogicalKind = 2);
+#[cfg(feature = "format-ocb")]
+raw_constant!(ARCADIA_TIO_OCB_LOGICAL_KIND_DICTIONARY_CODE: ArcadiaTioOcbLogicalKind = 3);
+#[cfg(feature = "format-ocb")]
+raw_constant!(ARCADIA_TIO_OCB_LOGICAL_KIND_ENUM_CODE: ArcadiaTioOcbLogicalKind = 4);
+#[cfg(feature = "format-ocb")]
+raw_constant!(ARCADIA_TIO_OCB_LOGICAL_KIND_OPAQUE_KEY: ArcadiaTioOcbLogicalKind = 5);
+#[cfg(feature = "format-ocb")]
+raw_constant!(ARCADIA_TIO_OCB_DICTIONARY_VALUE_KIND_UTF8: ArcadiaTioOcbDictionaryValueKind = 0);
+#[cfg(feature = "format-ocb")]
+raw_constant!(ARCADIA_TIO_OCB_DICTIONARY_VALUE_KIND_BYTES: ArcadiaTioOcbDictionaryValueKind = 1);
+#[cfg(feature = "format-ocb")]
+raw_constant!(ARCADIA_TIO_OCB_DICTIONARY_VALUE_KIND_FIXED_BYTES: ArcadiaTioOcbDictionaryValueKind = 2);
+#[cfg(feature = "format-ocb")]
+raw_constant!(ARCADIA_TIO_OCB_DICTIONARY_VALUE_KIND_ENUM_LABELS: ArcadiaTioOcbDictionaryValueKind = 3);
+#[cfg(feature = "format-ocb")]
+raw_constant!(ARCADIA_TIO_OCB_ORDERING_DIRECTION_ASCENDING: ArcadiaTioOcbOrderingDirection = 0);
+#[cfg(feature = "format-ocb")]
+raw_constant!(ARCADIA_TIO_OCB_ORDERING_DIRECTION_DESCENDING: ArcadiaTioOcbOrderingDirection = 1);
+#[cfg(feature = "format-ocb")]
+raw_constant!(ARCADIA_TIO_OCB_NULL_ORDER_NULLS_FIRST: ArcadiaTioOcbNullOrder = 0);
+#[cfg(feature = "format-ocb")]
+raw_constant!(ARCADIA_TIO_OCB_NULL_ORDER_NULLS_LAST: ArcadiaTioOcbNullOrder = 1);
+#[cfg(feature = "format-ocb")]
+raw_constant!(ARCADIA_TIO_OCB_NULL_ORDER_NO_NULLS: ArcadiaTioOcbNullOrder = 2);
+#[cfg(feature = "format-ocb")]
+raw_constant!(ARCADIA_TIO_OCB_PROJECTION_ALL: ArcadiaTioOcbProjectionKind = 0);
+#[cfg(feature = "format-ocb")]
+raw_constant!(ARCADIA_TIO_OCB_PROJECTION_NAMES: ArcadiaTioOcbProjectionKind = 1);
 
 raw_constant!(ARCADIA_TIO_DTYPE_F32: ArcadiaTioDType = 0);
 raw_constant!(ARCADIA_TIO_DTYPE_F64: ArcadiaTioDType = 1);
@@ -342,7 +441,543 @@ raw_constant!(ARCADIA_TIO_READ_INDEX_LOWERING_UNKNOWN: ArcadiaTioReadIndexLoweri
 raw_constant!(ARCADIA_TIO_READ_INDEX_LOWERING_SELECTOR_READ: ArcadiaTioReadIndexLoweringKind = 1);
 raw_constant!(ARCADIA_TIO_READ_INDEX_LOWERING_SELECTOR_READ_WITH_SHAPE_POSTPROCESS: ArcadiaTioReadIndexLoweringKind = 2);
 
-/// Write-time compression config passed by pointer.
+/// OCB column descriptor returned in metadata.
+#[cfg(feature = "format-ocb")]
+#[repr(C)]
+#[derive(Debug, Copy, Clone)]
+pub struct ArcadiaTioOcbColumnDescriptor {
+    /// Struct version; set to [`ARCADIA_TIO_OCB_ABI_VERSION`].
+    pub version: u32,
+    /// Size of this struct in bytes.
+    pub struct_size: usize,
+    /// File-local column id.
+    pub id: u32,
+    /// Native-owned UTF-8 column name.
+    pub name: *mut c_char,
+    /// Physical primitive type.
+    pub physical_type: ArcadiaTioOcbPhysicalType,
+    /// Logical column kind.
+    pub logical_kind: ArcadiaTioOcbLogicalKind,
+    /// Nonzero when dictionary_id is meaningful.
+    pub has_dictionary_id: u8,
+    /// Dictionary id for dictionary-coded columns.
+    pub dictionary_id: u32,
+    /// Decimal scale for scaled-integer logical columns.
+    pub scale: i32,
+    /// Nonzero when values may be null.
+    pub nullable: u8,
+    /// Reserved words; callers set to zero.
+    pub reserved: [u64; 3],
+}
+
+/// OCB dictionary descriptor returned in metadata.
+#[cfg(feature = "format-ocb")]
+#[repr(C)]
+#[derive(Debug, Copy, Clone)]
+pub struct ArcadiaTioOcbDictionaryDescriptor {
+    /// Struct version; set to [`ARCADIA_TIO_OCB_ABI_VERSION`].
+    pub version: u32,
+    /// Size of this struct in bytes.
+    pub struct_size: usize,
+    /// File-local dictionary id.
+    pub dictionary_id: u32,
+    /// Native-owned UTF-8 dictionary name.
+    pub name: *mut c_char,
+    /// Physical code type used by dictionary-coded columns.
+    pub code_physical_type: ArcadiaTioOcbPhysicalType,
+    /// Decoded value kind.
+    pub value_kind: ArcadiaTioOcbDictionaryValueKind,
+    /// Number of entries in the dictionary.
+    pub entry_count: u32,
+    /// Reserved words; callers set to zero.
+    pub reserved: [u64; 3],
+}
+
+/// OCB ordering-key descriptor returned in metadata.
+#[cfg(feature = "format-ocb")]
+#[repr(C)]
+#[derive(Debug, Copy, Clone)]
+pub struct ArcadiaTioOcbOrderingKey {
+    /// Struct version; set to [`ARCADIA_TIO_OCB_ABI_VERSION`].
+    pub version: u32,
+    /// Size of this struct in bytes.
+    pub struct_size: usize,
+    /// File-local column id.
+    pub column_id: u32,
+    /// Native-owned UTF-8 column name snapshot.
+    pub column_name: *mut c_char,
+    /// Sort direction.
+    pub direction: ArcadiaTioOcbOrderingDirection,
+    /// Null-order declaration.
+    pub null_order: ArcadiaTioOcbNullOrder,
+    /// Reserved words; callers set to zero.
+    pub reserved: [u64; 3],
+}
+
+/// Owned OCB metadata result; free with [`arcadia_tio_ocb_metadata_free`].
+#[cfg(feature = "format-ocb")]
+#[repr(C)]
+#[derive(Debug, Copy, Clone)]
+pub struct ArcadiaTioOcbMetadata {
+    /// Struct version; set to [`ARCADIA_TIO_OCB_ABI_VERSION`].
+    pub version: u32,
+    /// Size of this struct in bytes.
+    pub struct_size: usize,
+    /// Native-owned format name, currently `OCB`.
+    pub format_name: *mut c_char,
+    /// Nonzero when the selected file is appendable.
+    pub appendable: u8,
+    /// Selected root generation.
+    pub root_generation: u64,
+    /// Nonzero when previous_root_generation is meaningful.
+    pub has_previous_root_generation: u8,
+    /// Previous root generation when available.
+    pub previous_root_generation: u64,
+    /// Rows visible in the selected snapshot.
+    pub row_count: u64,
+    /// Row groups visible in the selected snapshot.
+    pub row_group_count: u32,
+    /// Column chunks visible in the selected snapshot.
+    pub column_chunk_count: u32,
+    /// Native-owned column descriptor array.
+    pub columns: *mut ArcadiaTioOcbColumnDescriptor,
+    /// Number of column descriptors.
+    pub columns_len: usize,
+    /// Native-owned dictionary descriptor array.
+    pub dictionaries: *mut ArcadiaTioOcbDictionaryDescriptor,
+    /// Number of dictionary descriptors.
+    pub dictionaries_len: usize,
+    /// Native-owned ordering-key descriptor array.
+    pub ordering_keys: *mut ArcadiaTioOcbOrderingKey,
+    /// Number of ordering keys.
+    pub ordering_keys_len: usize,
+    /// Reserved words; callers set to zero.
+    pub reserved: [u64; 4],
+}
+
+/// OCB byte slice in owned dictionary/read results.
+#[cfg(feature = "format-ocb")]
+#[repr(C)]
+#[derive(Debug, Copy, Clone)]
+pub struct ArcadiaTioOcbByteSlice {
+    /// Borrowed byte pointer tied to the owning result object.
+    pub data: *const u8,
+    /// Number of bytes.
+    pub len: usize,
+}
+
+/// Owned OCB dictionary values result; free with [`arcadia_tio_ocb_dictionary_values_free`].
+#[cfg(feature = "format-ocb")]
+#[repr(C)]
+#[derive(Debug, Copy, Clone)]
+pub struct ArcadiaTioOcbDictionaryValues {
+    /// Struct version; set to [`ARCADIA_TIO_OCB_ABI_VERSION`].
+    pub version: u32,
+    /// Size of this struct in bytes.
+    pub struct_size: usize,
+    /// File-local dictionary id.
+    pub dictionary_id: u32,
+    /// Native-owned UTF-8 dictionary name.
+    pub name: *mut c_char,
+    /// Decoded value kind.
+    pub value_kind: ArcadiaTioOcbDictionaryValueKind,
+    /// Fixed byte width when value_kind is fixed bytes.
+    pub fixed_width: u32,
+    /// Native-owned UTF-8 string array for string-like dictionaries.
+    pub string_values: *mut *mut c_char,
+    /// Number of string values.
+    pub string_values_len: usize,
+    /// Native-owned byte-slice array for bytes-like dictionaries.
+    pub byte_values: *mut ArcadiaTioOcbByteSlice,
+    /// Number of byte values.
+    pub byte_values_len: usize,
+    /// Reserved words; callers set to zero.
+    pub reserved: [u64; 4],
+}
+
+/// Borrowed OCB primitive values input or owned primitive values output.
+#[cfg(feature = "format-ocb")]
+#[repr(C)]
+#[derive(Debug, Copy, Clone)]
+pub struct ArcadiaTioOcbPrimitiveValues {
+    /// Struct version; set to [`ARCADIA_TIO_OCB_ABI_VERSION`].
+    pub version: u32,
+    /// Size of this struct in bytes.
+    pub struct_size: usize,
+    /// Physical primitive type.
+    pub physical_type: ArcadiaTioOcbPhysicalType,
+    /// Primitive buffer pointer.
+    pub data: *const c_void,
+    /// Number of primitive values.
+    pub len: usize,
+    /// Reserved words; callers set to zero.
+    pub reserved: [u64; 3],
+}
+
+/// OCB validity bitmap; least-significant-bit first, where 1 means valid.
+#[cfg(feature = "format-ocb")]
+#[repr(C)]
+#[derive(Debug, Copy, Clone)]
+pub struct ArcadiaTioOcbValidityBitmap {
+    /// Struct version; set to [`ARCADIA_TIO_OCB_ABI_VERSION`].
+    pub version: u32,
+    /// Size of this struct in bytes.
+    pub struct_size: usize,
+    /// Bitmap byte pointer.
+    pub data: *const u8,
+    /// Number of bitmap bytes.
+    pub len: usize,
+    /// Number of meaningful bits/rows.
+    pub row_count: u64,
+    /// Reserved words; callers set to zero.
+    pub reserved: [u64; 3],
+}
+
+/// OCB write-column schema input.
+#[cfg(feature = "format-ocb")]
+#[repr(C)]
+#[derive(Debug, Copy, Clone)]
+pub struct ArcadiaTioOcbWriteColumn {
+    /// Struct version; set to [`ARCADIA_TIO_OCB_ABI_VERSION`].
+    pub version: u32,
+    /// Size of this struct in bytes.
+    pub struct_size: usize,
+    /// Borrowed UTF-8 column name.
+    pub name: *const c_char,
+    /// Physical primitive type.
+    pub physical_type: ArcadiaTioOcbPhysicalType,
+    /// Logical column kind.
+    pub logical_kind: ArcadiaTioOcbLogicalKind,
+    /// Nonzero when dictionary_id is meaningful.
+    pub has_dictionary_id: u8,
+    /// Dictionary id for dictionary-coded columns.
+    pub dictionary_id: u32,
+    /// Decimal scale for scaled-integer logical columns.
+    pub scale: i32,
+    /// Nonzero when values may be null.
+    pub nullable: u8,
+    /// Reserved words; callers set to zero.
+    pub reserved: [u64; 3],
+}
+
+/// OCB write-dictionary entry input.
+#[cfg(feature = "format-ocb")]
+#[repr(C)]
+#[derive(Debug, Copy, Clone)]
+pub struct ArcadiaTioOcbDictionaryEntry {
+    /// Struct version; set to [`ARCADIA_TIO_OCB_ABI_VERSION`].
+    pub version: u32,
+    /// Size of this struct in bytes.
+    pub struct_size: usize,
+    /// Borrowed bytes for one decoded dictionary value.
+    pub data: *const u8,
+    /// Number of bytes.
+    pub len: usize,
+    /// Reserved words; callers set to zero.
+    pub reserved: [u64; 3],
+}
+
+/// OCB write-dictionary input.
+#[cfg(feature = "format-ocb")]
+#[repr(C)]
+#[derive(Debug, Copy, Clone)]
+pub struct ArcadiaTioOcbWriteDictionary {
+    /// Struct version; set to [`ARCADIA_TIO_OCB_ABI_VERSION`].
+    pub version: u32,
+    /// Size of this struct in bytes.
+    pub struct_size: usize,
+    /// File-local dictionary id.
+    pub dictionary_id: u32,
+    /// Borrowed UTF-8 dictionary name.
+    pub name: *const c_char,
+    /// Physical code type.
+    pub code_physical_type: ArcadiaTioOcbPhysicalType,
+    /// Decoded value kind.
+    pub value_kind: ArcadiaTioOcbDictionaryValueKind,
+    /// Fixed byte width when value_kind is fixed bytes.
+    pub fixed_width: u32,
+    /// Borrowed dictionary-entry array.
+    pub entries: *const ArcadiaTioOcbDictionaryEntry,
+    /// Number of entries.
+    pub entries_len: usize,
+    /// Reserved words; callers set to zero.
+    pub reserved: [u64; 3],
+}
+
+/// OCB write row-group column chunk input.
+#[cfg(feature = "format-ocb")]
+#[cfg(feature = "format-ocb")]
+#[repr(C)]
+#[derive(Debug, Copy, Clone)]
+pub struct ArcadiaTioOcbWriteColumnChunk {
+    /// Struct version; set to [`ARCADIA_TIO_OCB_ABI_VERSION`].
+    pub version: u32,
+    /// Size of this struct in bytes.
+    pub struct_size: usize,
+    /// File-local column id.
+    pub column_id: u32,
+    /// Borrowed primitive values.
+    pub values: ArcadiaTioOcbPrimitiveValues,
+    /// Optional borrowed validity bitmap; NULL means all rows valid.
+    pub validity: *const ArcadiaTioOcbValidityBitmap,
+    /// Reserved words; callers set to zero.
+    pub reserved: [u64; 3],
+}
+
+/// OCB write row-group input.
+#[cfg(feature = "format-ocb")]
+#[repr(C)]
+#[derive(Debug, Copy, Clone)]
+pub struct ArcadiaTioOcbWriteRowGroup {
+    /// Struct version; set to [`ARCADIA_TIO_OCB_ABI_VERSION`].
+    pub version: u32,
+    /// Size of this struct in bytes.
+    pub struct_size: usize,
+    /// Borrowed column chunk array.
+    pub columns: *const ArcadiaTioOcbWriteColumnChunk,
+    /// Number of column chunks.
+    pub columns_len: usize,
+    /// Reserved words; callers set to zero.
+    pub reserved: [u64; 3],
+}
+
+/// OCB write ordering-key input.
+#[cfg(feature = "format-ocb")]
+#[repr(C)]
+#[derive(Debug, Copy, Clone)]
+pub struct ArcadiaTioOcbWriteOrderingKey {
+    /// Struct version; set to [`ARCADIA_TIO_OCB_ABI_VERSION`].
+    pub version: u32,
+    /// Size of this struct in bytes.
+    pub struct_size: usize,
+    /// File-local column id.
+    pub column_id: u32,
+    /// Sort direction.
+    pub direction: ArcadiaTioOcbOrderingDirection,
+    /// Null-order declaration.
+    pub null_order: ArcadiaTioOcbNullOrder,
+    /// Reserved words; callers set to zero.
+    pub reserved: [u64; 3],
+}
+
+/// OCB write spec input for create/append.
+#[cfg(feature = "format-ocb")]
+#[repr(C)]
+#[derive(Debug, Copy, Clone)]
+pub struct ArcadiaTioOcbWriteSpec {
+    /// Struct version; set to [`ARCADIA_TIO_OCB_ABI_VERSION`].
+    pub version: u32,
+    /// Size of this struct in bytes.
+    pub struct_size: usize,
+    /// Borrowed column schema array.
+    pub columns: *const ArcadiaTioOcbWriteColumn,
+    /// Number of columns.
+    pub columns_len: usize,
+    /// Borrowed dictionary declarations.
+    pub dictionaries: *const ArcadiaTioOcbWriteDictionary,
+    /// Number of dictionaries.
+    pub dictionaries_len: usize,
+    /// Borrowed row-group array.
+    pub row_groups: *const ArcadiaTioOcbWriteRowGroup,
+    /// Number of row groups.
+    pub row_groups_len: usize,
+    /// Borrowed ordering-key array.
+    pub ordering_keys: *const ArcadiaTioOcbWriteOrderingKey,
+    /// Number of ordering keys.
+    pub ordering_keys_len: usize,
+    /// Reserved words; callers set to zero.
+    pub reserved: [u64; 4],
+}
+
+/// OCB cleanup result.
+#[cfg(feature = "format-ocb")]
+#[repr(C)]
+#[derive(Debug, Copy, Clone)]
+pub struct ArcadiaTioOcbCleanupResult {
+    /// Struct version; set to [`ARCADIA_TIO_OCB_ABI_VERSION`].
+    pub version: u32,
+    /// Size of this struct in bytes.
+    pub struct_size: usize,
+    /// Nonzero when orphan tail bytes were truncated.
+    pub truncated: u8,
+    /// Reserved words; callers set to zero.
+    pub reserved: [u64; 3],
+}
+
+/// OCB predicate bound value.
+#[cfg(feature = "format-ocb")]
+#[repr(C)]
+#[derive(Debug, Copy, Clone)]
+pub struct ArcadiaTioOcbPredicateValue {
+    /// Struct version; set to [`ARCADIA_TIO_OCB_ABI_VERSION`].
+    pub version: u32,
+    /// Size of this struct in bytes.
+    pub struct_size: usize,
+    /// Physical primitive type.
+    pub physical_type: ArcadiaTioOcbPhysicalType,
+    /// i32 predicate value.
+    pub i32_value: i32,
+    /// i64 predicate value.
+    pub i64_value: i64,
+    /// f32 predicate value.
+    pub f32_value: c_float,
+    /// f64 predicate value.
+    pub f64_value: c_double,
+    /// Reserved words; callers set to zero.
+    pub reserved: [u64; 3],
+}
+
+/// OCB row-group predicate input.
+#[cfg(feature = "format-ocb")]
+#[repr(C)]
+#[derive(Debug, Copy, Clone)]
+pub struct ArcadiaTioOcbRowGroupPredicate {
+    /// Struct version; set to [`ARCADIA_TIO_OCB_ABI_VERSION`].
+    pub version: u32,
+    /// Size of this struct in bytes.
+    pub struct_size: usize,
+    /// Borrowed UTF-8 column name.
+    pub column: *const c_char,
+    /// Nonzero when lower is meaningful.
+    pub has_lower: u8,
+    /// Inclusive lower bound.
+    pub lower: ArcadiaTioOcbPredicateValue,
+    /// Nonzero when upper is meaningful.
+    pub has_upper: u8,
+    /// Inclusive upper bound.
+    pub upper: ArcadiaTioOcbPredicateValue,
+    /// Reserved words; callers set to zero.
+    pub reserved: [u64; 3],
+}
+
+/// OCB read request input.
+#[cfg(feature = "format-ocb")]
+#[repr(C)]
+#[derive(Debug, Copy, Clone)]
+pub struct ArcadiaTioOcbReadRequest {
+    /// Struct version; set to [`ARCADIA_TIO_OCB_ABI_VERSION`].
+    pub version: u32,
+    /// Size of this struct in bytes.
+    pub struct_size: usize,
+    /// Projection kind.
+    pub projection_kind: ArcadiaTioOcbProjectionKind,
+    /// Borrowed UTF-8 column name array for name projections.
+    pub column_names: *const *const c_char,
+    /// Number of projected column names.
+    pub column_names_len: usize,
+    /// Borrowed predicate array.
+    pub predicates: *const ArcadiaTioOcbRowGroupPredicate,
+    /// Number of predicates.
+    pub predicates_len: usize,
+    /// Requested worker thread count.
+    pub max_threads: usize,
+    /// Nonzero to validate checksums.
+    pub validate_checksums: u8,
+    /// Reserved flag for dictionary decode behavior.
+    pub decode_dictionaries: u8,
+    /// Reserved words; callers set to zero.
+    pub reserved: [u64; 4],
+}
+
+/// OCB read execution report.
+#[cfg(feature = "format-ocb")]
+#[repr(C)]
+#[derive(Debug, Copy, Clone)]
+pub struct ArcadiaTioOcbReadReport {
+    /// Struct version; set to [`ARCADIA_TIO_OCB_ABI_VERSION`].
+    pub version: u32,
+    /// Size of this struct in bytes.
+    pub struct_size: usize,
+    /// Requested worker thread count.
+    pub requested_threads: usize,
+    /// Effective worker thread count.
+    pub effective_threads: usize,
+    /// Selected row groups.
+    pub selected_row_groups: usize,
+    /// Pruned row groups.
+    pub pruned_row_groups: usize,
+    /// Selected column chunks.
+    pub selected_column_chunks: usize,
+    /// Native-owned fallback reason string or NULL.
+    pub fallback_reason: *mut c_char,
+    /// Reserved words; callers set to zero.
+    pub reserved: [u64; 4],
+}
+
+/// OCB read-result column array.
+#[cfg(feature = "format-ocb")]
+#[repr(C)]
+#[derive(Debug, Copy, Clone)]
+pub struct ArcadiaTioOcbColumnArray {
+    /// Struct version; set to [`ARCADIA_TIO_OCB_ABI_VERSION`].
+    pub version: u32,
+    /// Size of this struct in bytes.
+    pub struct_size: usize,
+    /// File-local column id.
+    pub column_id: u32,
+    /// Native-owned UTF-8 column name.
+    pub name: *mut c_char,
+    /// Physical primitive type.
+    pub physical_type: ArcadiaTioOcbPhysicalType,
+    /// Logical column kind.
+    pub logical_kind: ArcadiaTioOcbLogicalKind,
+    /// Nonzero when dictionary_id is meaningful.
+    pub has_dictionary_id: u8,
+    /// Dictionary id for dictionary-coded columns.
+    pub dictionary_id: u32,
+    /// Owned primitive values tied to the read outcome.
+    pub values: ArcadiaTioOcbPrimitiveValues,
+    /// Nonzero when validity is meaningful.
+    pub has_validity: u8,
+    /// Owned validity bitmap tied to the read outcome.
+    pub validity: ArcadiaTioOcbValidityBitmap,
+    /// Reserved words; callers set to zero.
+    pub reserved: [u64; 4],
+}
+
+/// OCB read-result row group batch.
+#[cfg(feature = "format-ocb")]
+#[repr(C)]
+#[derive(Debug, Copy, Clone)]
+pub struct ArcadiaTioOcbColumnBatch {
+    /// Struct version; set to [`ARCADIA_TIO_OCB_ABI_VERSION`].
+    pub version: u32,
+    /// Size of this struct in bytes.
+    pub struct_size: usize,
+    /// File-local row group id.
+    pub row_group_id: u32,
+    /// Base row offset.
+    pub base_row: u64,
+    /// Number of rows.
+    pub row_count: u64,
+    /// Native-owned column array.
+    pub columns: *mut ArcadiaTioOcbColumnArray,
+    /// Number of columns.
+    pub columns_len: usize,
+    /// Reserved words; callers set to zero.
+    pub reserved: [u64; 4],
+}
+
+/// Owned OCB read outcome; free with [`arcadia_tio_ocb_read_outcome_free`].
+#[cfg(feature = "format-ocb")]
+#[repr(C)]
+#[derive(Debug, Copy, Clone)]
+pub struct ArcadiaTioOcbReadOutcome {
+    /// Struct version; set to [`ARCADIA_TIO_OCB_ABI_VERSION`].
+    pub version: u32,
+    /// Size of this struct in bytes.
+    pub struct_size: usize,
+    /// Native-owned batch array.
+    pub batches: *mut ArcadiaTioOcbColumnBatch,
+    /// Number of batches.
+    pub batches_len: usize,
+    /// Read execution report.
+    pub report: ArcadiaTioOcbReadReport,
+    /// Reserved words; callers set to zero.
+    pub reserved: [u64; 4],
+}
+
+/// Write-time compression configuration.
 #[repr(C)]
 #[derive(Debug, Copy, Clone)]
 pub struct ArcadiaTioCompressionConfig {
@@ -1982,6 +2617,108 @@ unsafe extern "C" {
     pub fn arcadia_tio_last_error_code() -> ArcadiaTioErrorCode;
     /// Returns the native library ABI version.
     pub fn arcadia_tio_abi_version() -> u32;
+
+    /// Returns machine-readable OCB error kind for the current thread.
+    #[cfg(feature = "format-ocb")]
+    pub fn arcadia_tio_ocb_last_error_kind() -> ArcadiaTioOcbErrorKind;
+    /// Returns machine-readable OCB failure cause for the current thread.
+    #[cfg(feature = "format-ocb")]
+    pub fn arcadia_tio_ocb_last_error_cause() -> ArcadiaTioOcbFailureCause;
+    /// Opens an appendable OCB file and binds the handle to the selected committed snapshot.
+    #[cfg(feature = "format-ocb")]
+    pub fn arcadia_tio_ocb_open(path: *const c_char) -> *mut ArcadiaTioOcbFile;
+    /// Closes an OCB handle.
+    #[cfg(feature = "format-ocb")]
+    pub fn arcadia_tio_ocb_close(file: *mut ArcadiaTioOcbFile);
+    /// Reads selected-snapshot OCB metadata.
+    #[cfg(feature = "format-ocb")]
+    pub fn arcadia_tio_ocb_metadata(
+        file: *mut ArcadiaTioOcbFile,
+        out_metadata: *mut ArcadiaTioOcbMetadata,
+    ) -> ArcadiaTioErrorCode;
+    /// Frees owned fields inside an OCB metadata result.
+    #[cfg(feature = "format-ocb")]
+    pub fn arcadia_tio_ocb_metadata_free(metadata: *mut ArcadiaTioOcbMetadata);
+    /// Decodes one OCB dictionary on the explicit cold path.
+    #[cfg(feature = "format-ocb")]
+    pub fn arcadia_tio_ocb_dictionary_values(
+        file: *mut ArcadiaTioOcbFile,
+        dictionary_id: u32,
+        out_values: *mut ArcadiaTioOcbDictionaryValues,
+    ) -> ArcadiaTioErrorCode;
+    /// Frees owned fields inside an OCB dictionary-values result.
+    #[cfg(feature = "format-ocb")]
+    pub fn arcadia_tio_ocb_dictionary_values_free(values: *mut ArcadiaTioOcbDictionaryValues);
+    /// Reads projected/pruned OCB batches from the selected snapshot.
+    #[cfg(feature = "format-ocb")]
+    pub fn arcadia_tio_ocb_read_batches(
+        file: *mut ArcadiaTioOcbFile,
+        request: *const ArcadiaTioOcbReadRequest,
+        out_outcome: *mut ArcadiaTioOcbReadOutcome,
+    ) -> ArcadiaTioErrorCode;
+    /// Frees owned fields inside an OCB read outcome.
+    #[cfg(feature = "format-ocb")]
+    pub fn arcadia_tio_ocb_read_outcome_free(outcome: *mut ArcadiaTioOcbReadOutcome);
+    /// Initializes OCB primitive values.
+    #[cfg(feature = "format-ocb")]
+    pub fn arcadia_tio_ocb_primitive_values_init(values: *mut ArcadiaTioOcbPrimitiveValues);
+    /// Initializes an OCB validity bitmap.
+    #[cfg(feature = "format-ocb")]
+    pub fn arcadia_tio_ocb_validity_bitmap_init(bitmap: *mut ArcadiaTioOcbValidityBitmap);
+    /// Initializes an OCB predicate value.
+    #[cfg(feature = "format-ocb")]
+    pub fn arcadia_tio_ocb_predicate_value_init(value: *mut ArcadiaTioOcbPredicateValue);
+    /// Initializes an OCB row-group predicate.
+    #[cfg(feature = "format-ocb")]
+    pub fn arcadia_tio_ocb_row_group_predicate_init(predicate: *mut ArcadiaTioOcbRowGroupPredicate);
+    /// Initializes an OCB read request.
+    #[cfg(feature = "format-ocb")]
+    pub fn arcadia_tio_ocb_read_request_init(request: *mut ArcadiaTioOcbReadRequest);
+    /// Initializes an OCB read outcome.
+    #[cfg(feature = "format-ocb")]
+    pub fn arcadia_tio_ocb_read_outcome_init(outcome: *mut ArcadiaTioOcbReadOutcome);
+    /// Initializes an OCB write column.
+    #[cfg(feature = "format-ocb")]
+    pub fn arcadia_tio_ocb_write_column_init(column: *mut ArcadiaTioOcbWriteColumn);
+    /// Initializes an OCB dictionary entry.
+    #[cfg(feature = "format-ocb")]
+    pub fn arcadia_tio_ocb_dictionary_entry_init(entry: *mut ArcadiaTioOcbDictionaryEntry);
+    /// Initializes an OCB write dictionary.
+    #[cfg(feature = "format-ocb")]
+    pub fn arcadia_tio_ocb_write_dictionary_init(dictionary: *mut ArcadiaTioOcbWriteDictionary);
+    /// Initializes an OCB write column chunk.
+    #[cfg(feature = "format-ocb")]
+    pub fn arcadia_tio_ocb_write_column_chunk_init(chunk: *mut ArcadiaTioOcbWriteColumnChunk);
+    /// Initializes an OCB write row group.
+    #[cfg(feature = "format-ocb")]
+    pub fn arcadia_tio_ocb_write_row_group_init(row_group: *mut ArcadiaTioOcbWriteRowGroup);
+    /// Initializes an OCB write ordering key.
+    #[cfg(feature = "format-ocb")]
+    pub fn arcadia_tio_ocb_write_ordering_key_init(key: *mut ArcadiaTioOcbWriteOrderingKey);
+    /// Initializes an OCB write spec.
+    #[cfg(feature = "format-ocb")]
+    pub fn arcadia_tio_ocb_write_spec_init(spec: *mut ArcadiaTioOcbWriteSpec);
+    /// Initializes an OCB cleanup result.
+    #[cfg(feature = "format-ocb")]
+    pub fn arcadia_tio_ocb_cleanup_result_init(result: *mut ArcadiaTioOcbCleanupResult);
+    /// Creates an appendable OCB file.
+    #[cfg(feature = "format-ocb")]
+    pub fn arcadia_tio_ocb_create(
+        path: *const c_char,
+        spec: *const ArcadiaTioOcbWriteSpec,
+    ) -> ArcadiaTioErrorCode;
+    /// Appends one sorted suffix commit to an existing appendable OCB file.
+    #[cfg(feature = "format-ocb")]
+    pub fn arcadia_tio_ocb_append(
+        path: *const c_char,
+        spec: *const ArcadiaTioOcbWriteSpec,
+    ) -> ArcadiaTioErrorCode;
+    /// Truncates orphan tail bytes after the latest valid OCB root.
+    #[cfg(feature = "format-ocb")]
+    pub fn arcadia_tio_ocb_cleanup_orphan_tail(
+        path: *const c_char,
+        out_result: *mut ArcadiaTioOcbCleanupResult,
+    ) -> ArcadiaTioErrorCode;
 
     /// Sets write-time compression for future appends.
     pub fn arcadia_tio_set_compression_config(

@@ -38,8 +38,23 @@ surfaces only: they are not benchmark evidence and do not create performance,
 phase-percentage, zero-copy, storage, cache, layout, external-format, or
 release-readiness claims.
 
-Append, sparse-intent analysis, mutation, reform, compaction, diagnostics, and
-attributed read helpers borrow Rust slices/paths/trace-context strings only for
+The non-default `format-ocb` feature exposes the appendable OCB (Ordered Column
+Bundle) API in `arcadia_tio_rs::ocb`. Use `ocb::create` with a `WriteSpec` to
+publish the first root, `ocb::append` to add sorted suffix commits that repeat
+the frozen schema/dictionary/order declarations, `ColumnBundleFile::open` to
+bind a handle to one committed snapshot, and `metadata`, `dictionary_values`,
+and `read_batches` to copy native-owned OCB metadata/dictionaries/batches into
+Rust-owned structs before the C buffers are freed. `ocb::cleanup_orphan_tail`
+truncates orphan tail bytes after the latest valid root. `OcbError` preserves the
+ordinary C ABI error code plus OCB `ErrorKind` and optional `FailureCause` for
+machine-readable handling. Dictionary-coded reads return primitive codes; use
+`dictionary_values` for explicit decoded dictionary labels/bytes. OCB examples
+and tests generate tiny project-local `.ocb` files and require the same native
+`arcadia_tio_capi` library setup as the rest of the wrapper.
+
+Append, sparse-intent analysis, OCB create/append/read, mutation, reform,
+compaction, diagnostics, and attributed read helpers borrow Rust
+slices/paths/trace-context strings only for
 the duration of one bulk FFI call, validate dtype/rank/shape/data length before
 crossing the ABI where possible, and return or surface the native status. Read
 and report helpers copy

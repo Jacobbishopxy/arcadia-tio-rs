@@ -5,7 +5,11 @@ Unsafe Rust FFI declarations for the Arcadia TIO C ABI.
 This crate is intentionally low level: it exposes `repr(C)` types, constants,
 and `unsafe extern "C"` functions for a compiled `arcadia_tio_capi` native
 library. It does not depend on the private Rust implementation crates and does
-not provide safe high-level TensorFile behavior.
+not provide safe high-level TensorFile behavior. With the optional
+`format-ocb` feature enabled, the crate exposes raw appendable OCB C ABI
+constants, `repr(C)` metadata/read/write structs, opaque file handles,
+init/free helpers, and open/create/append/read/dictionary/cleanup declarations;
+callers must still uphold the C header ownership and lifetime contract.
 
 ## Link discovery
 
