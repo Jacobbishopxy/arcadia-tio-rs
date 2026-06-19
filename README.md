@@ -37,7 +37,7 @@ Before using the public Rust wrapper in an application build:
 
 1. Build or obtain the operator-approved `arcadia_tio_capi` native library for the target platform.
 2. Set `ARCADIA_TIO_CAPI_LIB_DIR` for link discovery and configure the platform runtime loader separately (`LD_LIBRARY_PATH`, `DYLD_LIBRARY_PATH`, rpath/install-name, `PATH`, or DLL colocation as appropriate).
-3. Run `cargo make ci` (format, all-feature check, and the default/no-default/optional/all-feature test matrix) plus `bash examples/tutorials/run/run_rust.sh` against that native library. A committed Cargo target runner automatically adds `ARCADIA_TIO_CAPI_LIB_DIR` or `native/x86_64-unknown-linux-gnu/lib` to the runtime loader path for common Linux/macOS `cargo run` and `cargo test` invocations.
+3. Run `cargo make ci` (format, all-feature check, OCB feature smoke, and the default/no-default/optional/all-feature test matrix) plus `bash examples/tutorials/run/run_rust.sh` against that native library. A committed Cargo target runner automatically adds `ARCADIA_TIO_CAPI_LIB_DIR` or `native/x86_64-unknown-linux-gnu/lib` to the runtime loader path for common Linux/macOS `cargo run` and `cargo test` invocations.
 4. Keep generated `.tio` files, native libraries, package archives, and local `native/` copies out of source control unless a separate release task approves them.
 5. Treat Coordinate external references as metadata/status summaries only; this wrapper does not add dereference, variable-length string, broad calendar/session, lookup-acceleration, or release/performance claims.
 6. Treat OCB as one appendable Ordered Column Bundle format; this wrapper does not expose public binary revision names, market-data/domain-specific APIs, or performance/storage/capacity/layout claims.
@@ -76,7 +76,9 @@ or file-to-file native conversion shortcuts. `format-ocb` exposes
 `arcadia_tio_rs::ocb` safe wrappers and matching raw sys declarations for OCB
 create/append/open/metadata/dictionary/read/cleanup. OCB read results own copied
 Rust values, dictionary-coded columns return primitive codes, and decoded
-dictionaries are explicit via `dictionary_values`.
+dictionaries are explicit via `dictionary_values`. Enabling `format-ocb` requires
+an OCB-capable native library with the `arcadia_tio_ocb_*` symbols exported;
+missing-symbol link errors mean the native library predates this OCB C ABI.
 
 The Rust wrapper links to the native C ABI library, so the consuming build must
 also provide `libarcadia_tio_capi`/`arcadia_tio_capi`. Point link discovery and
@@ -124,6 +126,7 @@ export LD_LIBRARY_PATH="$ARCADIA_TIO_CAPI_LIB_DIR${LD_LIBRARY_PATH:+:$LD_LIBRARY
 cargo make native-info
 cargo make ci
 cargo make test-matrix
+cargo make test-ocb
 bash examples/tutorials/run/run_rust.sh
 cargo run -p arcadia-tio-rs --example tutorial_01_quickstart_create_append_read
 cargo run -p arcadia-tio-rs --features arrow,ndarray,csv,parquet --example tutorial_09_tensor_ops_conversions
@@ -133,12 +136,15 @@ cargo make test-csv-parquet
 ```
 
 `cargo make native-info` validates that an expected local native library file is
-present and prints its resolved path, size, and SHA-256 checksum for local
-freshness checks.
+present and prints its resolved path, size, SHA-256 checksum, and whether the
+common OCB C ABI symbols are visible when `nm` is available. Set
+`ARCADIA_TIO_REQUIRE_OCB_SYMBOLS=1` with `cargo make native-info` when you want
+to fail fast on a stale native library before running `format-ocb` builds.
 
 The public cargo-make matrix runs `test-default`, explicit `test-no-default`,
-`test-arrow-ndarray`, `test-csv-parquet`, and `test-all-features`; OCB can also
-be exercised directly with `--features format-ocb`; `ci` runs
+`test-arrow-ndarray`, `test-csv-parquet`, explicit `test-ocb`, and
+`test-all-features`; OCB can also be exercised directly with
+`--features format-ocb`; `ci` runs
 `fmt`, all-feature `check`, and that matrix. The feature-gated tensor
 ops/conversions tutorial uses owned tensor ops, typed wrappers, owned Arrow
 RecordBatch/IPC, ndarray, and CSV/Parquet companion conversions with tiny

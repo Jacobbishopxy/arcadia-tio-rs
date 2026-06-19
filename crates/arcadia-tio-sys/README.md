@@ -9,7 +9,10 @@ not provide safe high-level TensorFile behavior. With the optional
 `format-ocb` feature enabled, the crate exposes raw appendable OCB C ABI
 constants, `repr(C)` metadata/read/write structs, opaque file handles,
 init/free helpers, and open/create/append/read/dictionary/cleanup declarations;
-callers must still uphold the C header ownership and lifetime contract.
+callers must still uphold the C header ownership and lifetime contract. The
+linked native library must export the matching `arcadia_tio_ocb_*` symbols when
+`format-ocb` is enabled; missing-symbol link errors mean the native library is
+older than the OCB C ABI surface.
 
 ## Link discovery
 

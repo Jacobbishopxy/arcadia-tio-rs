@@ -16377,10 +16377,7 @@ pub mod ocb {
         }
 
         /// Open an OCB file with explicit validation options.
-        pub fn open_with_options(
-            path: impl AsRef<Path>,
-            options: OpenOptions,
-        ) -> OcbResult<Self> {
+        pub fn open_with_options(path: impl AsRef<Path>, options: OpenOptions) -> OcbResult<Self> {
             open_with_options(path, options)
         }
 

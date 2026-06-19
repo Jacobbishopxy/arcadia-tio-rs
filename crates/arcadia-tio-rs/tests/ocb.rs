@@ -7,9 +7,9 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 
 use arcadia_tio_rs::ocb::{
     self, ColumnBundleFile, DecodedDictionaryValues, DictionaryValueKind, LogicalKind, NullOrder,
-    OpenOptions as OcbOpenOptions, OpenValidation, OrderingDirection, PhysicalType, PrimitiveValues, Projection,
-    ReadRequest, RowGroupPredicate,
-    WriteColumn, WriteColumnChunk, WriteDictionary, WriteOrderingKey, WriteRowGroup, WriteSpec,
+    OpenOptions as OcbOpenOptions, OpenValidation, OrderingDirection, PhysicalType,
+    PrimitiveValues, Projection, ReadRequest, RowGroupPredicate, WriteColumn, WriteColumnChunk,
+    WriteDictionary, WriteOrderingKey, WriteRowGroup, WriteSpec,
 };
 
 #[test]
@@ -46,7 +46,10 @@ fn ocb_safe_wrapper_create_append_read_and_cleanup_roundtrip() {
         },
     )
     .expect("open append snapshot with full validation");
-    assert_eq!(full_validated.metadata().expect("full metadata").row_count, 4);
+    assert_eq!(
+        full_validated.metadata().expect("full metadata").row_count,
+        4
+    );
     let meta = file.metadata().expect("append metadata");
     assert_eq!(meta.root_generation, 2);
     assert_eq!(meta.previous_root_generation, Some(1));

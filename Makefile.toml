@@ -21,6 +21,7 @@ echo "  cargo make test-default       # run safe wrapper tests with default feat
 echo "  cargo make test-no-default    # run safe wrapper tests with --no-default-features"
 echo "  cargo make test-arrow-ndarray # run safe wrapper tests with arrow,ndarray"
 echo "  cargo make test-csv-parquet   # run safe wrapper tests with csv,parquet"
+echo "  cargo make test-ocb           # run OCB feature tests and example"
 echo "  cargo make test-all-features  # run safe wrapper tests with --all-features"
 echo "  cargo make fmt                # verify rustfmt"
 echo "  cargo make ci                 # fmt + all-feature check + feature test matrix"
@@ -83,6 +84,33 @@ elif command -v shasum >/dev/null 2>&1; then
   echo "native_lib_sha256=$(shasum -a 256 "$FOUND_LIB" | awk '{ print $1 }')"
 else
   echo "native_lib_sha256=<sha256sum-or-shasum-not-found>"
+fi
+if [ "$LINK_KIND" = "dylib" ]; then
+  REQUIRED_OCB_SYMBOLS="arcadia_tio_ocb_open_with_options arcadia_tio_ocb_create arcadia_tio_ocb_append arcadia_tio_ocb_read_batches arcadia_tio_ocb_cleanup_orphan_tail"
+  if command -v nm >/dev/null 2>&1; then
+    if NM_OUTPUT="$(nm -D "$FOUND_LIB" 2>/dev/null)"; then
+      :
+    else
+      NM_OUTPUT="$(nm -g "$FOUND_LIB" 2>/dev/null || true)"
+    fi
+    MISSING_OCB_SYMBOLS=""
+    for symbol in $REQUIRED_OCB_SYMBOLS; do
+      if ! printf '%s\n' "$NM_OUTPUT" | grep -q "$symbol"; then
+        MISSING_OCB_SYMBOLS="$MISSING_OCB_SYMBOLS $symbol"
+      fi
+    done
+    if [ -z "$MISSING_OCB_SYMBOLS" ]; then
+      echo "ocb_symbols=present"
+    else
+      echo "ocb_symbols=missing:$MISSING_OCB_SYMBOLS"
+      if [ "${ARCADIA_TIO_REQUIRE_OCB_SYMBOLS:-0}" = "1" ]; then
+        echo "required OCB symbols missing from native library" >&2
+        exit 1
+      fi
+    fi
+  else
+    echo "ocb_symbols=unknown_nm_not_found"
+  fi
 fi
 if [ -d "$INCLUDE_DIR" ]; then
   echo "native_include_dir=$INCLUDE_DIR"
@@ -161,6 +189,17 @@ ROOT_DIR="${CARGO_MAKE_WORKING_DIRECTORY:-$(pwd)}"
 "$ROOT_DIR/examples/tutorials/run/with_native_lib.sh" cargo test -p arcadia-tio-rs --no-default-features --features csv,parquet
 '''
 
+[tasks.test-ocb]
+clear = true
+description = "Run arcadia-tio-rs OCB feature tests and example"
+script_runner = "@shell"
+script = '''
+set -e
+ROOT_DIR="${CARGO_MAKE_WORKING_DIRECTORY:-$(pwd)}"
+"$ROOT_DIR/examples/tutorials/run/with_native_lib.sh" cargo test -p arcadia-tio-rs --no-default-features --features format-ocb --test ocb
+"$ROOT_DIR/examples/tutorials/run/with_native_lib.sh" cargo run -p arcadia-tio-rs --no-default-features --features format-ocb --example ocb_roundtrip
+'''
+
 [tasks.test-all-features]
 clear = true
 description = "Run arcadia-tio-rs tests with --all-features"
@@ -173,7 +212,7 @@ ROOT_DIR="${CARGO_MAKE_WORKING_DIRECTORY:-$(pwd)}"
 
 [tasks.test-matrix]
 description = "Run public Rust wrapper feature matrix"
-dependencies = ["test-default", "test-no-default", "test-arrow-ndarray", "test-csv-parquet", "test-all-features"]
+dependencies = ["test-default", "test-no-default", "test-arrow-ndarray", "test-csv-parquet", "test-ocb", "test-all-features"]
 
 [tasks.fmt]
 clear = true

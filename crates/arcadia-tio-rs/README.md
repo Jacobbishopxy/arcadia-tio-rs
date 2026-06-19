@@ -51,8 +51,10 @@ truncates orphan tail bytes after the latest valid root. `OcbError` preserves th
 ordinary C ABI error code plus OCB `ErrorKind` and optional `FailureCause` for
 machine-readable handling. Dictionary-coded reads return primitive codes; use
 `dictionary_values` for explicit decoded dictionary labels/bytes. OCB examples
-and tests generate tiny project-local `.ocb` files and require the same native
-`arcadia_tio_capi` library setup as the rest of the wrapper.
+and tests generate tiny project-local `.ocb` files and require an OCB-capable
+`arcadia_tio_capi` native library with the `arcadia_tio_ocb_*` symbols exported;
+if link fails with missing `arcadia_tio_ocb_create`, `arcadia_tio_ocb_append`,
+or related symbols, refresh the native library before testing `format-ocb`.
 
 Append, sparse-intent analysis, OCB create/append/read, mutation, reform,
 compaction, diagnostics, and attributed read helpers borrow Rust
@@ -613,6 +615,7 @@ cargo make test-matrix
 cargo make test-no-default
 cargo make test-arrow-ndarray
 cargo make test-csv-parquet
+cargo make test-ocb
 cargo make test-all-features
 ```
 
