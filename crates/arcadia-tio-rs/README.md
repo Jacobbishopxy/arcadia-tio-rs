@@ -55,7 +55,10 @@ byte counters for planning, file reads, checksums, decompression, primitive
 conversion, native C conversion, and wrapper copying. `visit_batches` consumes
 row-group batches incrementally with `max_in_flight_row_groups` and callback
 cancellation while still copying each callback batch into owned Rust values.
-`clone_reader` cheaply
+`read_row_group_into` fills caller-owned typed buffers selected by generic
+column name or file-local column id for a single row-group id without constructing
+a wrapper-owned `ReadOutcome`; discard buffers on error because partial writes
+are unspecified. `clone_reader` cheaply
 creates another handle for the same immutable selected snapshot, and the safe
 wrapper marks `ColumnBundleFile` as `Send`/`Sync` for read-only multi-lane use.
 `ocb::cleanup_orphan_tail` truncates orphan tail bytes after the latest valid

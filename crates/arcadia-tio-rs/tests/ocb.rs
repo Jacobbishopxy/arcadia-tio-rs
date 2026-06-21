@@ -165,6 +165,53 @@ fn ocb_safe_wrapper_create_append_read_and_cleanup_roundtrip() {
     assert_eq!(cursor_report.batches_yielded, 1);
     assert!(cursor_report.cancelled);
 
+    let mut filled_sequence = [0i64; 2];
+    let mut filled_metric = [0.0f64; 2];
+    let fill_report = file
+        .read_row_group_into(
+            1,
+            &mut [
+                arcadia_tio_rs::ocb::ColumnFillBufferMut::I64ById {
+                    column_id: 0,
+                    values: &mut filled_sequence,
+                    validity: None,
+                    allow_nulls: false,
+                },
+                arcadia_tio_rs::ocb::ColumnFillBufferMut::F64 {
+                    name: "metric",
+                    values: &mut filled_metric,
+                    validity: None,
+                    allow_nulls: true,
+                },
+            ],
+            arcadia_tio_rs::ocb::ReadFillOptions::default(),
+        )
+        .expect("fill row group into caller buffers");
+    assert_eq!(filled_sequence, [12, 13]);
+    assert_eq!(filled_metric, [3.5, 4.5]);
+    assert_eq!(fill_report.row_group_id, 1);
+    assert_eq!(fill_report.base_row, 2);
+    assert_eq!(fill_report.row_count, 2);
+    assert_eq!(fill_report.columns.len(), 2);
+    assert_eq!(fill_report.columns[0].column_id, 0);
+    assert_eq!(fill_report.columns[0].rows_filled, 2);
+    assert!(!fill_report.columns[0].validity_filled);
+
+    let mut short_sequence = [0i64; 1];
+    let fill_err = file
+        .read_row_group_into(
+            1,
+            &mut [arcadia_tio_rs::ocb::ColumnFillBufferMut::I64 {
+                name: "sequence_key",
+                values: &mut short_sequence,
+                validity: None,
+                allow_nulls: false,
+            }],
+            arcadia_tio_rs::ocb::ReadFillOptions::default(),
+        )
+        .expect_err("short fill buffer rejects");
+    assert!(fill_err.message().contains("capacity"));
+
     let predicate_request = ReadRequest {
         projection: Projection::Names(vec!["category_code".to_string()]),
         predicates: vec![RowGroupPredicate {

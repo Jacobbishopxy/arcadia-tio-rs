@@ -16373,6 +16373,91 @@ pub mod ocb {
         pub cancelled: bool,
     }
 
+    /// Options for caller-owned single-row-group fill reads.
+    #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+    pub struct ReadFillOptions {
+        /// Validate checksums while reading. Current native OCB reads remain fail-closed.
+        pub validate_checksums: bool,
+    }
+
+    impl Default for ReadFillOptions {
+        fn default() -> Self {
+            Self {
+                validate_checksums: true,
+            }
+        }
+    }
+
+    /// Caller-owned typed storage for one OCB column fill.
+    #[derive(Debug)]
+    pub enum ColumnFillBufferMut<'a> {
+        I32 {
+            name: &'a str,
+            values: &'a mut [i32],
+            validity: Option<&'a mut [u8]>,
+            allow_nulls: bool,
+        },
+        I32ById {
+            column_id: u32,
+            values: &'a mut [i32],
+            validity: Option<&'a mut [u8]>,
+            allow_nulls: bool,
+        },
+        I64 {
+            name: &'a str,
+            values: &'a mut [i64],
+            validity: Option<&'a mut [u8]>,
+            allow_nulls: bool,
+        },
+        I64ById {
+            column_id: u32,
+            values: &'a mut [i64],
+            validity: Option<&'a mut [u8]>,
+            allow_nulls: bool,
+        },
+        F32 {
+            name: &'a str,
+            values: &'a mut [f32],
+            validity: Option<&'a mut [u8]>,
+            allow_nulls: bool,
+        },
+        F32ById {
+            column_id: u32,
+            values: &'a mut [f32],
+            validity: Option<&'a mut [u8]>,
+            allow_nulls: bool,
+        },
+        F64 {
+            name: &'a str,
+            values: &'a mut [f64],
+            validity: Option<&'a mut [u8]>,
+            allow_nulls: bool,
+        },
+        F64ById {
+            column_id: u32,
+            values: &'a mut [f64],
+            validity: Option<&'a mut [u8]>,
+            allow_nulls: bool,
+        },
+    }
+
+    /// Per-column caller-owned fill result.
+    #[derive(Debug, Clone, PartialEq, Eq)]
+    pub struct ColumnFillReport {
+        pub column_id: u32,
+        pub rows_filled: usize,
+        pub validity_filled: bool,
+    }
+
+    /// Caller-owned single-row-group fill report.
+    #[derive(Debug, Clone, PartialEq, Eq)]
+    pub struct ReadFillReport {
+        pub row_group_id: u32,
+        pub base_row: u64,
+        pub row_count: u64,
+        pub columns: Vec<ColumnFillReport>,
+    }
+
     /// OCB read attribution diagnostics.
     #[derive(Debug, Clone, PartialEq, Eq)]
     pub struct ReadAttribution {
@@ -16592,6 +16677,31 @@ pub mod ocb {
                 return Err(OcbError::last("OCB visit_batches failed"));
             }
             Ok(read_cursor_report_from_raw(&report_guard.0))
+        }
+
+        /// Read one row group directly into caller-owned typed column buffers.
+        ///
+        /// This avoids constructing an owned `ReadOutcome`. On error, caller
+        /// buffers may be partially written and should be discarded.
+        pub fn read_row_group_into(
+            &self,
+            row_group_id: u32,
+            buffers: &mut [ColumnFillBufferMut<'_>],
+            options: ReadFillOptions,
+        ) -> OcbResult<ReadFillReport> {
+            let raw = RawFillRequest::new(row_group_id, buffers, options)?;
+            let mut raw_report = empty_read_fill_report();
+            let status = unsafe {
+                sys::arcadia_tio_ocb_read_row_group_into(
+                    self.raw.as_ptr(),
+                    &raw.raw,
+                    &mut raw_report,
+                )
+            };
+            if status != sys::ARCADIA_TIO_ERROR_OK {
+                return Err(OcbError::last("OCB read_row_group_into failed"));
+            }
+            Ok(read_fill_report_from_raw(&raw_report, &raw.raw_columns))
         }
 
         /// Plan a projected/pruned read without reading column payloads.
@@ -17011,6 +17121,189 @@ pub mod ocb {
         }
     }
 
+    struct RawFillRequest {
+        raw: sys::ArcadiaTioOcbRowGroupFillRequest,
+        _column_names: Vec<CString>,
+        raw_columns: Vec<sys::ArcadiaTioOcbColumnFillBuffer>,
+    }
+
+    impl RawFillRequest {
+        fn new(
+            row_group_id: u32,
+            buffers: &mut [ColumnFillBufferMut<'_>],
+            options: ReadFillOptions,
+        ) -> OcbResult<Self> {
+            if buffers.is_empty() {
+                return Err(OcbError::invalid_input(
+                    "OCB fill request requires at least one column buffer",
+                ));
+            }
+            let mut column_names = Vec::new();
+            let mut selectors = Vec::with_capacity(buffers.len());
+            for buffer in buffers.iter() {
+                match column_fill_selector(buffer)? {
+                    RawColumnFillSelector::Name(name) => {
+                        column_names.push(cstring(name, "OCB fill column")?);
+                        selectors.push((
+                            column_names.last().expect("just pushed").as_ptr(),
+                            None,
+                        ));
+                    }
+                    RawColumnFillSelector::Id(column_id) => {
+                        selectors.push((ptr::null(), Some(column_id)));
+                    }
+                }
+            }
+            let mut raw_columns = buffers
+                .iter_mut()
+                .zip(selectors.iter().copied())
+                .map(|(buffer, (name, column_id))| raw_column_fill_buffer(buffer, name, column_id))
+                .collect::<Vec<_>>();
+            let raw = sys::ArcadiaTioOcbRowGroupFillRequest {
+                version: sys::ARCADIA_TIO_OCB_ABI_VERSION,
+                struct_size: mem::size_of::<sys::ArcadiaTioOcbRowGroupFillRequest>(),
+                row_group_id,
+                columns: raw_columns.as_mut_ptr(),
+                columns_len: raw_columns.len(),
+                validate_checksums: u8::from(options.validate_checksums),
+                reserved: [0; 8],
+            };
+            Ok(Self {
+                raw,
+                _column_names: column_names,
+                raw_columns,
+            })
+        }
+    }
+
+    enum RawColumnFillSelector<'a> {
+        Name(&'a str),
+        Id(u32),
+    }
+
+    fn column_fill_selector<'a>(
+        buffer: &ColumnFillBufferMut<'a>,
+    ) -> OcbResult<RawColumnFillSelector<'a>> {
+        match buffer {
+            ColumnFillBufferMut::I32 { name, .. }
+            | ColumnFillBufferMut::I64 { name, .. }
+            | ColumnFillBufferMut::F32 { name, .. }
+            | ColumnFillBufferMut::F64 { name, .. } => Ok(RawColumnFillSelector::Name(name)),
+            ColumnFillBufferMut::I32ById { column_id, .. }
+            | ColumnFillBufferMut::I64ById { column_id, .. }
+            | ColumnFillBufferMut::F32ById { column_id, .. }
+            | ColumnFillBufferMut::F64ById { column_id, .. } => Ok(RawColumnFillSelector::Id(*column_id)),
+        }
+    }
+
+    fn raw_column_fill_buffer(
+        buffer: &mut ColumnFillBufferMut<'_>,
+        name: *const c_char,
+        column_id: Option<u32>,
+    ) -> sys::ArcadiaTioOcbColumnFillBuffer {
+        let mut raw = sys::ArcadiaTioOcbColumnFillBuffer {
+            version: sys::ARCADIA_TIO_OCB_ABI_VERSION,
+            struct_size: mem::size_of::<sys::ArcadiaTioOcbColumnFillBuffer>(),
+            column_name: name,
+            column_id: column_id.unwrap_or(0),
+            has_column_id: u8::from(column_id.is_some()),
+            physical_type: sys::ARCADIA_TIO_OCB_PHYSICAL_TYPE_I32,
+            values: ptr::null_mut(),
+            values_len: 0,
+            validity_bytes: ptr::null_mut(),
+            validity_bytes_len: 0,
+            allow_nulls: 0,
+            rows_filled: 0,
+            validity_filled: 0,
+            reserved: [0; 8],
+        };
+        match buffer {
+            ColumnFillBufferMut::I32 {
+                values,
+                validity,
+                allow_nulls,
+                ..
+            }
+            | ColumnFillBufferMut::I32ById {
+                values,
+                validity,
+                allow_nulls,
+                ..
+            } => {
+                raw.physical_type = sys::ARCADIA_TIO_OCB_PHYSICAL_TYPE_I32;
+                raw.values = values.as_mut_ptr().cast();
+                raw.values_len = values.len();
+                set_raw_validity(&mut raw, validity);
+                raw.allow_nulls = u8::from(*allow_nulls);
+            }
+            ColumnFillBufferMut::I64 {
+                values,
+                validity,
+                allow_nulls,
+                ..
+            }
+            | ColumnFillBufferMut::I64ById {
+                values,
+                validity,
+                allow_nulls,
+                ..
+            } => {
+                raw.physical_type = sys::ARCADIA_TIO_OCB_PHYSICAL_TYPE_I64;
+                raw.values = values.as_mut_ptr().cast();
+                raw.values_len = values.len();
+                set_raw_validity(&mut raw, validity);
+                raw.allow_nulls = u8::from(*allow_nulls);
+            }
+            ColumnFillBufferMut::F32 {
+                values,
+                validity,
+                allow_nulls,
+                ..
+            }
+            | ColumnFillBufferMut::F32ById {
+                values,
+                validity,
+                allow_nulls,
+                ..
+            } => {
+                raw.physical_type = sys::ARCADIA_TIO_OCB_PHYSICAL_TYPE_F32;
+                raw.values = values.as_mut_ptr().cast();
+                raw.values_len = values.len();
+                set_raw_validity(&mut raw, validity);
+                raw.allow_nulls = u8::from(*allow_nulls);
+            }
+            ColumnFillBufferMut::F64 {
+                values,
+                validity,
+                allow_nulls,
+                ..
+            }
+            | ColumnFillBufferMut::F64ById {
+                values,
+                validity,
+                allow_nulls,
+                ..
+            } => {
+                raw.physical_type = sys::ARCADIA_TIO_OCB_PHYSICAL_TYPE_F64;
+                raw.values = values.as_mut_ptr().cast();
+                raw.values_len = values.len();
+                set_raw_validity(&mut raw, validity);
+                raw.allow_nulls = u8::from(*allow_nulls);
+            }
+        }
+        raw
+    }
+
+    fn set_raw_validity(
+        raw: &mut sys::ArcadiaTioOcbColumnFillBuffer,
+        validity: &mut Option<&mut [u8]>,
+    ) {
+        if let Some(bytes) = validity.as_deref_mut() {
+            raw.validity_bytes = bytes.as_mut_ptr();
+            raw.validity_bytes_len = bytes.len();
+        }
+    }
+
     fn cstring(value: &str, label: &str) -> OcbResult<CString> {
         CString::new(value).map_err(|_| OcbError::invalid_input(format!("{label} contains NUL")))
     }
@@ -17086,6 +17379,18 @@ pub mod ocb {
             rows_yielded: 0,
             cancelled: 0,
             reserved: [0; 4],
+        }
+    }
+
+    fn empty_read_fill_report() -> sys::ArcadiaTioOcbReadFillReport {
+        sys::ArcadiaTioOcbReadFillReport {
+            version: sys::ARCADIA_TIO_OCB_ABI_VERSION,
+            struct_size: mem::size_of::<sys::ArcadiaTioOcbReadFillReport>(),
+            row_group_id: 0,
+            base_row: 0,
+            row_count: 0,
+            columns_filled: 0,
+            reserved: [0; 8],
         }
     }
 
@@ -17408,6 +17713,26 @@ pub mod ocb {
             batches_yielded: raw.batches_yielded,
             rows_yielded: raw.rows_yielded,
             cancelled: raw.cancelled != 0,
+        }
+    }
+
+    fn read_fill_report_from_raw(
+        raw: &sys::ArcadiaTioOcbReadFillReport,
+        raw_columns: &[sys::ArcadiaTioOcbColumnFillBuffer],
+    ) -> ReadFillReport {
+        ReadFillReport {
+            row_group_id: raw.row_group_id,
+            base_row: raw.base_row,
+            row_count: raw.row_count,
+            columns: raw_columns
+                .iter()
+                .take(raw.columns_filled)
+                .map(|column| ColumnFillReport {
+                    column_id: column.column_id,
+                    rows_filled: column.rows_filled,
+                    validity_filled: column.validity_filled != 0,
+                })
+                .collect(),
         }
     }
 

@@ -1033,6 +1033,83 @@ pub struct ArcadiaTioOcbReadCursorReport {
     pub reserved: [u64; 4],
 }
 
+/// OCB caller-owned column fill buffer.
+#[cfg(feature = "format-ocb")]
+#[repr(C)]
+#[derive(Debug, Copy, Clone)]
+pub struct ArcadiaTioOcbColumnFillBuffer {
+    /// Struct version; set to [`ARCADIA_TIO_OCB_ABI_VERSION`].
+    pub version: u32,
+    /// Size of this struct in bytes.
+    pub struct_size: usize,
+    /// Optional borrowed UTF-8 column name selector.
+    pub column_name: *const c_char,
+    /// File-local column id selector or success output.
+    pub column_id: u32,
+    /// Nonzero when column_id is an input selector; set on success output.
+    pub has_column_id: u8,
+    /// Caller-owned value physical type.
+    pub physical_type: ArcadiaTioOcbPhysicalType,
+    /// Caller-owned typed value storage.
+    pub values: *mut c_void,
+    /// Value element capacity, not bytes.
+    pub values_len: usize,
+    /// Optional caller-owned validity bitmap storage.
+    pub validity_bytes: *mut u8,
+    /// Validity byte capacity.
+    pub validity_bytes_len: usize,
+    /// Nonzero if nullable chunks are accepted.
+    pub allow_nulls: u8,
+    /// Rows filled on success.
+    pub rows_filled: usize,
+    /// Nonzero if validity bytes were filled on success.
+    pub validity_filled: u8,
+    /// Reserved words; callers set to zero.
+    pub reserved: [u64; 8],
+}
+
+/// OCB single-row-group caller-owned fill request.
+#[cfg(feature = "format-ocb")]
+#[repr(C)]
+#[derive(Debug, Copy, Clone)]
+pub struct ArcadiaTioOcbRowGroupFillRequest {
+    /// Struct version; set to [`ARCADIA_TIO_OCB_ABI_VERSION`].
+    pub version: u32,
+    /// Size of this struct in bytes.
+    pub struct_size: usize,
+    /// File-local row group id.
+    pub row_group_id: u32,
+    /// Caller-owned column buffers.
+    pub columns: *mut ArcadiaTioOcbColumnFillBuffer,
+    /// Number of column buffers.
+    pub columns_len: usize,
+    /// Nonzero to validate checksums.
+    pub validate_checksums: u8,
+    /// Reserved words; callers set to zero.
+    pub reserved: [u64; 8],
+}
+
+/// OCB caller-owned fill report.
+#[cfg(feature = "format-ocb")]
+#[repr(C)]
+#[derive(Debug, Copy, Clone)]
+pub struct ArcadiaTioOcbReadFillReport {
+    /// Struct version; set to [`ARCADIA_TIO_OCB_ABI_VERSION`].
+    pub version: u32,
+    /// Size of this struct in bytes.
+    pub struct_size: usize,
+    /// File-local row group id.
+    pub row_group_id: u32,
+    /// Base row offset.
+    pub base_row: u64,
+    /// Rows in the row group.
+    pub row_count: u64,
+    /// Number of column buffers filled.
+    pub columns_filled: usize,
+    /// Reserved words; callers set to zero.
+    pub reserved: [u64; 8],
+}
+
 /// OCB read-result column array.
 #[cfg(feature = "format-ocb")]
 #[repr(C)]
@@ -2815,6 +2892,13 @@ unsafe extern "C" {
         user: *mut c_void,
         out_report: *mut ArcadiaTioOcbReadCursorReport,
     ) -> ArcadiaTioErrorCode;
+    /// Reads one row group into caller-owned buffers.
+    #[cfg(feature = "format-ocb")]
+    pub fn arcadia_tio_ocb_read_row_group_into(
+        file: *mut ArcadiaTioOcbFile,
+        request: *const ArcadiaTioOcbRowGroupFillRequest,
+        out_report: *mut ArcadiaTioOcbReadFillReport,
+    ) -> ArcadiaTioErrorCode;
     /// Plans an OCB read without reading payload chunks.
     #[cfg(feature = "format-ocb")]
     pub fn arcadia_tio_ocb_plan_read(
@@ -2895,6 +2979,17 @@ unsafe extern "C" {
     /// Initializes an OCB read cursor report.
     #[cfg(feature = "format-ocb")]
     pub fn arcadia_tio_ocb_read_cursor_report_init(report: *mut ArcadiaTioOcbReadCursorReport);
+    /// Initializes an OCB column fill buffer.
+    #[cfg(feature = "format-ocb")]
+    pub fn arcadia_tio_ocb_column_fill_buffer_init(buffer: *mut ArcadiaTioOcbColumnFillBuffer);
+    /// Initializes an OCB row-group fill request.
+    #[cfg(feature = "format-ocb")]
+    pub fn arcadia_tio_ocb_row_group_fill_request_init(
+        request: *mut ArcadiaTioOcbRowGroupFillRequest,
+    );
+    /// Initializes an OCB read fill report.
+    #[cfg(feature = "format-ocb")]
+    pub fn arcadia_tio_ocb_read_fill_report_init(report: *mut ArcadiaTioOcbReadFillReport);
     /// Initializes an OCB read outcome.
     #[cfg(feature = "format-ocb")]
     pub fn arcadia_tio_ocb_read_outcome_init(outcome: *mut ArcadiaTioOcbReadOutcome);
