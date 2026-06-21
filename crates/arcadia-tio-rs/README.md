@@ -52,8 +52,11 @@ freed. For callers that need scheduling control before payload reads,
 a duplicate/unknown-id-checked subset in deterministic plan order.
 `read_batches_with_attribution` additionally returns diagnostic-only timing and
 byte counters for planning, file reads, checksums, decompression, primitive
-conversion, native C conversion, and wrapper copying. `ocb::cleanup_orphan_tail`
-truncates orphan tail bytes after the latest valid root. `OcbError` preserves the
+conversion, native C conversion, and wrapper copying. `clone_reader` cheaply
+creates another handle for the same immutable selected snapshot, and the safe
+wrapper marks `ColumnBundleFile` as `Send`/`Sync` for read-only multi-lane use.
+`ocb::cleanup_orphan_tail` truncates orphan tail bytes after the latest valid
+root. `OcbError` preserves the
 ordinary C ABI error code plus OCB `ErrorKind` and optional `FailureCause` for
 machine-readable handling. Dictionary-coded reads return primitive codes; use
 `dictionary_values` for explicit decoded dictionary labels/bytes. OCB examples

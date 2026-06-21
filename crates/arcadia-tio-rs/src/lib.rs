@@ -16432,6 +16432,23 @@ pub mod ocb {
             open_with_options(path, options)
         }
 
+        /// Clone this selected-snapshot reader handle.
+        ///
+        /// The clone observes the same immutable committed OCB snapshot as this
+        /// handle. Reopen the file path to observe later appends.
+        pub fn clone_reader(&self) -> OcbResult<Self> {
+            let mut raw_reader = ptr::null_mut();
+            let status = unsafe {
+                sys::arcadia_tio_ocb_reader_clone(self.raw.as_ptr(), &mut raw_reader)
+            };
+            if status != sys::ARCADIA_TIO_ERROR_OK {
+                return Err(OcbError::last("OCB reader_clone failed"));
+            }
+            NonNull::new(raw_reader)
+                .map(|raw| ColumnBundleFile { raw })
+                .ok_or_else(|| OcbError::last("OCB reader_clone returned null reader"))
+        }
+
         /// Read metadata for the selected snapshot.
         pub fn metadata(&self) -> OcbResult<Metadata> {
             let mut raw = empty_metadata();
@@ -16577,6 +16594,15 @@ pub mod ocb {
             unsafe { sys::arcadia_tio_ocb_close(self.raw.as_ptr()) };
         }
     }
+
+    // SAFETY: Native OCB handles are immutable selected-snapshot readers. Read
+    // calls do not mutate shared handle state and open independent file objects
+    // for payload I/O. Safe Rust ownership prevents dropping a handle while it is
+    // borrowed by another read call.
+    unsafe impl Send for ColumnBundleFile {}
+    // SAFETY: See the Send impl above; concurrent read-only calls on a selected
+    // snapshot handle are supported by the C ABI contract.
+    unsafe impl Sync for ColumnBundleFile {}
 
     impl Drop for ReadPlan<'_> {
         fn drop(&mut self) {

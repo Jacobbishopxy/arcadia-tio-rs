@@ -14,6 +14,9 @@ use arcadia_tio_rs::ocb::{
 
 #[test]
 fn ocb_safe_wrapper_create_append_read_and_cleanup_roundtrip() {
+    fn assert_send_sync<T: Send + Sync>() {}
+    assert_send_sync::<ColumnBundleFile>();
+
     let path = unique_path("ocb-safe-wrapper-roundtrip.ocb");
     let _ = fs::remove_file(&path);
 
@@ -55,6 +58,12 @@ fn ocb_safe_wrapper_create_append_read_and_cleanup_roundtrip() {
     assert_eq!(meta.previous_root_generation, Some(1));
     assert_eq!(meta.row_count, 4);
     assert_eq!(meta.row_group_count, 2);
+
+    let cloned_reader = file.clone_reader().expect("clone selected snapshot reader");
+    assert_eq!(
+        cloned_reader.metadata().expect("cloned reader metadata"),
+        meta
+    );
 
     let dictionary = file.dictionary_values(0).expect("dictionary values");
     assert_eq!(dictionary.name, "category_dictionary");
@@ -139,6 +148,7 @@ fn ocb_safe_wrapper_create_append_read_and_cleanup_roundtrip() {
         PrimitiveValues::I32(vec![1, 0])
     );
 
+    drop(cloned_reader);
     drop(file);
     drop(create_snapshot);
     OpenOptions::new()

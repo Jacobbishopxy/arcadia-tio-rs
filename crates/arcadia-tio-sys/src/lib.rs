@@ -2715,6 +2715,12 @@ unsafe extern "C" {
         path: *const c_char,
         options: *const ArcadiaTioOcbOpenOptions,
     ) -> *mut ArcadiaTioOcbFile;
+    /// Clones an immutable selected-snapshot OCB reader handle.
+    #[cfg(feature = "format-ocb")]
+    pub fn arcadia_tio_ocb_reader_clone(
+        file: *mut ArcadiaTioOcbFile,
+        out_reader: *mut *mut ArcadiaTioOcbFile,
+    ) -> ArcadiaTioErrorCode;
     /// Closes an OCB handle.
     #[cfg(feature = "format-ocb")]
     pub fn arcadia_tio_ocb_close(file: *mut ArcadiaTioOcbFile);
