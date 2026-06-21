@@ -88,6 +88,24 @@ fn ocb_safe_wrapper_create_append_read_and_cleanup_roundtrip() {
         PrimitiveValues::F64(vec![3.5, 4.5])
     );
 
+    let plan = file.plan_read(&request).expect("plan projected read");
+    assert_eq!(plan.projected_column_ids, vec![0, 2]);
+    assert_eq!(plan.row_group_ids, vec![0, 1]);
+    assert_eq!(plan.report.selected_row_groups, 2);
+    let planned_outcome = file.read_plan_batches(&plan).expect("execute full plan");
+    assert_eq!(planned_outcome.batches, outcome.batches);
+    let subset_outcome = file
+        .read_plan_row_groups(&plan, &[1, 0])
+        .expect("execute subset in deterministic plan order");
+    assert_eq!(subset_outcome.batches.len(), 2);
+    assert_eq!(subset_outcome.batches[0].row_group_id, 0);
+    assert_eq!(subset_outcome.batches[1].row_group_id, 1);
+    let duplicate_subset = file
+        .read_plan_row_groups(&plan, &[1, 1])
+        .expect_err("duplicate subset rejects");
+    assert!(duplicate_subset.message().contains("duplicate"));
+    drop(plan);
+
     let predicate_request = ReadRequest {
         projection: Projection::Names(vec!["category_code".to_string()]),
         predicates: vec![RowGroupPredicate {

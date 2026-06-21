@@ -46,15 +46,20 @@ bind a handle to one committed snapshot, `open_with_options` when explicit
 full-payload validation is required before reads, and `metadata`,
 `dictionary_values`, and `read_batches` to copy native-owned OCB
 metadata/dictionaries/batches into Rust-owned structs before the C buffers are
-freed. `ocb::cleanup_orphan_tail`
-truncates orphan tail bytes after the latest valid root. `OcbError` preserves the
+freed. For callers that need scheduling control before payload reads,
+`plan_read` exposes snapshot-local projected column ids and row-group ids;
+`read_plan_batches` executes the whole plan, and `read_plan_row_groups` executes
+a duplicate/unknown-id-checked subset in deterministic plan order.
+`ocb::cleanup_orphan_tail` truncates orphan tail bytes after the latest valid
+root. `OcbError` preserves the
 ordinary C ABI error code plus OCB `ErrorKind` and optional `FailureCause` for
 machine-readable handling. Dictionary-coded reads return primitive codes; use
 `dictionary_values` for explicit decoded dictionary labels/bytes. OCB examples
 and tests generate tiny project-local `.ocb` files and require an OCB-capable
 `arcadia_tio_capi` native library with the `arcadia_tio_ocb_*` symbols exported;
 if link fails with missing `arcadia_tio_ocb_create`, `arcadia_tio_ocb_append`,
-or related symbols, refresh the native library before testing `format-ocb`.
+`arcadia_tio_ocb_plan_read`, or related symbols, refresh the native library
+before testing `format-ocb`.
 
 Append, sparse-intent analysis, OCB create/append/read, mutation, reform,
 compaction, diagnostics, and attributed read helpers borrow Rust

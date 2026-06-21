@@ -28,6 +28,13 @@ pub struct ArcadiaTioOcbFile {
     _private: [u8; 0],
 }
 
+/// Opaque OCB read plan owned by the native library.
+#[cfg(feature = "format-ocb")]
+#[repr(C)]
+pub struct ArcadiaTioOcbReadPlan {
+    _private: [u8; 0],
+}
+
 /// Thread-local C ABI error code value.
 pub type ArcadiaTioErrorCode = c_int;
 /// OCB structured error-kind value.
@@ -2684,6 +2691,50 @@ unsafe extern "C" {
         request: *const ArcadiaTioOcbReadRequest,
         out_outcome: *mut ArcadiaTioOcbReadOutcome,
     ) -> ArcadiaTioErrorCode;
+    /// Plans an OCB read without reading payload chunks.
+    #[cfg(feature = "format-ocb")]
+    pub fn arcadia_tio_ocb_plan_read(
+        file: *mut ArcadiaTioOcbFile,
+        request: *const ArcadiaTioOcbReadRequest,
+        out_plan: *mut *mut ArcadiaTioOcbReadPlan,
+    ) -> ArcadiaTioErrorCode;
+    /// Copies a read-plan report into caller-provided output.
+    #[cfg(feature = "format-ocb")]
+    pub fn arcadia_tio_ocb_read_plan_report(
+        plan: *const ArcadiaTioOcbReadPlan,
+        out_report: *mut ArcadiaTioOcbReadReport,
+    ) -> ArcadiaTioErrorCode;
+    /// Copies projected column ids from a read plan.
+    #[cfg(feature = "format-ocb")]
+    pub fn arcadia_tio_ocb_read_plan_projected_column_ids(
+        plan: *const ArcadiaTioOcbReadPlan,
+        out_ids: *mut u32,
+        out_ids_len: usize,
+        out_required_len: *mut usize,
+    ) -> ArcadiaTioErrorCode;
+    /// Copies row-group ids from a read plan.
+    #[cfg(feature = "format-ocb")]
+    pub fn arcadia_tio_ocb_read_plan_row_group_ids(
+        plan: *const ArcadiaTioOcbReadPlan,
+        out_ids: *mut u32,
+        out_ids_len: usize,
+        out_required_len: *mut usize,
+    ) -> ArcadiaTioErrorCode;
+    /// Reads all or a subset of batches from a read plan.
+    #[cfg(feature = "format-ocb")]
+    pub fn arcadia_tio_ocb_read_batches_from_plan(
+        file: *mut ArcadiaTioOcbFile,
+        plan: *const ArcadiaTioOcbReadPlan,
+        row_group_ids: *const u32,
+        row_group_ids_len: usize,
+        out_outcome: *mut ArcadiaTioOcbReadOutcome,
+    ) -> ArcadiaTioErrorCode;
+    /// Frees owned fields inside an OCB read report.
+    #[cfg(feature = "format-ocb")]
+    pub fn arcadia_tio_ocb_read_report_free(report: *mut ArcadiaTioOcbReadReport);
+    /// Frees an opaque OCB read plan.
+    #[cfg(feature = "format-ocb")]
+    pub fn arcadia_tio_ocb_read_plan_free(plan: *mut ArcadiaTioOcbReadPlan);
     /// Frees owned fields inside an OCB read outcome.
     #[cfg(feature = "format-ocb")]
     pub fn arcadia_tio_ocb_read_outcome_free(outcome: *mut ArcadiaTioOcbReadOutcome);
@@ -2702,6 +2753,9 @@ unsafe extern "C" {
     /// Initializes an OCB read request.
     #[cfg(feature = "format-ocb")]
     pub fn arcadia_tio_ocb_read_request_init(request: *mut ArcadiaTioOcbReadRequest);
+    /// Initializes an OCB read report.
+    #[cfg(feature = "format-ocb")]
+    pub fn arcadia_tio_ocb_read_report_init(report: *mut ArcadiaTioOcbReadReport);
     /// Initializes an OCB read outcome.
     #[cfg(feature = "format-ocb")]
     pub fn arcadia_tio_ocb_read_outcome_init(outcome: *mut ArcadiaTioOcbReadOutcome);

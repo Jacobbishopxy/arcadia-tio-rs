@@ -15599,6 +15599,7 @@ pub mod ocb {
     use arcadia_tio_sys as sys;
     use std::ffi::{CStr, CString};
     use std::fmt;
+    use std::marker::PhantomData;
     use std::mem;
     use std::os::raw::{c_char, c_void};
     use std::path::Path;
@@ -16299,6 +16300,23 @@ pub mod ocb {
         }
     }
 
+    /// Snapshot-local OCB read plan.
+    ///
+    /// A plan contains generic projected column ids and selected row-group ids.
+    /// Row-group ids are file-local/snapshot-local, not stable business ids.
+    #[derive(Debug)]
+    pub struct ReadPlan<'a> {
+        raw: NonNull<sys::ArcadiaTioOcbReadPlan>,
+        file_raw: NonNull<sys::ArcadiaTioOcbFile>,
+        /// File-local column ids selected by the projection.
+        pub projected_column_ids: Vec<u32>,
+        /// File-local row-group ids selected by predicates.
+        pub row_group_ids: Vec<u32>,
+        /// Planning report for the request.
+        pub report: ReadReport,
+        _file: PhantomData<&'a ColumnBundleFile>,
+    }
+
     /// OCB read outcome with owned batches and report.
     #[derive(Debug, Clone, PartialEq)]
     pub struct ReadOutcome {
@@ -16422,11 +16440,83 @@ pub mod ocb {
             }
             unsafe { read_outcome_from_raw(&guard.0) }
         }
+
+        /// Plan a projected/pruned read without reading column payloads.
+        pub fn plan_read<'a>(&'a self, request: &ReadRequest) -> OcbResult<ReadPlan<'a>> {
+            let raw_request = RawReadRequest::new(request)?;
+            let mut raw_plan = ptr::null_mut();
+            let status = unsafe {
+                sys::arcadia_tio_ocb_plan_read(
+                    self.raw.as_ptr(),
+                    &raw_request.raw,
+                    &mut raw_plan,
+                )
+            };
+            let raw = NonNull::new(raw_plan);
+            if status != sys::ARCADIA_TIO_ERROR_OK {
+                return Err(OcbError::last("OCB plan_read failed"));
+            }
+            let raw = raw.ok_or_else(|| OcbError::last("OCB plan_read returned null plan"))?;
+            let report = match read_plan_report(raw) {
+                Ok(report) => report,
+                Err(err) => {
+                    unsafe { sys::arcadia_tio_ocb_read_plan_free(raw.as_ptr()) };
+                    return Err(err);
+                }
+            };
+            let projected_column_ids = match read_plan_projected_column_ids(raw) {
+                Ok(ids) => ids,
+                Err(err) => {
+                    unsafe { sys::arcadia_tio_ocb_read_plan_free(raw.as_ptr()) };
+                    return Err(err);
+                }
+            };
+            let row_group_ids = match read_plan_row_group_ids(raw) {
+                Ok(ids) => ids,
+                Err(err) => {
+                    unsafe { sys::arcadia_tio_ocb_read_plan_free(raw.as_ptr()) };
+                    return Err(err);
+                }
+            };
+            Ok(ReadPlan {
+                raw,
+                file_raw: self.raw,
+                projected_column_ids,
+                row_group_ids,
+                report,
+                _file: PhantomData,
+            })
+        }
+
+        /// Execute all row groups selected by a read plan.
+        pub fn read_plan_batches(&self, plan: &ReadPlan<'_>) -> OcbResult<ReadOutcome> {
+            ensure_plan_belongs_to_file(self.raw, plan)?;
+            read_batches_from_plan(self.raw, plan.raw, None)
+        }
+
+        /// Execute an explicit row-group subset selected by a read plan.
+        ///
+        /// Unknown or duplicate row-group ids fail closed. Returned batches use
+        /// deterministic plan order rather than caller-supplied subset order.
+        pub fn read_plan_row_groups(
+            &self,
+            plan: &ReadPlan<'_>,
+            row_group_ids: &[u32],
+        ) -> OcbResult<ReadOutcome> {
+            ensure_plan_belongs_to_file(self.raw, plan)?;
+            read_batches_from_plan(self.raw, plan.raw, Some(row_group_ids))
+        }
     }
 
     impl Drop for ColumnBundleFile {
         fn drop(&mut self) {
             unsafe { sys::arcadia_tio_ocb_close(self.raw.as_ptr()) };
+        }
+    }
+
+    impl Drop for ReadPlan<'_> {
+        fn drop(&mut self) {
+            unsafe { sys::arcadia_tio_ocb_read_plan_free(self.raw.as_ptr()) };
         }
     }
 
@@ -16801,23 +16891,27 @@ pub mod ocb {
         }
     }
 
+    fn empty_read_report() -> sys::ArcadiaTioOcbReadReport {
+        sys::ArcadiaTioOcbReadReport {
+            version: sys::ARCADIA_TIO_OCB_ABI_VERSION,
+            struct_size: mem::size_of::<sys::ArcadiaTioOcbReadReport>(),
+            requested_threads: 0,
+            effective_threads: 0,
+            selected_row_groups: 0,
+            pruned_row_groups: 0,
+            selected_column_chunks: 0,
+            fallback_reason: ptr::null_mut(),
+            reserved: [0; 4],
+        }
+    }
+
     fn empty_read_outcome() -> sys::ArcadiaTioOcbReadOutcome {
         sys::ArcadiaTioOcbReadOutcome {
             version: sys::ARCADIA_TIO_OCB_ABI_VERSION,
             struct_size: mem::size_of::<sys::ArcadiaTioOcbReadOutcome>(),
             batches: ptr::null_mut(),
             batches_len: 0,
-            report: sys::ArcadiaTioOcbReadReport {
-                version: sys::ARCADIA_TIO_OCB_ABI_VERSION,
-                struct_size: mem::size_of::<sys::ArcadiaTioOcbReadReport>(),
-                requested_threads: 0,
-                effective_threads: 0,
-                selected_row_groups: 0,
-                pruned_row_groups: 0,
-                selected_column_chunks: 0,
-                fallback_reason: ptr::null_mut(),
-                reserved: [0; 4],
-            },
+            report: empty_read_report(),
             reserved: [0; 4],
         }
     }
@@ -16836,11 +16930,113 @@ pub mod ocb {
         }
     }
 
+    struct ReadReportGuard(sys::ArcadiaTioOcbReadReport);
+    impl Drop for ReadReportGuard {
+        fn drop(&mut self) {
+            unsafe { sys::arcadia_tio_ocb_read_report_free(&mut self.0) };
+        }
+    }
+
     struct ReadOutcomeGuard(sys::ArcadiaTioOcbReadOutcome);
     impl Drop for ReadOutcomeGuard {
         fn drop(&mut self) {
             unsafe { sys::arcadia_tio_ocb_read_outcome_free(&mut self.0) };
         }
+    }
+
+    fn ensure_plan_belongs_to_file(
+        raw_file: NonNull<sys::ArcadiaTioOcbFile>,
+        plan: &ReadPlan<'_>,
+    ) -> OcbResult<()> {
+        if plan.file_raw == raw_file {
+            Ok(())
+        } else {
+            Err(OcbError::invalid_input(
+                "OCB read plan belongs to a different file handle",
+            ))
+        }
+    }
+
+    fn read_plan_report(raw_plan: NonNull<sys::ArcadiaTioOcbReadPlan>) -> OcbResult<ReadReport> {
+        let mut raw_report = empty_read_report();
+        let status = unsafe {
+            sys::arcadia_tio_ocb_read_plan_report(raw_plan.as_ptr(), &mut raw_report)
+        };
+        let guard = ReadReportGuard(raw_report);
+        if status != sys::ARCADIA_TIO_ERROR_OK {
+            return Err(OcbError::last("OCB read_plan_report failed"));
+        }
+        Ok(read_report_from_raw(&guard.0))
+    }
+
+    fn read_plan_projected_column_ids(
+        raw_plan: NonNull<sys::ArcadiaTioOcbReadPlan>,
+    ) -> OcbResult<Vec<u32>> {
+        read_plan_ids(
+            raw_plan,
+            sys::arcadia_tio_ocb_read_plan_projected_column_ids,
+            "OCB read_plan_projected_column_ids failed",
+        )
+    }
+
+    fn read_plan_row_group_ids(
+        raw_plan: NonNull<sys::ArcadiaTioOcbReadPlan>,
+    ) -> OcbResult<Vec<u32>> {
+        read_plan_ids(
+            raw_plan,
+            sys::arcadia_tio_ocb_read_plan_row_group_ids,
+            "OCB read_plan_row_group_ids failed",
+        )
+    }
+
+    fn read_plan_ids(
+        raw_plan: NonNull<sys::ArcadiaTioOcbReadPlan>,
+        f: unsafe extern "C" fn(
+            *const sys::ArcadiaTioOcbReadPlan,
+            *mut u32,
+            usize,
+            *mut usize,
+        ) -> sys::ArcadiaTioErrorCode,
+        context: &str,
+    ) -> OcbResult<Vec<u32>> {
+        let mut required = 0usize;
+        let status = unsafe { f(raw_plan.as_ptr(), ptr::null_mut(), 0, &mut required) };
+        if status != sys::ARCADIA_TIO_ERROR_OK {
+            return Err(OcbError::last(context));
+        }
+        let mut ids = vec![0u32; required];
+        let status = unsafe { f(raw_plan.as_ptr(), ids.as_mut_ptr(), ids.len(), &mut required) };
+        if status != sys::ARCADIA_TIO_ERROR_OK {
+            return Err(OcbError::last(context));
+        }
+        ids.truncate(required);
+        Ok(ids)
+    }
+
+    fn read_batches_from_plan(
+        raw_file: NonNull<sys::ArcadiaTioOcbFile>,
+        raw_plan: NonNull<sys::ArcadiaTioOcbReadPlan>,
+        row_group_ids: Option<&[u32]>,
+    ) -> OcbResult<ReadOutcome> {
+        let mut raw_outcome = empty_read_outcome();
+        let (ids_ptr, ids_len) = match row_group_ids {
+            Some(ids) => (ids.as_ptr(), ids.len()),
+            None => (ptr::null(), 0),
+        };
+        let status = unsafe {
+            sys::arcadia_tio_ocb_read_batches_from_plan(
+                raw_file.as_ptr(),
+                raw_plan.as_ptr(),
+                ids_ptr,
+                ids_len,
+                &mut raw_outcome,
+            )
+        };
+        let guard = ReadOutcomeGuard(raw_outcome);
+        if status != sys::ARCADIA_TIO_ERROR_OK {
+            return Err(OcbError::last("OCB read_batches_from_plan failed"));
+        }
+        unsafe { read_outcome_from_raw(&guard.0) }
     }
 
     unsafe fn metadata_from_raw(raw: &sys::ArcadiaTioOcbMetadata) -> OcbResult<Metadata> {
@@ -16923,15 +17119,19 @@ pub mod ocb {
             .collect::<OcbResult<Vec<_>>>()?;
         Ok(ReadOutcome {
             batches,
-            report: ReadReport {
-                requested_threads: raw.report.requested_threads,
-                effective_threads: raw.report.effective_threads,
-                selected_row_groups: raw.report.selected_row_groups,
-                pruned_row_groups: raw.report.pruned_row_groups,
-                selected_column_chunks: raw.report.selected_column_chunks,
-                fallback_reason: raw_optional_string(raw.report.fallback_reason.cast()),
-            },
+            report: read_report_from_raw(&raw.report),
         })
+    }
+
+    fn read_report_from_raw(raw: &sys::ArcadiaTioOcbReadReport) -> ReadReport {
+        ReadReport {
+            requested_threads: raw.requested_threads,
+            effective_threads: raw.effective_threads,
+            selected_row_groups: raw.selected_row_groups,
+            pruned_row_groups: raw.pruned_row_groups,
+            selected_column_chunks: raw.selected_column_chunks,
+            fallback_reason: raw_optional_string(raw.fallback_reason.cast()),
+        }
     }
 
     unsafe fn column_batch_from_raw(raw: &sys::ArcadiaTioOcbColumnBatch) -> OcbResult<ColumnBatch> {
