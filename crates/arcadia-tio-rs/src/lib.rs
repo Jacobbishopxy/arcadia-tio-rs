@@ -15795,6 +15795,11 @@ pub mod ocb {
         F32,
         /// 64-bit float.
         F64,
+        /// Fixed-width opaque byte values.
+        FixedBinary {
+            /// Number of bytes in each row value.
+            width: u32,
+        },
         /// Unknown forward-compatible raw value.
         Unknown(i32),
     }
@@ -15806,6 +15811,7 @@ pub mod ocb {
                 Self::I64 => sys::ARCADIA_TIO_OCB_PHYSICAL_TYPE_I64,
                 Self::F32 => sys::ARCADIA_TIO_OCB_PHYSICAL_TYPE_F32,
                 Self::F64 => sys::ARCADIA_TIO_OCB_PHYSICAL_TYPE_F64,
+                Self::FixedBinary { .. } => sys::ARCADIA_TIO_OCB_PHYSICAL_TYPE_FIXED_BINARY,
                 Self::Unknown(raw) => raw,
             }
         }
@@ -15816,7 +15822,22 @@ pub mod ocb {
                 sys::ARCADIA_TIO_OCB_PHYSICAL_TYPE_I64 => Self::I64,
                 sys::ARCADIA_TIO_OCB_PHYSICAL_TYPE_F32 => Self::F32,
                 sys::ARCADIA_TIO_OCB_PHYSICAL_TYPE_F64 => Self::F64,
+                sys::ARCADIA_TIO_OCB_PHYSICAL_TYPE_FIXED_BINARY => Self::FixedBinary { width: 0 },
                 other => Self::Unknown(other),
+            }
+        }
+
+        fn from_raw_with_width(raw: sys::ArcadiaTioOcbPhysicalType, width: u32) -> Self {
+            match raw {
+                sys::ARCADIA_TIO_OCB_PHYSICAL_TYPE_FIXED_BINARY => Self::FixedBinary { width },
+                _ => Self::from_raw(raw),
+            }
+        }
+
+        fn fixed_binary_width(self) -> u32 {
+            match self {
+                Self::FixedBinary { width } => width,
+                _ => 0,
             }
         }
     }
@@ -15976,6 +15997,13 @@ pub mod ocb {
         F32(Vec<f32>),
         /// f64 values.
         F64(Vec<f64>),
+        /// Fixed-width opaque bytes stored contiguously row-major.
+        FixedBinary {
+            /// Number of bytes in each row value.
+            width: u32,
+            /// Contiguous row-major bytes.
+            bytes: Vec<u8>,
+        },
     }
 
     impl PrimitiveValues {
@@ -15985,6 +16013,7 @@ pub mod ocb {
                 Self::I64(_) => PhysicalType::I64,
                 Self::F32(_) => PhysicalType::F32,
                 Self::F64(_) => PhysicalType::F64,
+                Self::FixedBinary { width, .. } => PhysicalType::FixedBinary { width: *width },
             }
         }
 
@@ -15994,6 +16023,8 @@ pub mod ocb {
                 Self::I64(values) => values.len(),
                 Self::F32(values) => values.len(),
                 Self::F64(values) => values.len(),
+                Self::FixedBinary { width: 0, .. } => 0,
+                Self::FixedBinary { width, bytes } => bytes.len() / *width as usize,
             }
         }
 
@@ -16003,6 +16034,7 @@ pub mod ocb {
                 Self::I64(values) => values.as_ptr().cast(),
                 Self::F32(values) => values.as_ptr().cast(),
                 Self::F64(values) => values.as_ptr().cast(),
+                Self::FixedBinary { bytes, .. } => bytes.as_ptr().cast(),
             }
         }
 
@@ -16013,7 +16045,7 @@ pub mod ocb {
                 physical_type: self.physical_type().to_raw(),
                 data: self.data_ptr(),
                 len: self.len(),
-                reserved: [0; 3],
+                reserved: [u64::from(self.physical_type().fixed_binary_width()), 0, 0],
             }
         }
     }
@@ -16436,6 +16468,20 @@ pub mod ocb {
         F64ById {
             column_id: u32,
             values: &'a mut [f64],
+            validity: Option<&'a mut [u8]>,
+            allow_nulls: bool,
+        },
+        FixedBinary {
+            name: &'a str,
+            width: u32,
+            bytes: &'a mut [u8],
+            validity: Option<&'a mut [u8]>,
+            allow_nulls: bool,
+        },
+        FixedBinaryById {
+            column_id: u32,
+            width: u32,
+            bytes: &'a mut [u8],
             validity: Option<&'a mut [u8]>,
             allow_nulls: bool,
         },
@@ -16888,6 +16934,8 @@ pub mod ocb {
                 .map(|dictionary| cstring(&dictionary.name, "OCB dictionary name"))
                 .collect::<OcbResult<Vec<_>>>()?;
 
+            validate_write_spec(spec)?;
+
             let raw_columns = spec
                 .columns
                 .iter()
@@ -16902,7 +16950,7 @@ pub mod ocb {
                     dictionary_id: column.dictionary_id.unwrap_or(0),
                     scale: column.scale,
                     nullable: u8::from(column.nullable),
-                    reserved: [0; 3],
+                    reserved: [u64::from(column.physical_type.fixed_binary_width()), 0, 0],
                 })
                 .collect::<Vec<_>>();
 
@@ -17050,6 +17098,77 @@ pub mod ocb {
         }
     }
 
+    fn validate_write_spec(spec: &WriteSpec) -> OcbResult<()> {
+        for (column_idx, column) in spec.columns.iter().enumerate() {
+            if let PhysicalType::FixedBinary { width } = column.physical_type {
+                if width == 0 {
+                    return Err(OcbError::invalid_input(format!(
+                        "OCB fixed-binary column {} ('{}') has zero width",
+                        column_idx, column.name
+                    )));
+                }
+                if column.logical_kind == LogicalKind::DictionaryCode {
+                    return Err(OcbError::invalid_input(format!(
+                        "OCB fixed-binary column {} ('{}') cannot be a dictionary-code column",
+                        column_idx, column.name
+                    )));
+                }
+            }
+        }
+
+        for (row_idx, row) in spec.row_groups.iter().enumerate() {
+            for chunk in &row.columns {
+                let Some(column) = spec.columns.get(chunk.column_id as usize) else {
+                    continue;
+                };
+                match (&chunk.values, column.physical_type) {
+                    (
+                        PrimitiveValues::FixedBinary { width, bytes },
+                        PhysicalType::FixedBinary {
+                            width: schema_width,
+                        },
+                    ) => {
+                        if *width == 0 {
+                            return Err(OcbError::invalid_input(format!(
+                                "OCB fixed-binary chunk row group {row_idx} column {} has zero width",
+                                chunk.column_id
+                            )));
+                        }
+                        if *width != schema_width {
+                            return Err(OcbError::invalid_input(format!(
+                                "OCB fixed-binary chunk row group {row_idx} column {} width {} does not match schema width {}",
+                                chunk.column_id, width, schema_width
+                            )));
+                        }
+                        if bytes.len() % *width as usize != 0 {
+                            return Err(OcbError::invalid_input(format!(
+                                "OCB fixed-binary chunk row group {row_idx} column {} byte length {} is not divisible by width {}",
+                                chunk.column_id,
+                                bytes.len(),
+                                width
+                            )));
+                        }
+                    }
+                    (PrimitiveValues::FixedBinary { .. }, _) => {
+                        return Err(OcbError::invalid_input(format!(
+                            "OCB fixed-binary chunk row group {row_idx} column {} targets a non-fixed-binary schema column",
+                            chunk.column_id
+                        )));
+                    }
+                    (_, PhysicalType::FixedBinary { .. }) => {
+                        return Err(OcbError::invalid_input(format!(
+                            "OCB chunk row group {row_idx} column {} must provide fixed-binary values",
+                            chunk.column_id
+                        )));
+                    }
+                    _ => {}
+                }
+            }
+        }
+
+        Ok(())
+    }
+
     struct RawReadRequest {
         raw: sys::ArcadiaTioOcbReadRequest,
         _column_names: Vec<CString>,
@@ -17182,11 +17301,15 @@ pub mod ocb {
             ColumnFillBufferMut::I32 { name, .. }
             | ColumnFillBufferMut::I64 { name, .. }
             | ColumnFillBufferMut::F32 { name, .. }
-            | ColumnFillBufferMut::F64 { name, .. } => Ok(RawColumnFillSelector::Name(name)),
+            | ColumnFillBufferMut::F64 { name, .. }
+            | ColumnFillBufferMut::FixedBinary { name, .. } => {
+                Ok(RawColumnFillSelector::Name(name))
+            }
             ColumnFillBufferMut::I32ById { column_id, .. }
             | ColumnFillBufferMut::I64ById { column_id, .. }
             | ColumnFillBufferMut::F32ById { column_id, .. }
-            | ColumnFillBufferMut::F64ById { column_id, .. } => {
+            | ColumnFillBufferMut::F64ById { column_id, .. }
+            | ColumnFillBufferMut::FixedBinaryById { column_id, .. } => {
                 Ok(RawColumnFillSelector::Id(*column_id))
             }
         }
@@ -17283,6 +17406,27 @@ pub mod ocb {
                 raw.physical_type = sys::ARCADIA_TIO_OCB_PHYSICAL_TYPE_F64;
                 raw.values = values.as_mut_ptr().cast();
                 raw.values_len = values.len();
+                set_raw_validity(&mut raw, validity);
+                raw.allow_nulls = u8::from(*allow_nulls);
+            }
+            ColumnFillBufferMut::FixedBinary {
+                width,
+                bytes,
+                validity,
+                allow_nulls,
+                ..
+            }
+            | ColumnFillBufferMut::FixedBinaryById {
+                width,
+                bytes,
+                validity,
+                allow_nulls,
+                ..
+            } => {
+                raw.physical_type = sys::ARCADIA_TIO_OCB_PHYSICAL_TYPE_FIXED_BINARY;
+                raw.values = bytes.as_mut_ptr().cast();
+                raw.values_len = bytes.len();
+                raw.reserved[0] = u64::from(*width);
                 set_raw_validity(&mut raw, validity);
                 raw.allow_nulls = u8::from(*allow_nulls);
             }
@@ -17620,7 +17764,9 @@ pub mod ocb {
             .map(|column| ColumnDescriptor {
                 id: column.id,
                 name: raw_string(column.name.cast()),
-                physical_type: PhysicalType::from_raw(column.physical_type),
+                physical_type: PhysicalType::from_raw_with_width(column.physical_type, unsafe {
+                    sys::arcadia_tio_ocb_column_descriptor_fixed_binary_width(column)
+                }),
                 logical_kind: LogicalKind::from_raw(column.logical_kind),
                 dictionary_id: (column.has_dictionary_id != 0).then_some(column.dictionary_id),
                 scale: column.scale,
@@ -17779,7 +17925,9 @@ pub mod ocb {
         Ok(ColumnArray {
             column_id: raw.column_id,
             name: raw_string(raw.name.cast()),
-            physical_type: PhysicalType::from_raw(raw.physical_type),
+            physical_type: PhysicalType::from_raw_with_width(raw.physical_type, unsafe {
+                sys::arcadia_tio_ocb_column_array_fixed_binary_width(raw)
+            }),
             logical_kind: LogicalKind::from_raw(raw.logical_kind),
             dictionary_id: (raw.has_dictionary_id != 0).then_some(raw.dictionary_id),
             values: unsafe { primitive_values_from_raw(&raw.values) }?,
@@ -17797,7 +17945,7 @@ pub mod ocb {
     unsafe fn primitive_values_from_raw(
         raw: &sys::ArcadiaTioOcbPrimitiveValues,
     ) -> OcbResult<PrimitiveValues> {
-        match PhysicalType::from_raw(raw.physical_type) {
+        match PhysicalType::from_raw_with_width(raw.physical_type, raw.reserved[0] as u32) {
             PhysicalType::I32 => Ok(PrimitiveValues::I32(unsafe {
                 raw_typed(raw.data.cast(), raw.len)
             })),
@@ -17810,6 +17958,15 @@ pub mod ocb {
             PhysicalType::F64 => Ok(PrimitiveValues::F64(unsafe {
                 raw_typed(raw.data.cast(), raw.len)
             })),
+            PhysicalType::FixedBinary { width } => {
+                let byte_len = raw.len.checked_mul(width as usize).ok_or_else(|| {
+                    OcbError::invalid_input("OCB fixed-binary byte length overflows")
+                })?;
+                Ok(PrimitiveValues::FixedBinary {
+                    width,
+                    bytes: unsafe { raw_bytes(raw.data.cast(), byte_len) },
+                })
+            }
             PhysicalType::Unknown(raw_type) => Err(OcbError::invalid_input(format!(
                 "unknown OCB primitive physical type {raw_type}"
             ))),

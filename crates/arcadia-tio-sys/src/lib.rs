@@ -224,6 +224,8 @@ raw_constant!(ARCADIA_TIO_OCB_PHYSICAL_TYPE_F32: ArcadiaTioOcbPhysicalType = 2);
 #[cfg(feature = "format-ocb")]
 raw_constant!(ARCADIA_TIO_OCB_PHYSICAL_TYPE_F64: ArcadiaTioOcbPhysicalType = 3);
 #[cfg(feature = "format-ocb")]
+raw_constant!(ARCADIA_TIO_OCB_PHYSICAL_TYPE_FIXED_BINARY: ArcadiaTioOcbPhysicalType = 4);
+#[cfg(feature = "format-ocb")]
 raw_constant!(ARCADIA_TIO_OCB_LOGICAL_KIND_PLAIN: ArcadiaTioOcbLogicalKind = 0);
 #[cfg(feature = "format-ocb")]
 raw_constant!(ARCADIA_TIO_OCB_LOGICAL_KIND_TIMESTAMP_NANOS_LIKE: ArcadiaTioOcbLogicalKind = 1);
@@ -489,7 +491,8 @@ pub struct ArcadiaTioOcbColumnDescriptor {
     pub scale: i32,
     /// Nonzero when values may be null.
     pub nullable: u8,
-    /// Reserved words; callers set to zero.
+    /// Reserved words. For fixed-binary columns, reserved[0] carries the byte
+    /// width; prefer [`arcadia_tio_ocb_column_descriptor_fixed_binary_width`].
     pub reserved: [u64; 3],
 }
 
@@ -646,9 +649,11 @@ pub struct ArcadiaTioOcbPrimitiveValues {
     pub physical_type: ArcadiaTioOcbPhysicalType,
     /// Primitive buffer pointer.
     pub data: *const c_void,
-    /// Number of primitive values.
+    /// Number of primitive values. For fixed-binary values this is row count,
+    /// while `data` points to `len * fixed_binary_width` bytes.
     pub len: usize,
-    /// Reserved words; callers set to zero.
+    /// Reserved words. For fixed-binary values, reserved[0] carries the byte
+    /// width.
     pub reserved: [u64; 3],
 }
 
@@ -694,7 +699,9 @@ pub struct ArcadiaTioOcbWriteColumn {
     pub scale: i32,
     /// Nonzero when values may be null.
     pub nullable: u8,
-    /// Reserved words; callers set to zero.
+    /// Reserved words. For fixed-binary columns, set reserved[0] to the byte
+    /// width, preferably via
+    /// [`arcadia_tio_ocb_write_column_set_fixed_binary_width`].
     pub reserved: [u64; 3],
 }
 
@@ -1052,7 +1059,8 @@ pub struct ArcadiaTioOcbColumnFillBuffer {
     pub physical_type: ArcadiaTioOcbPhysicalType,
     /// Caller-owned typed value storage.
     pub values: *mut c_void,
-    /// Value element capacity, not bytes.
+    /// Value element capacity. For fixed-binary fill buffers this is byte
+    /// capacity (`rows * fixed_binary_width`), not row count.
     pub values_len: usize,
     /// Optional caller-owned validity bitmap storage.
     pub validity_bytes: *mut u8,
@@ -1064,7 +1072,9 @@ pub struct ArcadiaTioOcbColumnFillBuffer {
     pub rows_filled: usize,
     /// Nonzero if validity bytes were filled on success.
     pub validity_filled: u8,
-    /// Reserved words; callers set to zero.
+    /// Reserved words. For fixed-binary fill buffers, reserved[0] carries the
+    /// byte width, preferably via
+    /// [`arcadia_tio_ocb_column_fill_buffer_set_fixed_binary_width`].
     pub reserved: [u64; 8],
 }
 
@@ -1137,7 +1147,8 @@ pub struct ArcadiaTioOcbColumnArray {
     pub has_validity: u8,
     /// Owned validity bitmap tied to the read outcome.
     pub validity: ArcadiaTioOcbValidityBitmap,
-    /// Reserved words; callers set to zero.
+    /// Reserved words. For fixed-binary columns, reserved[0] carries the byte
+    /// width; prefer [`arcadia_tio_ocb_column_array_fixed_binary_width`].
     pub reserved: [u64; 4],
 }
 
@@ -3020,6 +3031,38 @@ unsafe extern "C" {
     /// Initializes an OCB cleanup result.
     #[cfg(feature = "format-ocb")]
     pub fn arcadia_tio_ocb_cleanup_result_init(result: *mut ArcadiaTioOcbCleanupResult);
+    /// Sets fixed-binary width metadata on an OCB write column.
+    #[cfg(feature = "format-ocb")]
+    pub fn arcadia_tio_ocb_write_column_set_fixed_binary_width(
+        column: *mut ArcadiaTioOcbWriteColumn,
+        width: u32,
+    );
+    /// Reads fixed-binary width metadata from an OCB write column.
+    #[cfg(feature = "format-ocb")]
+    pub fn arcadia_tio_ocb_write_column_fixed_binary_width(
+        column: *const ArcadiaTioOcbWriteColumn,
+    ) -> u32;
+    /// Sets fixed-binary width metadata on an OCB fill buffer.
+    #[cfg(feature = "format-ocb")]
+    pub fn arcadia_tio_ocb_column_fill_buffer_set_fixed_binary_width(
+        buffer: *mut ArcadiaTioOcbColumnFillBuffer,
+        width: u32,
+    );
+    /// Reads fixed-binary width metadata from an OCB fill buffer.
+    #[cfg(feature = "format-ocb")]
+    pub fn arcadia_tio_ocb_column_fill_buffer_fixed_binary_width(
+        buffer: *const ArcadiaTioOcbColumnFillBuffer,
+    ) -> u32;
+    /// Reads fixed-binary width metadata from an OCB column descriptor.
+    #[cfg(feature = "format-ocb")]
+    pub fn arcadia_tio_ocb_column_descriptor_fixed_binary_width(
+        column: *const ArcadiaTioOcbColumnDescriptor,
+    ) -> u32;
+    /// Reads fixed-binary width metadata from an OCB read column array.
+    #[cfg(feature = "format-ocb")]
+    pub fn arcadia_tio_ocb_column_array_fixed_binary_width(
+        column: *const ArcadiaTioOcbColumnArray,
+    ) -> u32;
     /// Creates an appendable OCB file.
     #[cfg(feature = "format-ocb")]
     pub fn arcadia_tio_ocb_create(

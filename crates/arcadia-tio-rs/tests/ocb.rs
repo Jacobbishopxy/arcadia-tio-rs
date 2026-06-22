@@ -255,6 +255,140 @@ fn ocb_safe_wrapper_create_append_read_and_cleanup_roundtrip() {
     let _ = fs::remove_file(path);
 }
 
+#[test]
+fn ocb_safe_wrapper_fixed_binary_roundtrip_and_fill() {
+    let path = unique_path("ocb-safe-wrapper-fixed-binary.ocb");
+    let _ = fs::remove_file(&path);
+    let payload: Vec<u8> = (0u8..8).collect();
+
+    ocb::create(&path, &fixed_binary_spec(&[1, 2], payload.clone()))
+        .expect("create fixed-binary OCB");
+    let file = ColumnBundleFile::open(&path).expect("open fixed-binary OCB");
+    let metadata = file.metadata().expect("fixed-binary metadata");
+    assert_eq!(
+        metadata.columns[1].physical_type,
+        PhysicalType::FixedBinary { width: 4 }
+    );
+
+    let outcome = file
+        .read_batches(&ReadRequest {
+            projection: Projection::Names(vec!["payload".to_string()]),
+            ..ReadRequest::default()
+        })
+        .expect("read fixed-binary payload");
+    assert_eq!(
+        outcome.batches[0].columns[0].values,
+        PrimitiveValues::FixedBinary {
+            width: 4,
+            bytes: payload.clone(),
+        }
+    );
+
+    let mut filled = [0u8; 8];
+    let report = file
+        .read_row_group_into(
+            0,
+            &mut [ocb::ColumnFillBufferMut::FixedBinary {
+                name: "payload",
+                width: 4,
+                bytes: &mut filled,
+                validity: None,
+                allow_nulls: false,
+            }],
+            ocb::ReadFillOptions::default(),
+        )
+        .expect("fill fixed-binary payload");
+    assert_eq!(filled, <[u8; 8]>::try_from(payload.as_slice()).unwrap());
+    assert_eq!(report.columns[0].rows_filled, 2);
+
+    let err = file
+        .read_batches(&ReadRequest {
+            projection: Projection::Names(vec!["payload".to_string()]),
+            predicates: vec![RowGroupPredicate {
+                column: "payload".to_string(),
+                lower: Some(ocb::PredicateValue::I32(1)),
+                upper: None,
+            }],
+            ..ReadRequest::default()
+        })
+        .expect_err("fixed-binary predicate rejects");
+    assert!(err.message().contains("fixed-binary"));
+
+    let _ = fs::remove_file(path);
+}
+
+#[test]
+fn ocb_safe_wrapper_rejects_invalid_fixed_binary_writes_before_ffi() {
+    let path = unique_path("ocb-safe-wrapper-bad-fixed-binary.ocb");
+    let _ = fs::remove_file(&path);
+
+    let mut zero_width_schema = fixed_binary_spec(&[1], vec![1, 2, 3, 4]);
+    zero_width_schema.columns[1].physical_type = PhysicalType::FixedBinary { width: 0 };
+    let err = ocb::create(&path, &zero_width_schema).expect_err("zero schema width rejects");
+    assert!(err.message().contains("zero width"));
+
+    let mut width_mismatch = fixed_binary_spec(&[1], vec![1, 2, 3, 4, 5]);
+    if let PrimitiveValues::FixedBinary { width, .. } =
+        &mut width_mismatch.row_groups[0].columns[1].values
+    {
+        *width = 5;
+    }
+    let err = ocb::create(&path, &width_mismatch).expect_err("value/schema width mismatch rejects");
+    assert!(err.message().contains("does not match schema width"));
+
+    let unaligned = fixed_binary_spec(&[1], vec![1, 2, 3]);
+    let err = ocb::create(&path, &unaligned).expect_err("unaligned fixed-binary bytes reject");
+    assert!(err.message().contains("not divisible by width"));
+
+    assert!(!path.exists());
+}
+
+fn fixed_binary_spec(keys: &[i64], payload: Vec<u8>) -> WriteSpec {
+    WriteSpec {
+        columns: vec![
+            WriteColumn {
+                name: "key".to_string(),
+                physical_type: PhysicalType::I64,
+                logical_kind: LogicalKind::Plain,
+                dictionary_id: None,
+                scale: 0,
+                nullable: false,
+            },
+            WriteColumn {
+                name: "payload".to_string(),
+                physical_type: PhysicalType::FixedBinary { width: 4 },
+                logical_kind: LogicalKind::Plain,
+                dictionary_id: None,
+                scale: 0,
+                nullable: false,
+            },
+        ],
+        dictionaries: Vec::new(),
+        row_groups: vec![WriteRowGroup {
+            columns: vec![
+                WriteColumnChunk {
+                    column_id: 0,
+                    values: PrimitiveValues::I64(keys.to_vec()),
+                    validity: None,
+                },
+                WriteColumnChunk {
+                    column_id: 1,
+                    values: PrimitiveValues::FixedBinary {
+                        width: 4,
+                        bytes: payload,
+                    },
+                    validity: None,
+                },
+            ],
+        }],
+        ordering_keys: vec![WriteOrderingKey {
+            column_id: 0,
+            direction: OrderingDirection::Ascending,
+            null_order: NullOrder::NoNulls,
+        }],
+    }
+}
+
 fn write_spec(sequence_key: &[i64], category_code: &[i32], metric: &[f64]) -> WriteSpec {
     assert_eq!(sequence_key.len(), category_code.len());
     assert_eq!(sequence_key.len(), metric.len());
