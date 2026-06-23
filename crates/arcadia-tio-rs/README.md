@@ -46,8 +46,11 @@ bind a handle to one committed snapshot, `open_with_options` when explicit
 full-payload validation is required before reads, and `metadata`,
 `dictionary_values`, and `read_batches` to copy native-owned OCB
 metadata/dictionaries/batches into Rust-owned structs before the C buffers are
-freed. For callers that need scheduling control before payload reads,
-`plan_read` exposes snapshot-local projected column ids and row-group ids;
+freed. `ReadRequest::from_ordering_key_ranges` and
+`with_ordering_key_ranges` build pruning-only predicate requests from generic
+scalar bounds over declared ordering keys. For callers that need scheduling
+control before payload reads, `plan_read` exposes snapshot-local projected
+column ids and row-group ids;
 `read_plan_batches` executes the whole plan, and `read_plan_row_groups` executes
 a duplicate/unknown-id-checked subset in deterministic plan order.
 `read_batches_with_attribution` additionally returns diagnostic-only timing and

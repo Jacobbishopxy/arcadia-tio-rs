@@ -7,9 +7,9 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 
 use arcadia_tio_rs::ocb::{
     self, ColumnBundleFile, DecodedDictionaryValues, DictionaryValueKind, LogicalKind, NullOrder,
-    OpenOptions as OcbOpenOptions, OpenValidation, OrderingDirection, PhysicalType,
-    PrimitiveValues, Projection, ReadRequest, RowGroupPredicate, WriteColumn, WriteColumnChunk,
-    WriteDictionary, WriteOrderingKey, WriteRowGroup, WriteSpec,
+    OpenOptions as OcbOpenOptions, OpenValidation, OrderingDirection, OrderingKeyRange,
+    PhysicalType, PredicateValue, PrimitiveValues, Projection, ReadRequest, RowGroupPredicate,
+    WriteColumn, WriteColumnChunk, WriteDictionary, WriteOrderingKey, WriteRowGroup, WriteSpec,
 };
 
 #[test]
@@ -216,8 +216,8 @@ fn ocb_safe_wrapper_create_append_read_and_cleanup_roundtrip() {
         projection: Projection::Names(vec!["category_code".to_string()]),
         predicates: vec![RowGroupPredicate {
             column: "sequence_key".to_string(),
-            lower: Some(arcadia_tio_rs::ocb::PredicateValue::I64(12)),
-            upper: Some(arcadia_tio_rs::ocb::PredicateValue::I64(13)),
+            lower: Some(PredicateValue::I64(12)),
+            upper: Some(PredicateValue::I64(13)),
         }],
         max_threads: 1,
         ..ReadRequest::default()
@@ -230,6 +230,111 @@ fn ocb_safe_wrapper_create_append_read_and_cleanup_roundtrip() {
     assert_eq!(
         predicate_outcome.batches[0].columns[0].values,
         PrimitiveValues::I32(vec![1, 0])
+    );
+
+    let range_request = ReadRequest::from_ordering_key_ranges(
+        &meta,
+        Projection::Names(vec!["category_code".to_string()]),
+        vec![OrderingKeyRange::between(
+            0,
+            PredicateValue::I64(12),
+            PredicateValue::I64(13),
+        )],
+    )
+    .expect("build ordering-key range request");
+    assert_eq!(range_request.predicates, predicate_request.predicates);
+    let range_outcome = file
+        .read_batches(&range_request)
+        .expect("read ordering-key range request");
+    assert_eq!(range_outcome.batches, predicate_outcome.batches);
+    let inverted_range = ReadRequest::from_ordering_key_ranges(
+        &meta,
+        Projection::All,
+        vec![OrderingKeyRange::between(
+            0,
+            PredicateValue::I64(13),
+            PredicateValue::I64(12),
+        )],
+    )
+    .expect_err("inverted ordering range rejects");
+    assert!(inverted_range.message().contains("lower bound"));
+    let wrong_dtype_range = ReadRequest::from_ordering_key_ranges(
+        &meta,
+        Projection::All,
+        vec![OrderingKeyRange::equal(0, PredicateValue::I32(12))],
+    )
+    .expect_err("dtype-mismatched ordering range rejects");
+    assert!(wrong_dtype_range.message().contains("dtype"));
+    let preserved_options = ReadRequest {
+        projection: Projection::Names(vec!["metric".to_string()]),
+        max_threads: 4,
+        validate_checksums: false,
+        decode_dictionaries: true,
+        ..ReadRequest::default()
+    }
+    .with_ordering_key_ranges(
+        &meta,
+        vec![OrderingKeyRange::equal(0, PredicateValue::I64(12))],
+    )
+    .expect("range helper preserves options");
+    assert_eq!(preserved_options.max_threads, 4);
+    assert!(!preserved_options.validate_checksums);
+    assert!(preserved_options.decode_dictionaries);
+    assert_eq!(
+        preserved_options.projection,
+        Projection::Names(vec!["metric".to_string()])
+    );
+    assert_eq!(preserved_options.predicates.len(), 1);
+    assert!(
+        ReadRequest::from_ordering_key_ranges(&meta, Projection::All, vec![])
+            .expect_err("empty ordering range rejects")
+            .message()
+            .contains("at least one")
+    );
+    assert!(
+        ReadRequest::from_ordering_key_ranges(
+            &meta,
+            Projection::All,
+            vec![
+                OrderingKeyRange::equal(0, PredicateValue::I64(12)),
+                OrderingKeyRange::equal(0, PredicateValue::I64(13)),
+            ],
+        )
+        .expect_err("duplicate ordering range rejects")
+        .message()
+        .contains("duplicate")
+    );
+    assert!(
+        ReadRequest::from_ordering_key_ranges(
+            &meta,
+            Projection::All,
+            vec![OrderingKeyRange::new(0, None, None)],
+        )
+        .expect_err("empty-sided ordering range rejects")
+        .message()
+        .contains("at least one side")
+    );
+    assert!(
+        ReadRequest::from_ordering_key_ranges(
+            &meta,
+            Projection::All,
+            vec![OrderingKeyRange::equal(9, PredicateValue::I64(12))],
+        )
+        .expect_err("unknown ordering key rejects")
+        .message()
+        .contains("unknown ordering key")
+    );
+    let mut fixed_binary_meta = meta.clone();
+    fixed_binary_meta.columns[0].physical_type = PhysicalType::FixedBinary { width: 8 };
+    assert!(
+        ReadRequest::from_ordering_key_ranges(
+            &fixed_binary_meta,
+            Projection::All,
+            vec![OrderingKeyRange::equal(0, PredicateValue::I64(12))],
+        )
+        .expect_err("fixed-binary ordering key rejects")
+        .message()
+        .contains("fixed-binary")
     );
 
     drop(cloned_reader);

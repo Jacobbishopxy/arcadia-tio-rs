@@ -15597,6 +15597,8 @@ fn coordinate_input(
 pub mod ocb {
     use super::{ErrorCode, TioError, path_to_cstring};
     use arcadia_tio_sys as sys;
+    use std::cmp::Ordering as CmpOrdering;
+    use std::collections::BTreeSet;
     use std::ffi::{CStr, CString};
     use std::fmt;
     use std::marker::PhantomData;
@@ -16263,6 +16265,29 @@ pub mod ocb {
     }
 
     impl PredicateValue {
+        fn physical_type(self) -> PhysicalType {
+            match self {
+                Self::I32(_) => PhysicalType::I32,
+                Self::I64(_) => PhysicalType::I64,
+                Self::F32(_) => PhysicalType::F32,
+                Self::F64(_) => PhysicalType::F64,
+            }
+        }
+
+        fn cmp_same_type(self, other: Self) -> OcbResult<CmpOrdering> {
+            match (self, other) {
+                (Self::I32(left), Self::I32(right)) => Ok(left.cmp(&right)),
+                (Self::I64(left), Self::I64(right)) => Ok(left.cmp(&right)),
+                (Self::F32(left), Self::F32(right)) => left.partial_cmp(&right).ok_or_else(|| {
+                    OcbError::invalid_input("OCB f32 predicate/stat value cannot be NaN")
+                }),
+                (Self::F64(left), Self::F64(right)) => left.partial_cmp(&right).ok_or_else(|| {
+                    OcbError::invalid_input("OCB f64 predicate/stat value cannot be NaN")
+                }),
+                _ => Err(OcbError::invalid_input("OCB predicate/stat type mismatch")),
+            }
+        }
+
         fn to_raw(self) -> sys::ArcadiaTioOcbPredicateValue {
             let mut raw = sys::ArcadiaTioOcbPredicateValue {
                 version: sys::ARCADIA_TIO_OCB_ABI_VERSION,
@@ -16307,6 +16332,48 @@ pub mod ocb {
         pub upper: Option<PredicateValue>,
     }
 
+    /// Scalar bounds for one declared OCB ordering-key column.
+    ///
+    /// This is a row-group pruning helper, not a row-level filter or
+    /// lexicographic cursor engine. For composite ordering declarations,
+    /// multiple ranges become ordinary conjunctive predicates and may include
+    /// extra rows that callers should filter outside OCB if exact row-level
+    /// semantics are required.
+    #[derive(Debug, Clone, PartialEq)]
+    pub struct OrderingKeyRange {
+        /// Zero-based index into [`Metadata::ordering_keys`].
+        pub key_index: usize,
+        /// Inclusive scalar lower bound.
+        pub lower: Option<PredicateValue>,
+        /// Inclusive scalar upper bound.
+        pub upper: Option<PredicateValue>,
+    }
+
+    impl OrderingKeyRange {
+        /// Create a range with optional inclusive bounds.
+        pub fn new(
+            key_index: usize,
+            lower: Option<PredicateValue>,
+            upper: Option<PredicateValue>,
+        ) -> Self {
+            Self {
+                key_index,
+                lower,
+                upper,
+            }
+        }
+
+        /// Create a closed inclusive range.
+        pub fn between(key_index: usize, lower: PredicateValue, upper: PredicateValue) -> Self {
+            Self::new(key_index, Some(lower), Some(upper))
+        }
+
+        /// Create an equality range.
+        pub fn equal(key_index: usize, value: PredicateValue) -> Self {
+            Self::new(key_index, Some(value), Some(value))
+        }
+    }
+
     /// OCB read request.
     #[derive(Debug, Clone, PartialEq)]
     pub struct ReadRequest {
@@ -16332,6 +16399,99 @@ pub mod ocb {
                 decode_dictionaries: false,
             }
         }
+    }
+
+    impl ReadRequest {
+        /// Build a read request from inclusive scalar bounds over declared
+        /// ordering-key columns.
+        ///
+        /// The returned request contains ordinary row-group pruning predicates
+        /// and default read options. It does not add row-level filtering or
+        /// lexicographic cursor semantics.
+        pub fn from_ordering_key_ranges(
+            metadata: &Metadata,
+            projection: Projection,
+            ranges: Vec<OrderingKeyRange>,
+        ) -> OcbResult<Self> {
+            Self {
+                projection,
+                ..Self::default()
+            }
+            .with_ordering_key_ranges(metadata, ranges)
+        }
+
+        /// Replace this request's predicates with predicates derived from
+        /// ordering-key ranges while preserving projection and read options.
+        pub fn with_ordering_key_ranges(
+            mut self,
+            metadata: &Metadata,
+            ranges: Vec<OrderingKeyRange>,
+        ) -> OcbResult<Self> {
+            self.predicates = ordering_key_range_predicates(metadata, ranges)?;
+            Ok(self)
+        }
+    }
+
+    fn ordering_key_range_predicates(
+        metadata: &Metadata,
+        ranges: Vec<OrderingKeyRange>,
+    ) -> OcbResult<Vec<RowGroupPredicate>> {
+        if ranges.is_empty() {
+            return Err(OcbError::invalid_input(
+                "OCB ordering range request requires at least one bound",
+            ));
+        }
+        let mut ranges = ranges;
+        ranges.sort_by_key(|range| range.key_index);
+        let mut seen = BTreeSet::new();
+        let mut predicates = Vec::with_capacity(ranges.len());
+        for range in ranges {
+            if !seen.insert(range.key_index) {
+                return Err(OcbError::invalid_input(
+                    "OCB ordering range request contains duplicate key indexes",
+                ));
+            }
+            if range.lower.is_none() && range.upper.is_none() {
+                return Err(OcbError::invalid_input(
+                    "OCB ordering range bound must include at least one side",
+                ));
+            }
+            let key = metadata.ordering_keys.get(range.key_index).ok_or_else(|| {
+                OcbError::invalid_input("OCB ordering range references an unknown ordering key")
+            })?;
+            let column = metadata
+                .columns
+                .iter()
+                .find(|column| column.id == key.column_id)
+                .ok_or_else(|| {
+                    OcbError::invalid_input("OCB ordering key column is missing from metadata")
+                })?;
+            if matches!(column.physical_type, PhysicalType::FixedBinary { .. }) {
+                return Err(OcbError::invalid_input(
+                    "OCB ordering range over fixed-binary columns is not supported",
+                ));
+            }
+            for bound in [range.lower, range.upper].into_iter().flatten() {
+                if bound.physical_type() != column.physical_type {
+                    return Err(OcbError::invalid_input(
+                        "OCB ordering range bound dtype does not match ordering column dtype",
+                    ));
+                }
+            }
+            if let (Some(lower), Some(upper)) = (range.lower, range.upper) {
+                if lower.cmp_same_type(upper)? == CmpOrdering::Greater {
+                    return Err(OcbError::invalid_input(
+                        "OCB ordering range lower bound is greater than upper bound",
+                    ));
+                }
+            }
+            predicates.push(RowGroupPredicate {
+                column: key.column_name.clone(),
+                lower: range.lower,
+                upper: range.upper,
+            });
+        }
+        Ok(predicates)
     }
 
     /// Snapshot-local OCB read plan.
