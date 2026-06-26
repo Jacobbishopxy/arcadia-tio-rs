@@ -16,9 +16,10 @@ crates must not depend on private Rust crates such as `arcadia-tio` or
 
 The `arcadia-tio-ocb-core` crate covers the clean Rust-core OCB reader boundary:
 selected-snapshot open, metadata/dictionary/row-group summaries, read planning,
-projected/predicate reads, explicit plan-local row-group visitors, callback-wall
-attribution, observed max-in-flight reporting, and stable duplicate/unknown
-row-group subset error constants. It does not depend on `arcadia-tio-sys`,
+projected/predicate reads, explicit plan-local row-group visitors,
+reusable-buffer lower-copy visitors, callback-wall attribution, observed
+max-in-flight reporting, and stable duplicate/unknown row-group subset error
+constants. It does not depend on `arcadia-tio-sys`,
 `arcadia-tio-capi`, a native library, or native-link build scripts.
 
 The C-ABI-backed safe wrapper covers the agreed source-visible public Rust beta scope:

@@ -609,6 +609,445 @@ pub enum PrimitiveColumnValues {
     },
 }
 
+/// Borrowed view over primitive values in caller-owned reusable buffers.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum PrimitiveColumnValuesRef<'a> {
+    /// Signed 32-bit integer column values.
+    I32(&'a [i32]),
+    /// Signed 64-bit integer column values.
+    I64(&'a [i64]),
+    /// 32-bit floating-point column values.
+    F32(&'a [f32]),
+    /// 64-bit floating-point column values.
+    F64(&'a [f64]),
+    /// Fixed-width opaque byte values stored contiguously row-major.
+    FixedBinary {
+        /// Number of bytes in each row value.
+        width: u32,
+        /// Contiguous row-major bytes. Length equals row_count * width.
+        bytes: &'a [u8],
+    },
+}
+
+impl PrimitiveColumnValuesRef<'_> {
+    /// Physical type represented by this borrowed value view.
+    pub fn physical_type(&self) -> ColumnPhysicalType {
+        match self {
+            Self::I32(_) => ColumnPhysicalType::I32,
+            Self::I64(_) => ColumnPhysicalType::I64,
+            Self::F32(_) => ColumnPhysicalType::F32,
+            Self::F64(_) => ColumnPhysicalType::F64,
+            Self::FixedBinary { width, .. } => ColumnPhysicalType::FixedBinary { width: *width },
+        }
+    }
+
+    /// Number of logical row values in this view.
+    pub fn len(&self) -> usize {
+        match self {
+            Self::I32(values) => values.len(),
+            Self::I64(values) => values.len(),
+            Self::F32(values) => values.len(),
+            Self::F64(values) => values.len(),
+            Self::FixedBinary { width: 0, .. } => 0,
+            Self::FixedBinary { width, bytes } => bytes.len() / *width as usize,
+        }
+    }
+
+    /// Whether this view contains no row values.
+    pub fn is_empty(&self) -> bool {
+        self.len() == 0
+    }
+}
+
+/// Owned reusable primitive storage for lower-copy visitor reads.
+#[derive(Debug, Clone, PartialEq)]
+pub enum ReusablePrimitiveColumnValues {
+    /// Signed 32-bit integer storage.
+    I32(Vec<i32>),
+    /// Signed 64-bit integer storage.
+    I64(Vec<i64>),
+    /// 32-bit floating-point storage.
+    F32(Vec<f32>),
+    /// 64-bit floating-point storage.
+    F64(Vec<f64>),
+    /// Fixed-width opaque byte storage, contiguous row-major.
+    FixedBinary {
+        /// Number of bytes in each row value.
+        width: u32,
+        /// Reused byte storage. The active prefix is row_count * width.
+        bytes: Vec<u8>,
+    },
+}
+
+impl ReusablePrimitiveColumnValues {
+    /// Create empty reusable storage for one physical type.
+    pub fn new(physical_type: ColumnPhysicalType) -> Self {
+        match physical_type {
+            ColumnPhysicalType::I32 => Self::I32(Vec::new()),
+            ColumnPhysicalType::I64 => Self::I64(Vec::new()),
+            ColumnPhysicalType::F32 => Self::F32(Vec::new()),
+            ColumnPhysicalType::F64 => Self::F64(Vec::new()),
+            ColumnPhysicalType::FixedBinary { width } => Self::FixedBinary {
+                width,
+                bytes: Vec::new(),
+            },
+        }
+    }
+
+    /// Physical type represented by this reusable storage.
+    pub fn physical_type(&self) -> ColumnPhysicalType {
+        match self {
+            Self::I32(_) => ColumnPhysicalType::I32,
+            Self::I64(_) => ColumnPhysicalType::I64,
+            Self::F32(_) => ColumnPhysicalType::F32,
+            Self::F64(_) => ColumnPhysicalType::F64,
+            Self::FixedBinary { width, .. } => ColumnPhysicalType::FixedBinary { width: *width },
+        }
+    }
+
+    fn resize_for_rows(&mut self, row_count: usize) -> Result<()> {
+        match self {
+            Self::I32(values) => values.resize(row_count, 0),
+            Self::I64(values) => values.resize(row_count, 0),
+            Self::F32(values) => values.resize(row_count, 0.0),
+            Self::F64(values) => values.resize(row_count, 0.0),
+            Self::FixedBinary { width: 0, .. } => {
+                return Err(ArcadiaTioError::ocb_invalid_input(
+                    "OCB reusable fixed-binary buffer requires width > 0",
+                ));
+            }
+            Self::FixedBinary { width, bytes } => {
+                let byte_count = row_count.checked_mul(*width as usize).ok_or(
+                    ArcadiaTioError::ocb_invalid_input(
+                        "OCB reusable fixed-binary byte count overflows",
+                    ),
+                )?;
+                bytes.resize(byte_count, 0);
+            }
+        }
+        Ok(())
+    }
+
+    fn as_mut_values(&mut self) -> PrimitiveColumnValuesMut<'_> {
+        match self {
+            Self::I32(values) => PrimitiveColumnValuesMut::I32(values.as_mut_slice()),
+            Self::I64(values) => PrimitiveColumnValuesMut::I64(values.as_mut_slice()),
+            Self::F32(values) => PrimitiveColumnValuesMut::F32(values.as_mut_slice()),
+            Self::F64(values) => PrimitiveColumnValuesMut::F64(values.as_mut_slice()),
+            Self::FixedBinary { width, bytes } => PrimitiveColumnValuesMut::FixedBinary {
+                width: *width,
+                bytes: bytes.as_mut_slice(),
+            },
+        }
+    }
+
+    fn as_ref_values(&self, rows: usize) -> Result<PrimitiveColumnValuesRef<'_>> {
+        match self {
+            Self::I32(values) => values.get(..rows).map(PrimitiveColumnValuesRef::I32).ok_or(
+                ArcadiaTioError::ocb_invalid_input(
+                    "OCB reusable i32 buffer is too small for filled rows",
+                ),
+            ),
+            Self::I64(values) => values.get(..rows).map(PrimitiveColumnValuesRef::I64).ok_or(
+                ArcadiaTioError::ocb_invalid_input(
+                    "OCB reusable i64 buffer is too small for filled rows",
+                ),
+            ),
+            Self::F32(values) => values.get(..rows).map(PrimitiveColumnValuesRef::F32).ok_or(
+                ArcadiaTioError::ocb_invalid_input(
+                    "OCB reusable f32 buffer is too small for filled rows",
+                ),
+            ),
+            Self::F64(values) => values.get(..rows).map(PrimitiveColumnValuesRef::F64).ok_or(
+                ArcadiaTioError::ocb_invalid_input(
+                    "OCB reusable f64 buffer is too small for filled rows",
+                ),
+            ),
+            Self::FixedBinary { width: 0, .. } => Err(ArcadiaTioError::ocb_invalid_input(
+                "OCB reusable fixed-binary buffer requires width > 0",
+            )),
+            Self::FixedBinary { width, bytes } => {
+                let byte_count =
+                    rows.checked_mul(*width as usize)
+                        .ok_or(ArcadiaTioError::ocb_invalid_input(
+                            "OCB reusable fixed-binary byte count overflows",
+                        ))?;
+                let bytes = bytes
+                    .get(..byte_count)
+                    .ok_or(ArcadiaTioError::ocb_invalid_input(
+                        "OCB reusable fixed-binary buffer is too small for filled rows",
+                    ))?;
+                Ok(PrimitiveColumnValuesRef::FixedBinary {
+                    width: *width,
+                    bytes,
+                })
+            }
+        }
+    }
+}
+
+/// Borrowed validity bitmap view into caller-owned reusable buffers.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ValidityBitmapRef<'a> {
+    /// Number of meaningful row-validity bits.
+    pub row_count: u64,
+    /// LSB-first validity bytes; bit value `1` means valid and `0` means null.
+    pub bytes: &'a [u8],
+}
+
+impl ValidityBitmapRef<'_> {
+    pub fn is_valid(&self, row: u64) -> Result<bool> {
+        if row >= self.row_count {
+            return Err(ArcadiaTioError::ocb_invalid_input(
+                "OCB validity bitmap row index is out of bounds",
+            ));
+        }
+        let byte = self
+            .bytes
+            .get((row / 8) as usize)
+            .ok_or(ArcadiaTioError::ocb_invalid_input(
+                "OCB validity bitmap storage is too small for row index",
+            ))?;
+        Ok((byte & (1 << (row % 8))) != 0)
+    }
+}
+
+/// One reusable caller-owned column buffer used by lower-copy visitor reads.
+#[derive(Debug, Clone, PartialEq)]
+pub struct ColumnBundleReusableColumnBuffer {
+    /// Resolved file-local column id.
+    pub column_id: u32,
+    /// UTF-8 column name.
+    pub name: String,
+    /// Physical primitive type of `values`.
+    pub physical_type: ColumnPhysicalType,
+    /// Logical annotation for the decoded values.
+    pub logical_kind: ColumnLogicalKind,
+    /// File-local dictionary id for dictionary-coded columns.
+    pub dictionary_id: Option<u32>,
+    /// Whether the schema allows this column to carry validity bitmaps.
+    pub nullable: bool,
+    /// Reused caller-owned value storage.
+    pub values: ReusablePrimitiveColumnValues,
+    /// Reused caller-owned validity storage. The active prefix is row_count.div_ceil(8).
+    pub validity_bytes: Vec<u8>,
+    /// Whether nullable chunks are accepted for this buffer.
+    pub allow_nulls: bool,
+}
+
+impl ColumnBundleReusableColumnBuffer {
+    fn for_column(column: &BundleColumn, row_capacity: usize, allow_nulls: bool) -> Result<Self> {
+        let mut values = ReusablePrimitiveColumnValues::new(column.physical_type);
+        values.resize_for_rows(row_capacity)?;
+        let validity_capacity = if allow_nulls {
+            row_capacity.div_ceil(8)
+        } else {
+            0
+        };
+        Ok(Self {
+            column_id: column.id,
+            name: column.name.clone(),
+            physical_type: column.physical_type,
+            logical_kind: column.logical_kind,
+            dictionary_id: column.dictionary_id,
+            nullable: column.nullable,
+            values,
+            validity_bytes: vec![0; validity_capacity],
+            allow_nulls,
+        })
+    }
+
+    fn prepare_for_rows(&mut self, row_count: usize) -> Result<()> {
+        self.values.resize_for_rows(row_count)?;
+        if self.allow_nulls {
+            self.validity_bytes.resize(row_count.div_ceil(8), 0);
+        } else {
+            self.validity_bytes.clear();
+        }
+        Ok(())
+    }
+
+    fn as_fill_buffer(&mut self) -> ColumnBundleColumnFillBuffer<'_> {
+        ColumnBundleColumnFillBuffer {
+            column_name: Some(self.name.as_str()),
+            column_id: Some(self.column_id),
+            values: self.values.as_mut_values(),
+            validity_bytes: self
+                .allow_nulls
+                .then_some(self.validity_bytes.as_mut_slice()),
+            allow_nulls: self.allow_nulls,
+        }
+    }
+
+    fn view(
+        &self,
+        report: &ColumnBundleColumnFillReport,
+    ) -> Result<ColumnBundleReusableColumnView<'_>> {
+        if report.column_id != self.column_id {
+            return Err(ArcadiaTioError::ocb_corrupt_file(
+                "OCB reusable column report does not match buffer column",
+            ));
+        }
+        let rows = report.rows_filled;
+        let values = self.values.as_ref_values(rows)?;
+        let validity = if report.validity_filled {
+            let validity_bytes = rows.div_ceil(8);
+            let bytes = self.validity_bytes.get(..validity_bytes).ok_or(
+                ArcadiaTioError::ocb_invalid_input(
+                    "OCB reusable validity buffer is too small for filled rows",
+                ),
+            )?;
+            Some(ValidityBitmapRef {
+                row_count: rows as u64,
+                bytes,
+            })
+        } else {
+            None
+        };
+        Ok(ColumnBundleReusableColumnView {
+            column_id: self.column_id,
+            name: self.name.as_str(),
+            physical_type: self.physical_type,
+            logical_kind: self.logical_kind,
+            dictionary_id: self.dictionary_id,
+            values,
+            validity,
+        })
+    }
+}
+
+/// Reusable caller-owned buffers for one in-flight row-group batch.
+#[derive(Debug, Clone, PartialEq)]
+pub struct ColumnBundleReusableBuffers {
+    /// Projected column buffers in plan projection order.
+    pub columns: Vec<ColumnBundleReusableColumnBuffer>,
+}
+
+impl ColumnBundleReusableBuffers {
+    /// Number of reusable column buffers.
+    pub fn len(&self) -> usize {
+        self.columns.len()
+    }
+
+    /// Whether this reusable batch buffer has no columns.
+    pub fn is_empty(&self) -> bool {
+        self.columns.is_empty()
+    }
+
+    fn for_columns(
+        columns: &[BundleColumn],
+        row_capacity: usize,
+        allow_nulls: bool,
+    ) -> Result<Self> {
+        let columns = columns
+            .iter()
+            .map(|column| {
+                ColumnBundleReusableColumnBuffer::for_column(column, row_capacity, allow_nulls)
+            })
+            .collect::<Result<Vec<_>>>()?;
+        Ok(Self { columns })
+    }
+
+    fn prepare_for_rows(&mut self, row_count: usize) -> Result<()> {
+        for column in &mut self.columns {
+            column.prepare_for_rows(row_count)?;
+        }
+        Ok(())
+    }
+
+    fn fill_buffers(&mut self) -> Vec<ColumnBundleColumnFillBuffer<'_>> {
+        self.columns
+            .iter_mut()
+            .map(ColumnBundleReusableColumnBuffer::as_fill_buffer)
+            .collect()
+    }
+}
+
+/// Caller-owned reusable buffer pool for bounded lower-copy visitor reads.
+#[derive(Debug, Clone, PartialEq)]
+pub struct ColumnBundleReusableBufferPool {
+    /// One reusable batch buffer per possible in-flight row group.
+    pub buffers: Vec<ColumnBundleReusableBuffers>,
+}
+
+impl ColumnBundleReusableBufferPool {
+    /// Number of reusable in-flight batch buffers in this pool.
+    pub fn len(&self) -> usize {
+        self.buffers.len()
+    }
+
+    /// Whether this pool has no reusable batch buffers.
+    pub fn is_empty(&self) -> bool {
+        self.buffers.is_empty()
+    }
+}
+
+/// Borrowed view of one reusable column buffer after a fill read.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct ColumnBundleReusableColumnView<'a> {
+    /// File-local column id.
+    pub column_id: u32,
+    /// UTF-8 column name.
+    pub name: &'a str,
+    /// Physical primitive type of `values`.
+    pub physical_type: ColumnPhysicalType,
+    /// Logical annotation for the decoded values.
+    pub logical_kind: ColumnLogicalKind,
+    /// File-local dictionary id for dictionary-coded columns.
+    pub dictionary_id: Option<u32>,
+    /// Borrowed primitive values valid only for the visitor callback.
+    pub values: PrimitiveColumnValuesRef<'a>,
+    /// Optional LSB-first validity bitmap; `None` means all rows are valid.
+    pub validity: Option<ValidityBitmapRef<'a>>,
+}
+
+/// Borrowed view of one row-group batch in reusable caller-owned buffers.
+pub struct ColumnBundleReusableBatchView<'a> {
+    report: &'a ColumnBundleReadFillReport,
+    buffers: &'a ColumnBundleReusableBuffers,
+}
+
+impl ColumnBundleReusableBatchView<'_> {
+    /// File-local row-group id.
+    pub fn row_group_id(&self) -> u32 {
+        self.report.row_group_id
+    }
+
+    /// Logical starting row for this row group in the selected snapshot.
+    pub fn base_row(&self) -> u64 {
+        self.report.base_row
+    }
+
+    /// Number of rows in this row-group batch.
+    pub fn row_count(&self) -> u64 {
+        self.report.row_count
+    }
+
+    /// Number of projected columns in this view.
+    pub fn column_count(&self) -> usize {
+        self.report.columns.len()
+    }
+
+    /// Borrow one projected column view by projection index.
+    pub fn column(&self, index: usize) -> Result<ColumnBundleReusableColumnView<'_>> {
+        let buffer = self
+            .buffers
+            .columns
+            .get(index)
+            .ok_or(ArcadiaTioError::ocb_invalid_input(
+                "OCB reusable view column index is out of bounds",
+            ))?;
+        let report = self
+            .report
+            .columns
+            .get(index)
+            .ok_or(ArcadiaTioError::ocb_invalid_input(
+                "OCB reusable view column report is missing",
+            ))?;
+        buffer.view(report)
+    }
+}
+
 /// Optional validity bitmap for nullable column chunks.
 ///
 /// `None` on [`ColumnArray::validity`] means every value in the chunk is valid.
@@ -1672,6 +2111,37 @@ impl ColumnBundleFile {
         )
     }
 
+    /// Allocate a reusable caller-owned buffer pool for a planned projection.
+    ///
+    /// The pool contains one slot per requested in-flight row group. Each slot is
+    /// initialized for the plan projection and can be reused by
+    /// [`Self::visit_plan_row_groups_into`] or
+    /// [`Self::visit_plan_row_groups_into_with_attribution`].
+    pub fn reusable_buffer_pool_for_plan(
+        &self,
+        plan: &ColumnBundleReadPlan,
+        max_in_flight_row_groups: usize,
+        allow_nulls: bool,
+    ) -> Result<ColumnBundleReusableBufferPool> {
+        self.validate_read_plan(plan)?;
+        if max_in_flight_row_groups == 0 {
+            return Err(ArcadiaTioError::ocb_invalid_input(
+                "OCB reusable buffer pool requires at least one in-flight row group",
+            ));
+        }
+        let projected_columns = projected_columns_for_plan(&self.columns, plan)?;
+        let row_capacity = max_row_count_for_plan(&self.metadata, plan)?;
+        let mut buffers = Vec::with_capacity(max_in_flight_row_groups);
+        for _ in 0..max_in_flight_row_groups {
+            buffers.push(ColumnBundleReusableBuffers::for_columns(
+                &projected_columns,
+                row_capacity,
+                allow_nulls,
+            )?);
+        }
+        Ok(ColumnBundleReusableBufferPool { buffers })
+    }
+
     /// Visit projected columns as bounded deterministic row-group batches.
     ///
     /// This API yields owned `ColumnBatch` values one at a time to the visitor
@@ -1831,6 +2301,71 @@ impl ColumnBundleFile {
             report,
         };
         self.visit_execution_plan_with_attribution(&execution_plan, cursor_options, 0, visitor)
+    }
+
+    /// Visit an explicit row-group subset into caller-owned reusable buffers.
+    ///
+    /// This lower-copy visitor keeps decoded values in `buffers` and gives the
+    /// callback a borrowed view valid only for the callback duration. The pool
+    /// size, `max_in_flight_row_groups`, and effective thread count bound the
+    /// number of simultaneously materialized row groups.
+    pub fn visit_plan_row_groups_into<F>(
+        &self,
+        plan: &ColumnBundleReadPlan,
+        row_group_ids: &[u32],
+        cursor_options: ColumnBundleReadCursorOptions,
+        buffers: &mut ColumnBundleReusableBufferPool,
+        visitor: F,
+    ) -> Result<ColumnBundleReadCursorReport>
+    where
+        F: FnMut(ColumnBundleReusableBatchView<'_>) -> Result<ColumnBundleVisitControl>,
+    {
+        self.validate_read_plan(plan)?;
+        validate_read_cursor_options(cursor_options)?;
+        let selected_row_group_ids = planned_row_group_subset(plan, row_group_ids)?;
+        validate_reusable_buffer_pool(buffers, plan, &self.columns)?;
+        let report = execution_report_for_plan(plan, selected_row_group_ids.len());
+        let execution_plan = ColumnBundleReadPlan {
+            projected_column_ids: plan.projected_column_ids.clone(),
+            row_group_ids: selected_row_group_ids,
+            report,
+        };
+        self.visit_execution_plan_into(&execution_plan, cursor_options, buffers, visitor)
+    }
+
+    /// Visit an explicit row-group subset into reusable buffers with attribution.
+    ///
+    /// Attribution row-group/chunk/byte counters describe row groups
+    /// materialized by TIO into the reusable pool before completion or `Stop`;
+    /// `cursor_report` describes batches actually yielded to the visitor.
+    pub fn visit_plan_row_groups_into_with_attribution<F>(
+        &self,
+        plan: &ColumnBundleReadPlan,
+        row_group_ids: &[u32],
+        cursor_options: ColumnBundleReadCursorOptions,
+        buffers: &mut ColumnBundleReusableBufferPool,
+        visitor: F,
+    ) -> Result<ColumnBundleReadAttributedCursorReport>
+    where
+        F: FnMut(ColumnBundleReusableBatchView<'_>) -> Result<ColumnBundleVisitControl>,
+    {
+        self.validate_read_plan(plan)?;
+        validate_read_cursor_options(cursor_options)?;
+        let selected_row_group_ids = planned_row_group_subset(plan, row_group_ids)?;
+        validate_reusable_buffer_pool(buffers, plan, &self.columns)?;
+        let report = execution_report_for_plan(plan, selected_row_group_ids.len());
+        let execution_plan = ColumnBundleReadPlan {
+            projected_column_ids: plan.projected_column_ids.clone(),
+            row_group_ids: selected_row_group_ids,
+            report,
+        };
+        self.visit_execution_plan_into_with_attribution(
+            &execution_plan,
+            cursor_options,
+            buffers,
+            0,
+            visitor,
+        )
     }
 
     /// Execute a previously planned read against this selected snapshot.
@@ -2140,6 +2675,234 @@ impl ColumnBundleFile {
                             cursor_report.batches_yielded.saturating_add(1);
                         cursor_report.rows_yielded =
                             cursor_report.rows_yielded.saturating_add(row_count);
+                        cursor_report.cancelled = true;
+                        let attribution = attribution_from_accumulator(
+                            accumulator,
+                            &plan.report,
+                            plan_ns,
+                            duration_to_ns(execute_started.elapsed()),
+                        );
+                        return Ok(ColumnBundleReadAttributedCursorReport {
+                            cursor_report,
+                            attribution,
+                        });
+                    }
+                }
+            }
+        }
+        let attribution = attribution_from_accumulator(
+            accumulator,
+            &plan.report,
+            plan_ns,
+            duration_to_ns(execute_started.elapsed()),
+        );
+        Ok(ColumnBundleReadAttributedCursorReport {
+            cursor_report,
+            attribution,
+        })
+    }
+
+    fn visit_execution_plan_into<F>(
+        &self,
+        plan: &ColumnBundleReadPlan,
+        cursor_options: ColumnBundleReadCursorOptions,
+        buffers: &mut ColumnBundleReusableBufferPool,
+        mut visitor: F,
+    ) -> Result<ColumnBundleReadCursorReport>
+    where
+        F: FnMut(ColumnBundleReusableBatchView<'_>) -> Result<ColumnBundleVisitControl>,
+    {
+        let mut cursor_report = ColumnBundleReadCursorReport {
+            base_report: plan.report.clone(),
+            batches_yielded: 0,
+            rows_yielded: 0,
+            max_in_flight_row_groups_observed: 0,
+            cancelled: false,
+        };
+        if plan.row_group_ids.is_empty() {
+            return Ok(cursor_report);
+        }
+        let wave_size = plan
+            .report
+            .effective_threads
+            .max(1)
+            .min(cursor_options.max_in_flight_row_groups.max(1))
+            .min(buffers.len());
+        for wave in plan.row_group_ids.chunks(wave_size) {
+            let mut reports = Vec::with_capacity(wave.len());
+            thread::scope(|scope| {
+                let mut handles = Vec::with_capacity(wave.len());
+                for (slot, row_group_id) in buffers.buffers[..wave.len()]
+                    .iter_mut()
+                    .zip(wave.iter().copied())
+                {
+                    let path = self.path.as_path();
+                    let metadata = &self.metadata;
+                    let columns = &self.columns;
+                    handles.push(scope.spawn(move || {
+                        read_row_group_into_reusable(path, metadata, columns, row_group_id, slot)
+                    }));
+                }
+                let mut first_error = None;
+                for handle in handles {
+                    match handle.join() {
+                        Ok(Ok(report)) => reports.push(report),
+                        Ok(Err(err)) => {
+                            if first_error.is_none() {
+                                first_error = Some(err);
+                            }
+                        }
+                        Err(_) => {
+                            if first_error.is_none() {
+                                first_error = Some(ArcadiaTioError::Io(std::io::Error::other(
+                                    "OCB reusable read worker panicked",
+                                )));
+                            }
+                        }
+                    }
+                }
+                if let Some(err) = first_error {
+                    return Err(err);
+                }
+                Ok(())
+            })?;
+            cursor_report.max_in_flight_row_groups_observed = cursor_report
+                .max_in_flight_row_groups_observed
+                .max(reports.len());
+            for (slot, report) in buffers.buffers.iter().zip(reports.iter()) {
+                let view = ColumnBundleReusableBatchView {
+                    report,
+                    buffers: slot,
+                };
+                match visitor(view)? {
+                    ColumnBundleVisitControl::Continue => {
+                        cursor_report.batches_yielded =
+                            cursor_report.batches_yielded.saturating_add(1);
+                        cursor_report.rows_yielded =
+                            cursor_report.rows_yielded.saturating_add(report.row_count);
+                    }
+                    ColumnBundleVisitControl::Stop => {
+                        cursor_report.batches_yielded =
+                            cursor_report.batches_yielded.saturating_add(1);
+                        cursor_report.rows_yielded =
+                            cursor_report.rows_yielded.saturating_add(report.row_count);
+                        cursor_report.cancelled = true;
+                        return Ok(cursor_report);
+                    }
+                }
+            }
+        }
+        Ok(cursor_report)
+    }
+
+    fn visit_execution_plan_into_with_attribution<F>(
+        &self,
+        plan: &ColumnBundleReadPlan,
+        cursor_options: ColumnBundleReadCursorOptions,
+        buffers: &mut ColumnBundleReusableBufferPool,
+        plan_ns: u64,
+        mut visitor: F,
+    ) -> Result<ColumnBundleReadAttributedCursorReport>
+    where
+        F: FnMut(ColumnBundleReusableBatchView<'_>) -> Result<ColumnBundleVisitControl>,
+    {
+        let execute_started = Instant::now();
+        let mut accumulator = ReadAttributionAccumulator::default();
+        let mut cursor_report = ColumnBundleReadCursorReport {
+            base_report: plan.report.clone(),
+            batches_yielded: 0,
+            rows_yielded: 0,
+            max_in_flight_row_groups_observed: 0,
+            cancelled: false,
+        };
+        if plan.row_group_ids.is_empty() {
+            let attribution = attribution_from_accumulator(
+                accumulator,
+                &plan.report,
+                plan_ns,
+                duration_to_ns(execute_started.elapsed()),
+            );
+            return Ok(ColumnBundleReadAttributedCursorReport {
+                cursor_report,
+                attribution,
+            });
+        }
+        let wave_size = plan
+            .report
+            .effective_threads
+            .max(1)
+            .min(cursor_options.max_in_flight_row_groups.max(1))
+            .min(buffers.len());
+        for wave in plan.row_group_ids.chunks(wave_size) {
+            let mut reports = Vec::with_capacity(wave.len());
+            thread::scope(|scope| {
+                let mut handles = Vec::with_capacity(wave.len());
+                for (slot, row_group_id) in buffers.buffers[..wave.len()]
+                    .iter_mut()
+                    .zip(wave.iter().copied())
+                {
+                    let path = self.path.as_path();
+                    let metadata = &self.metadata;
+                    let columns = &self.columns;
+                    handles.push(scope.spawn(move || {
+                        read_row_group_into_reusable_with_attribution(
+                            path,
+                            metadata,
+                            columns,
+                            row_group_id,
+                            slot,
+                        )
+                    }));
+                }
+                let mut first_error = None;
+                for handle in handles {
+                    match handle.join() {
+                        Ok(Ok((report, row_attr))) => {
+                            accumulator.add(row_attr);
+                            reports.push(report);
+                        }
+                        Ok(Err(err)) => {
+                            if first_error.is_none() {
+                                first_error = Some(err);
+                            }
+                        }
+                        Err(_) => {
+                            if first_error.is_none() {
+                                first_error = Some(ArcadiaTioError::Io(std::io::Error::other(
+                                    "OCB reusable read worker panicked",
+                                )));
+                            }
+                        }
+                    }
+                }
+                if let Some(err) = first_error {
+                    return Err(err);
+                }
+                Ok(())
+            })?;
+            cursor_report.max_in_flight_row_groups_observed = cursor_report
+                .max_in_flight_row_groups_observed
+                .max(reports.len());
+            for (slot, report) in buffers.buffers.iter().zip(reports.iter()) {
+                let view = ColumnBundleReusableBatchView {
+                    report,
+                    buffers: slot,
+                };
+                let callback_started = Instant::now();
+                let control = visitor(view);
+                accumulator.callback += callback_started.elapsed();
+                match control? {
+                    ColumnBundleVisitControl::Continue => {
+                        cursor_report.batches_yielded =
+                            cursor_report.batches_yielded.saturating_add(1);
+                        cursor_report.rows_yielded =
+                            cursor_report.rows_yielded.saturating_add(report.row_count);
+                    }
+                    ColumnBundleVisitControl::Stop => {
+                        cursor_report.batches_yielded =
+                            cursor_report.batches_yielded.saturating_add(1);
+                        cursor_report.rows_yielded =
+                            cursor_report.rows_yielded.saturating_add(report.row_count);
                         cursor_report.cancelled = true;
                         let attribution = attribution_from_accumulator(
                             accumulator,
@@ -2633,6 +3396,83 @@ fn validate_read_cursor_options(options: ColumnBundleReadCursorOptions) -> Resul
         ));
     }
     Ok(())
+}
+
+fn projected_columns_for_plan(
+    columns: &[BundleColumn],
+    plan: &ColumnBundleReadPlan,
+) -> Result<Vec<BundleColumn>> {
+    plan.projected_column_ids
+        .iter()
+        .map(|column_id| {
+            columns
+                .iter()
+                .find(|column| column.id == *column_id)
+                .cloned()
+                .ok_or(ArcadiaTioError::ocb_corrupt_file(
+                    "OCB selected column not found",
+                ))
+        })
+        .collect()
+}
+
+fn validate_reusable_buffer_pool(
+    pool: &ColumnBundleReusableBufferPool,
+    plan: &ColumnBundleReadPlan,
+    columns: &[BundleColumn],
+) -> Result<()> {
+    if pool.is_empty() {
+        return Err(ArcadiaTioError::ocb_invalid_input(
+            "OCB reusable visitor requires at least one buffer slot",
+        ));
+    }
+    let projected_columns = projected_columns_for_plan(columns, plan)?;
+    if projected_columns.is_empty() {
+        return Err(ArcadiaTioError::ocb_invalid_input(
+            "OCB reusable visitor requires at least one projected column",
+        ));
+    }
+    for slot in &pool.buffers {
+        if slot.columns.len() != projected_columns.len() {
+            return Err(ArcadiaTioError::ocb_invalid_input(
+                "OCB reusable visitor buffer slot does not match plan projection",
+            ));
+        }
+        for (buffer, column) in slot.columns.iter().zip(projected_columns.iter()) {
+            if buffer.column_id != column.id
+                || buffer.name != column.name
+                || buffer.physical_type != column.physical_type
+                || buffer.logical_kind != column.logical_kind
+                || buffer.dictionary_id != column.dictionary_id
+                || buffer.nullable != column.nullable
+                || buffer.values.physical_type() != column.physical_type
+            {
+                return Err(ArcadiaTioError::ocb_invalid_input(
+                    "OCB reusable visitor buffer column does not match plan projection",
+                ));
+            }
+        }
+    }
+    Ok(())
+}
+
+fn max_row_count_for_plan(metadata: &OcbMetadataV1, plan: &ColumnBundleReadPlan) -> Result<usize> {
+    let mut max_rows = 0usize;
+    for row_group_id in &plan.row_group_ids {
+        let row_group = metadata
+            .row_group_index
+            .row_groups
+            .iter()
+            .find(|row_group| row_group.row_group_id == *row_group_id)
+            .ok_or(ArcadiaTioError::ocb_invalid_input(
+                "OCB reusable buffer plan references an unknown row group",
+            ))?;
+        let row_count = usize::try_from(row_group.row_count).map_err(|_| {
+            ArcadiaTioError::ocb_invalid_input("OCB reusable buffer row count does not fit usize")
+        })?;
+        max_rows = max_rows.max(row_count);
+    }
+    Ok(max_rows)
 }
 
 fn validate_read_fill_options(options: ColumnBundleReadFillOptions) -> Result<()> {
@@ -3188,6 +4028,193 @@ fn read_row_group_into(
     })
 }
 
+fn read_row_group_into_reusable(
+    path: &Path,
+    metadata: &OcbMetadataV1,
+    columns: &[BundleColumn],
+    row_group_id: u32,
+    reusable: &mut ColumnBundleReusableBuffers,
+) -> Result<ColumnBundleReadFillReport> {
+    let row_count = row_count_for_row_group(metadata, row_group_id)?;
+    reusable.prepare_for_rows(row_count)?;
+    let mut fill_buffers = reusable.fill_buffers();
+    read_row_group_into(path, metadata, columns, row_group_id, &mut fill_buffers)
+}
+
+fn read_row_group_into_reusable_with_attribution(
+    path: &Path,
+    metadata: &OcbMetadataV1,
+    columns: &[BundleColumn],
+    row_group_id: u32,
+    reusable: &mut ColumnBundleReusableBuffers,
+) -> Result<(ColumnBundleReadFillReport, ReadAttributionAccumulator)> {
+    let row_count = row_count_for_row_group(metadata, row_group_id)?;
+    reusable.prepare_for_rows(row_count)?;
+    let mut fill_buffers = reusable.fill_buffers();
+    read_row_group_into_with_attribution(path, metadata, columns, row_group_id, &mut fill_buffers)
+}
+
+fn row_count_for_row_group(metadata: &OcbMetadataV1, row_group_id: u32) -> Result<usize> {
+    let row_group = metadata
+        .row_group_index
+        .row_groups
+        .iter()
+        .find(|row_group| row_group.row_group_id == row_group_id)
+        .ok_or(ArcadiaTioError::ocb_invalid_input(
+            "OCB reusable read references an unknown row group",
+        ))?;
+    usize::try_from(row_group.row_count).map_err(|_| {
+        ArcadiaTioError::ocb_invalid_input("OCB reusable read row count does not fit usize")
+    })
+}
+
+fn read_row_group_into_with_attribution(
+    path: &Path,
+    metadata: &OcbMetadataV1,
+    columns: &[BundleColumn],
+    row_group_id: u32,
+    buffers: &mut [ColumnBundleColumnFillBuffer<'_>],
+) -> Result<(ColumnBundleReadFillReport, ReadAttributionAccumulator)> {
+    let row_group_started = Instant::now();
+    if buffers.is_empty() {
+        return Err(ArcadiaTioError::ocb_invalid_input(
+            "OCB fill read requires at least one column buffer",
+        ));
+    }
+    let row_group = *metadata
+        .row_group_index
+        .row_groups
+        .iter()
+        .find(|row_group| row_group.row_group_id == row_group_id)
+        .ok_or(ArcadiaTioError::ocb_invalid_input(
+            "OCB fill read references an unknown row group",
+        ))?;
+    let row_count = usize::try_from(row_group.row_count).map_err(|_| {
+        ArcadiaTioError::ocb_invalid_input("OCB fill read row count does not fit usize")
+    })?;
+    let chunks = chunks_for_row_group(
+        metadata,
+        row_group.chunk_desc_begin,
+        row_group.chunk_desc_count,
+    )?;
+    let mut chunk_by_column = BTreeMap::new();
+    for chunk in chunks {
+        if chunk.row_group_id != row_group.row_group_id {
+            return Err(ArcadiaTioError::ocb_corrupt_file(
+                "OCB row-group chunk descriptor references a different row group",
+            ));
+        }
+        if chunk_by_column.insert(chunk.column_id, *chunk).is_some() {
+            return Err(ArcadiaTioError::ocb_corrupt_file(
+                "OCB row group has duplicate chunk descriptors for a column",
+            ));
+        }
+    }
+
+    let by_id = columns
+        .iter()
+        .map(|column| (column.id, column))
+        .collect::<BTreeMap<_, _>>();
+    let by_name = columns
+        .iter()
+        .map(|column| (column.name.as_str(), column))
+        .collect::<BTreeMap<_, _>>();
+    let mut seen_columns = BTreeSet::new();
+    let mut resolved = Vec::with_capacity(buffers.len());
+    for (buffer_index, buffer) in buffers.iter().enumerate() {
+        let Some(column) = resolve_fill_column(buffer, &by_id, &by_name)? else {
+            return Err(ArcadiaTioError::ocb_invalid_input(
+                "OCB fill buffer must identify a column by name or id",
+            ));
+        };
+        if !seen_columns.insert(column.id) {
+            return Err(ArcadiaTioError::ocb_invalid_input(
+                "OCB fill request contains duplicate column buffers",
+            ));
+        }
+        if buffer.values.physical_type() != column.physical_type {
+            return Err(ArcadiaTioError::ocb_invalid_input(
+                "OCB fill buffer dtype does not match column dtype",
+            ));
+        }
+        buffer.values.validate_capacity(row_count)?;
+        let chunk = *chunk_by_column
+            .get(&column.id)
+            .ok_or(ArcadiaTioError::ocb_corrupt_file(
+                "OCB row group is missing a selected column chunk",
+            ))?;
+        if chunk.physical_type != column.physical_type.ocb_physical_type() {
+            return Err(ArcadiaTioError::ocb_corrupt_file(
+                "OCB chunk physical type does not match schema",
+            ));
+        }
+        if chunk.row_count != row_group.row_count {
+            return Err(ArcadiaTioError::ocb_corrupt_file(
+                "OCB chunk row_count does not match row group",
+            ));
+        }
+        if !column.nullable && !chunk.validity_ref.is_null() {
+            return Err(ArcadiaTioError::ocb_corrupt_file(
+                "OCB non-null column chunk cannot have a validity bitmap",
+            ));
+        }
+        if !chunk.validity_ref.is_null() {
+            if !buffer.allow_nulls {
+                return Err(ArcadiaTioError::ocb_invalid_input(
+                    "OCB fill buffer rejected nullable column chunk",
+                ));
+            }
+            let Some(validity_bytes) = buffer.validity_bytes.as_deref() else {
+                return Err(ArcadiaTioError::ocb_invalid_input(
+                    "OCB fill buffer needs validity storage for nullable column chunk",
+                ));
+            };
+            let expected_validity_bytes =
+                usize::try_from(chunk.row_count.div_ceil(8)).map_err(|_| {
+                    ArcadiaTioError::ocb_invalid_input(
+                        "OCB fill validity byte count does not fit usize",
+                    )
+                })?;
+            if validity_bytes.len() < expected_validity_bytes {
+                return Err(ArcadiaTioError::ocb_invalid_input(
+                    "OCB fill buffer validity capacity is too small for row group",
+                ));
+            }
+        }
+        resolved.push(ResolvedColumnFill {
+            buffer_index,
+            column: column.clone(),
+            chunk,
+        });
+    }
+
+    let mut reports = Vec::with_capacity(resolved.len());
+    let mut attribution = ReadAttributionAccumulator::default();
+    for target in resolved {
+        let report = fill_column_buffer_with_attribution(
+            path,
+            metadata,
+            row_count,
+            &target,
+            &mut buffers[target.buffer_index],
+            &mut attribution,
+        )?;
+        reports.push(report);
+    }
+    attribution.row_group_read += row_group_started.elapsed();
+    attribution.row_groups_materialized = 1;
+    attribution.column_chunks_materialized = reports.len();
+    Ok((
+        ColumnBundleReadFillReport {
+            row_group_id: row_group.row_group_id,
+            base_row: row_group.base_row,
+            row_count: row_group.row_count,
+            columns: reports,
+        },
+        attribution,
+    ))
+}
+
 fn resolve_fill_column<'a>(
     buffer: &ColumnBundleColumnFillBuffer<'_>,
     by_id: &BTreeMap<u32, &'a BundleColumn>,
@@ -3229,6 +4256,45 @@ fn fill_column_buffer(
         let validity = read_validity_bitmap(path, metadata, &target.chunk)?.ok_or(
             ArcadiaTioError::ocb_corrupt_file("OCB validity bitmap is missing after validation"),
         )?;
+        let validity_bytes =
+            buffer
+                .validity_bytes
+                .as_deref_mut()
+                .ok_or(ArcadiaTioError::ocb_invalid_input(
+                    "OCB fill buffer needs validity storage",
+                ))?;
+        validity_bytes[..validity.bytes.len()].copy_from_slice(&validity.bytes);
+        validity_filled = true;
+    }
+    Ok(ColumnBundleColumnFillReport {
+        column_id: target.column.id,
+        rows_filled: row_count,
+        validity_filled,
+    })
+}
+
+fn fill_column_buffer_with_attribution(
+    path: &Path,
+    metadata: &OcbMetadataV1,
+    row_count: usize,
+    target: &ResolvedColumnFill,
+    buffer: &mut ColumnBundleColumnFillBuffer<'_>,
+    attribution: &mut ReadAttributionAccumulator,
+) -> Result<ColumnBundleColumnFillReport> {
+    let object = read_column_chunk_attributed(path, metadata.file_len, &target.chunk, attribution)?;
+    let (payload, decompression) =
+        validate_and_decode_chunk_object_attributed(&object, &target.column, &target.chunk)?;
+    attribution.decompression += decompression;
+    let decode_started = Instant::now();
+    fill_primitive_values(&payload, row_count, &mut buffer.values)?;
+    attribution.primitive_decode += decode_started.elapsed();
+    let mut validity_filled = false;
+    if !target.chunk.validity_ref.is_null() {
+        let validity =
+            read_validity_bitmap_with_attribution(path, metadata, &target.chunk, attribution)?
+                .ok_or(ArcadiaTioError::ocb_corrupt_file(
+                    "OCB validity bitmap is missing after validation",
+                ))?;
         let validity_bytes =
             buffer
                 .validity_bytes
@@ -4340,6 +5406,97 @@ mod tests {
         assert!(attributed_visit.attribution.uncompressed_bytes > 0);
         assert_eq!(attributed_visit.attribution.native_to_c_copy_ns, None);
         assert_eq!(attributed_visit.attribution.wrapper_copy_ns, None);
+
+        let mut pool = bundle
+            .reusable_buffer_pool_for_plan(&plan, 2, false)
+            .expect("allocate reusable buffers");
+        let mut reusable_visited = Vec::new();
+        let reusable_report = bundle
+            .visit_plan_row_groups_into(
+                &plan,
+                &[1, 0],
+                ColumnBundleReadCursorOptions {
+                    max_in_flight_row_groups: 2,
+                    ordered: true,
+                },
+                &mut pool,
+                |view| {
+                    reusable_visited.push(view.row_group_id());
+                    assert_eq!(view.column_count(), 2);
+                    let partition = view.column(0)?;
+                    assert_eq!(partition.name, "partition_key");
+                    match partition.values {
+                        PrimitiveColumnValuesRef::I32(values) if view.row_group_id() == 0 => {
+                            assert_eq!(values, &[10, 10, 10]);
+                        }
+                        PrimitiveColumnValuesRef::I32(values) if view.row_group_id() == 1 => {
+                            assert_eq!(values, &[11, 11, 11]);
+                        }
+                        _ => panic!("unexpected reusable partition values"),
+                    }
+                    assert!(partition.validity.is_none());
+                    Ok(ColumnBundleVisitControl::Continue)
+                },
+            )
+            .expect("visit subset into reusable buffers");
+        assert_eq!(reusable_visited, vec![0, 1]);
+        assert_eq!(reusable_report.batches_yielded, 2);
+        assert_eq!(reusable_report.rows_yielded, 6);
+        assert_eq!(reusable_report.max_in_flight_row_groups_observed, 2);
+        assert!(!reusable_report.cancelled);
+
+        let mut mismatched_pool = pool.clone();
+        mismatched_pool.buffers[0].columns[0].column_id = 999;
+        let mismatch_err = bundle
+            .visit_plan_row_groups_into(
+                &plan,
+                &[0],
+                ColumnBundleReadCursorOptions {
+                    max_in_flight_row_groups: 1,
+                    ordered: true,
+                },
+                &mut mismatched_pool,
+                |_| Ok(ColumnBundleVisitControl::Continue),
+            )
+            .expect_err("mismatched reusable buffers are rejected");
+        assert!(
+            mismatch_err
+                .to_string()
+                .contains("buffer column does not match plan projection")
+        );
+
+        let mut pool = bundle
+            .reusable_buffer_pool_for_plan(&plan, 1, false)
+            .expect("allocate attributed reusable buffers");
+        let reusable_attributed = bundle
+            .visit_plan_row_groups_into_with_attribution(
+                &plan,
+                &[1],
+                ColumnBundleReadCursorOptions {
+                    max_in_flight_row_groups: 1,
+                    ordered: true,
+                },
+                &mut pool,
+                |view| {
+                    assert_eq!(view.row_group_id(), 1);
+                    thread::sleep(Duration::from_millis(1));
+                    Ok(ColumnBundleVisitControl::Continue)
+                },
+            )
+            .expect("visit subset into reusable buffers with attribution");
+        assert_eq!(reusable_attributed.cursor_report.batches_yielded, 1);
+        assert_eq!(reusable_attributed.cursor_report.rows_yielded, 3);
+        assert_eq!(
+            reusable_attributed
+                .cursor_report
+                .max_in_flight_row_groups_observed,
+            1
+        );
+        assert_eq!(reusable_attributed.attribution.selected_row_groups, 1);
+        assert_eq!(reusable_attributed.attribution.selected_column_chunks, 2);
+        assert!(reusable_attributed.attribution.callback_wall_ns > 0);
+        assert!(reusable_attributed.attribution.row_group_read_ns > 0);
+        assert!(reusable_attributed.attribution.read_io_ns > 0);
 
         let duplicate = bundle
             .read_plan_row_groups(&plan, &[1, 1])
