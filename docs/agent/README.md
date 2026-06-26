@@ -8,10 +8,28 @@ to the smallest useful reading set for a change.
 
 1. Read `AGENTS.md`.
 2. Read root `README.md` for public-checkout boundaries and native library setup.
-3. Classify the task as safe-wrapper API, raw FFI/sys, examples/tutorials, build/linking, or docs-only.
+3. Classify the task as OCB core reader, safe-wrapper API, raw FFI/sys, examples/tutorials, build/linking, or docs-only.
 4. Read the matching route below before editing.
 
 ## Routes by task type
+
+### C-ABI-free OCB core reader
+
+Read:
+
+- `crates/arcadia-tio-ocb-core/README.md`
+- `crates/arcadia-tio-ocb-core/src/lib.rs`
+- `crates/arcadia-tio-ocb-core/src/column_bundle.rs`
+
+Validate without native-library setup:
+
+```sh
+cargo make test-core-reader
+cargo make test-core-reader-tree
+```
+
+The dependency tree for this crate must not include `arcadia-tio-sys`,
+`arcadia-tio-capi`, native-link build scripts, or native runtime libraries.
 
 ### Safe Rust wrapper API
 
@@ -91,6 +109,7 @@ cargo make ci
 Before finishing any change, confirm:
 
 - No private Rust crate dependency was added.
-- No private implementation source or private evidence was copied into this checkout.
+- `arcadia-tio-ocb-core` remains C-ABI-free and does not depend on `arcadia-tio-sys` or `arcadia-tio-capi`.
+- No private implementation source outside the approved OCB core reader allowlist, and no private evidence, was copied into this checkout.
 - Native libraries, generated `.tio` files, target output, package archives, and release bundles remain untracked unless explicitly approved.
 - README/API caveats still match the exposed behavior.

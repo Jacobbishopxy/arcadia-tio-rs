@@ -26,6 +26,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "arcadia-tio-ocb-core"
+version = "0.1.0"
+dependencies = [
+ "zstd",
+]
+
+[[package]]
 name = "arcadia-tio-rs"
 version = "0.1.0"
 dependencies = [

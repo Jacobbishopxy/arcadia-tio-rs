@@ -1,18 +1,27 @@
 # Arcadia TIO Rust wrappers
 
-This public checkout contains the source-visible Rust wrapper crates for the
-Arcadia TIO C ABI binary library. The private core implementation source is not
-part of this repository, and these crates must not depend on private Rust crates
-such as `arcadia-tio` or `arcadia-tio-capi` through Cargo.
+This public checkout contains source-visible Rust crates for Arcadia TIO: the
+C-ABI-free OCB core reader crate plus C-ABI-backed Rust wrapper crates. Broader
+private core implementation source is not part of this repository, and these
+crates must not depend on private Rust crates such as `arcadia-tio` or
+`arcadia-tio-capi` through Cargo.
 
 ## Layout
 
+- `crates/arcadia-tio-ocb-core/` — source-visible Rust-core OCB reader and bounded visitor APIs with no native C ABI dependency.
 - `crates/arcadia-tio-sys/` — unsafe C ABI declarations and link discovery.
 - `crates/arcadia-tio-rs/` — safe Rust wrapper over `arcadia-tio-sys`.
-- `native/x86_64-unknown-linux-gnu/lib/` — optional local-only native library copy for tests.
+- `native/x86_64-unknown-linux-gnu/lib/` — optional local-only native library copy for C-ABI wrapper tests.
 - `examples/tutorials/run/run_rust.sh` — source-only tutorial runner for local validation.
 
-The safe wrapper covers the agreed source-visible public Rust beta scope:
+The `arcadia-tio-ocb-core` crate covers the clean Rust-core OCB reader boundary:
+selected-snapshot open, metadata/dictionary/row-group summaries, read planning,
+projected/predicate reads, explicit plan-local row-group visitors, callback-wall
+attribution, observed max-in-flight reporting, and stable duplicate/unknown
+row-group subset error constants. It does not depend on `arcadia-tio-sys`,
+`arcadia-tio-capi`, a native library, or native-link build scripts.
+
+The C-ABI-backed safe wrapper covers the agreed source-visible public Rust beta scope:
 create/open metadata, policy and inferred create helpers, inline numeric
 coordinate metadata/lookup/read conveniences, bounded source-visible Coordinate
 v2 create/metadata/value/dictionary/lookup/append wrappers for implemented
@@ -33,18 +42,35 @@ are outside this source export.
 
 ## Production integration checklist
 
-Before using the public Rust wrapper in an application build:
+Before using the C-ABI-backed public Rust wrapper in an application build:
 
 1. Build or obtain the operator-approved `arcadia_tio_capi` native library for the target platform.
 2. Set `ARCADIA_TIO_CAPI_LIB_DIR` for link discovery and configure the platform runtime loader separately (`LD_LIBRARY_PATH`, `DYLD_LIBRARY_PATH`, rpath/install-name, `PATH`, or DLL colocation as appropriate).
 3. Run `cargo make ci` (format, all-feature check, OCB feature smoke, and the default/no-default/optional/all-feature test matrix) plus `bash examples/tutorials/run/run_rust.sh` against that native library. A committed Cargo target runner automatically adds `ARCADIA_TIO_CAPI_LIB_DIR` or `native/x86_64-unknown-linux-gnu/lib` to the runtime loader path for common Linux/macOS `cargo run` and `cargo test` invocations.
 4. Keep generated `.tio` files, native libraries, package archives, and local `native/` copies out of source control unless a separate release task approves them.
 5. Treat Coordinate external references as metadata/status summaries only; this wrapper does not add dereference, variable-length string, broad calendar/session, lookup-acceleration, or release/performance claims.
-6. Treat OCB as one appendable Ordered Column Bundle format; this wrapper does not expose public binary revision names, market-data/domain-specific APIs, or performance/storage/capacity/layout claims.
+6. Treat OCB as one appendable Ordered Column Bundle format; these crates do not expose public binary revision names, market-data/domain-specific APIs, or performance/storage/capacity/layout claims.
+
+For the Rust-core OCB reader-only path, depend on `arcadia-tio-ocb-core`; no native C ABI library, `ARCADIA_TIO_CAPI_LIB_DIR`, or runtime loader configuration is required for that crate.
 
 ## Using from another Rust project
 
-Add the safe wrapper as a path dependency when working from a local checkout:
+For the C-ABI-free Rust-core OCB reader/visitor path, depend directly on the
+core reader crate:
+
+```toml
+[dependencies]
+arcadia-tio-ocb-core = { path = "arcadia-tio-rs/crates/arcadia-tio-ocb-core" }
+```
+
+Or use a git dependency once the desired commit is pushed:
+
+```toml
+[dependencies]
+arcadia-tio-ocb-core = { git = "https://github.com/Jacobbishopxy/arcadia-tio-rs.git", package = "arcadia-tio-ocb-core" }
+```
+
+For the C-ABI-backed safe wrapper, add the wrapper as a path dependency when working from a local checkout:
 
 ```toml
 [dependencies]
@@ -58,7 +84,7 @@ Or use a git dependency once the desired commit is pushed:
 arcadia-tio-rs = { git = "https://github.com/Jacobbishopxy/arcadia-tio-rs.git" }
 ```
 
-Default features are empty. Enable optional public Rust conversion dependencies
+Default wrapper features are empty. Enable optional public Rust conversion dependencies
 only when needed:
 
 ```toml
@@ -123,14 +149,23 @@ fn main() -> arcadia_tio_rs::Result<()> {
 
 ## Local test flow
 
-Supply a locally built native C ABI library, either by setting
-`ARCADIA_TIO_CAPI_LIB_DIR` explicitly or by copying it into the ignored
-`native/x86_64-unknown-linux-gnu/lib/` directory. When using the local native layout on Linux:
+The C-ABI-free core reader can be checked without native libraries:
+
+```sh
+cargo make test-core-reader
+cargo make test-core-reader-tree
+```
+
+For C-ABI-backed wrapper tests, supply a locally built native C ABI library,
+either by setting `ARCADIA_TIO_CAPI_LIB_DIR` explicitly or by copying it into the
+ignored `native/x86_64-unknown-linux-gnu/lib/` directory. When using the local native layout on
+Linux:
 
 ```sh
 export ARCADIA_TIO_CAPI_LIB_DIR="$PWD/native/x86_64-unknown-linux-gnu/lib"
 export LD_LIBRARY_PATH="$ARCADIA_TIO_CAPI_LIB_DIR${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
 cargo make native-info
+cargo make test-core-reader
 cargo make ci
 cargo make test-matrix
 cargo make test-ocb
@@ -154,7 +189,7 @@ The public cargo-make matrix runs `test-default`, explicit `test-no-default`,
 `test-arrow-ndarray`, `test-csv-parquet`, explicit `test-ocb`, and
 `test-all-features`; OCB can also be exercised directly with
 `--features format-ocb`; `ci` runs
-`fmt`, all-feature `check`, and that matrix. The feature-gated tensor
+`fmt`, C-ABI-free `test-core-reader`, all-feature `check`, and that matrix. The feature-gated tensor
 ops/conversions tutorial uses owned tensor ops, typed wrappers, owned Arrow
 RecordBatch/IPC, ndarray, and CSV/Parquet companion conversions with tiny
 deterministic data. These examples are not performance, storage, zero-copy,

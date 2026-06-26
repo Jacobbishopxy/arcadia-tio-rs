@@ -1,0 +1,17 @@
+[package]
+name = "arcadia-tio-ocb-core"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+description = "Source-visible Rust-core reader and bounded visitor APIs for Arcadia Ordered Column Bundle files."
+license.workspace = true
+repository.workspace = true
+homepage.workspace = true
+readme = "README.md"
+
+[lib]
+name = "arcadia_tio_ocb_core"
+path = "src/lib.rs"
+
+[dependencies]
+zstd = { workspace = true }

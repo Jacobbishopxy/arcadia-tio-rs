@@ -1,0 +1,28 @@
+# arcadia-tio-ocb-core
+
+Source-visible Rust-core reader and bounded visitor APIs for Arcadia Ordered
+Column Bundle (OCB) files.
+
+This crate is intended for downstream Rust integrations that need OCB
+selected-snapshot open, metadata inspection, read planning, projected/predicate
+batch reads, explicit row-group visitors, and read attribution without linking
+the native C ABI wrapper path.
+
+It does not provide writer APIs, C/Python bindings, `TensorFile`, market-data or
+L2 semantics, native compact-L2 decode/projection, payload certification
+manifests, native libraries, release artifacts, or performance/storage claims.
+
+## Visitor contract
+
+`ColumnBundleFile::visit_plan_row_groups_with_attribution(...)` validates the
+explicit row-group ids against the supplied plan before payload reads. Unknown
+and duplicate row-group ids fail closed with `ArcadiaTioErrorCode::InvalidArgument`,
+`OcbFailureCause::InvalidInput`, and stable message constants:
+
+- `OCB_READ_PLAN_SUBSET_DUPLICATE_ROW_GROUP_ERROR`
+- `OCB_READ_PLAN_SUBSET_UNKNOWN_ROW_GROUP_ERROR`
+
+Batches are yielded in original plan order, not caller subset order. Decoded
+materialization is bounded by `min(max_in_flight_row_groups, effective_threads)`.
+`callback_wall_ns` and `max_in_flight_row_groups_observed` are available for
+visitor diagnostics.

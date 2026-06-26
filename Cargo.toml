@@ -1,13 +1,18 @@
 [workspace]
 members = [
+    "crates/arcadia-tio-ocb-core",
     "crates/arcadia-tio-sys",
     "crates/arcadia-tio-rs",
 ]
 resolver = "3"
 
 [workspace.package]
+version = "0.1.0"
 edition = "2024"
 rust-version = "1.92"
 license = "MIT"
 repository = "https://github.com/Jacobbishopxy/arcadia-tio-rs"
 homepage = "https://github.com/Jacobbishopxy/arcadia-tio-rs"
+
+[workspace.dependencies]
+zstd = "0.13"

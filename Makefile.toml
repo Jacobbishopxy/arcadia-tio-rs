@@ -16,6 +16,7 @@ echo "Common tasks:"
 echo "  cargo make build              # build all crates with all features"
 echo "  cargo make check              # cargo check all crates with all features"
 echo "  cargo make test               # run all-feature workspace tests with the local native library"
+echo "  cargo make test-core-reader   # run C-ABI-free OCB core reader tests"
 echo "  cargo make test-matrix        # run default/no-default/optional/all-feature wrapper tests"
 echo "  cargo make test-default       # run safe wrapper tests with default features"
 echo "  cargo make test-no-default    # run safe wrapper tests with --no-default-features"
@@ -24,7 +25,7 @@ echo "  cargo make test-csv-parquet   # run safe wrapper tests with csv,parquet"
 echo "  cargo make test-ocb           # run OCB feature tests and examples"
 echo "  cargo make test-all-features  # run safe wrapper tests with --all-features"
 echo "  cargo make fmt                # verify rustfmt"
-echo "  cargo make ci                 # fmt + all-feature check + feature test matrix"
+echo "  cargo make ci                 # fmt + core-reader + all-feature check + feature test matrix"
 echo "  cargo make native-info        # print detected native library path, size, and checksum"
 echo ""
 echo "Native library:"
@@ -149,6 +150,18 @@ ROOT_DIR="${CARGO_MAKE_WORKING_DIRECTORY:-$(pwd)}"
 "$ROOT_DIR/examples/tutorials/run/with_native_lib.sh" cargo test --workspace --all-features
 '''
 
+[tasks.test-core-reader]
+clear = true
+description = "Run C-ABI-free arcadia-tio-ocb-core tests"
+command = "cargo"
+args = ["test", "-p", "arcadia-tio-ocb-core"]
+
+[tasks.test-core-reader-tree]
+clear = true
+description = "Print the C-ABI-free arcadia-tio-ocb-core dependency tree"
+command = "cargo"
+args = ["tree", "-p", "arcadia-tio-ocb-core", "--edges", "normal"]
+
 [tasks.test-default]
 clear = true
 description = "Run arcadia-tio-rs tests with default features"
@@ -223,5 +236,5 @@ command = "cargo"
 args = ["fmt", "--all", "--", "--check"]
 
 [tasks.ci]
-description = "Run fmt, all-feature check, and the feature test matrix"
-dependencies = ["fmt", "check", "test-matrix"]
+description = "Run fmt, core-reader tests, all-feature check, and the feature test matrix"
+dependencies = ["fmt", "test-core-reader", "check", "test-matrix"]
