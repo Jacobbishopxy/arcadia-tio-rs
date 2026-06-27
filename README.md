@@ -158,6 +158,8 @@ The C-ABI-free core reader can be checked without native libraries:
 ```sh
 cargo make test-core-reader
 cargo make test-core-reader-tree
+cargo make test-core-reader-no-cabi
+cargo run -p arcadia-tio-ocb-core --example project_fixed_binary -- <file.ocb> <fixed-binary-column> <record-width>
 ```
 
 For C-ABI-backed wrapper tests, supply a locally built native C ABI library,
@@ -193,7 +195,8 @@ The public cargo-make matrix runs `test-default`, explicit `test-no-default`,
 `test-arrow-ndarray`, `test-csv-parquet`, explicit `test-ocb`, and
 `test-all-features`; OCB can also be exercised directly with
 `--features format-ocb`; `ci` runs
-`fmt`, C-ABI-free `test-core-reader`, all-feature `check`, and that matrix. The feature-gated tensor
+`fmt`, C-ABI-free `test-core-reader`, the no-C-ABI dependency guard,
+all-feature `check`, and that matrix. The feature-gated tensor
 ops/conversions tutorial uses owned tensor ops, typed wrappers, owned Arrow
 RecordBatch/IPC, ndarray, and CSV/Parquet companion conversions with tiny
 deterministic data. These examples are not performance, storage, zero-copy,

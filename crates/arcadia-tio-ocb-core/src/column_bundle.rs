@@ -845,6 +845,23 @@ pub struct FixedBinaryProjectedField {
     pub field_type: FixedBinaryFieldType,
 }
 
+impl FixedBinaryProjectedField {
+    /// Create an unnamed projected field at a byte offset.
+    pub fn new(offset: u32, field_type: FixedBinaryFieldType) -> Self {
+        Self {
+            name: None,
+            offset,
+            field_type,
+        }
+    }
+
+    /// Attach a caller-owned diagnostic/output name to this field.
+    pub fn with_name(mut self, name: impl Into<String>) -> Self {
+        self.name = Some(name.into());
+        self
+    }
+}
+
 /// Generic fixed-binary record projection description.
 ///
 /// The projection names exactly one fixed-binary source column and decodes
@@ -866,6 +883,48 @@ pub struct FixedBinaryRecordProjection {
     pub fields: Vec<FixedBinaryProjectedField>,
 }
 
+impl FixedBinaryRecordProjection {
+    /// Build a projection by source column name.
+    pub fn by_column_name(name: impl Into<String>, expected_width: u32) -> Self {
+        Self {
+            column_id: None,
+            column_name: Some(name.into()),
+            expected_width,
+            allow_nulls: false,
+            fields: Vec::new(),
+        }
+    }
+
+    /// Build a projection by file-local source column id.
+    pub fn by_column_id(column_id: u32, expected_width: u32) -> Self {
+        Self {
+            column_id: Some(column_id),
+            column_name: None,
+            expected_width,
+            allow_nulls: false,
+            fields: Vec::new(),
+        }
+    }
+
+    /// Set whether nullable source chunks are allowed for this projection.
+    pub fn allow_nulls(mut self, allow_nulls: bool) -> Self {
+        self.allow_nulls = allow_nulls;
+        self
+    }
+
+    /// Append one projected field.
+    pub fn field(mut self, field: FixedBinaryProjectedField) -> Self {
+        self.fields.push(field);
+        self
+    }
+
+    /// Replace the projected field list.
+    pub fn fields(mut self, fields: impl Into<Vec<FixedBinaryProjectedField>>) -> Self {
+        self.fields = fields.into();
+        self
+    }
+}
+
 /// Borrowed field values from a reusable fixed-binary projection buffer.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum FixedBinaryFieldValuesRef<'a> {
@@ -885,6 +944,121 @@ pub enum FixedBinaryFieldValuesRef<'a> {
     U64(&'a [u64]),
     /// Signed 64-bit integer values.
     I64(&'a [i64]),
+}
+
+impl<'a> FixedBinaryFieldValuesRef<'a> {
+    /// Little-endian primitive field type represented by this borrowed slice.
+    pub fn field_type(&self) -> FixedBinaryFieldType {
+        match self {
+            Self::U8(_) => FixedBinaryFieldType::U8,
+            Self::I8(_) => FixedBinaryFieldType::I8,
+            Self::U16(_) => FixedBinaryFieldType::U16Le,
+            Self::I16(_) => FixedBinaryFieldType::I16Le,
+            Self::U32(_) => FixedBinaryFieldType::U32Le,
+            Self::I32(_) => FixedBinaryFieldType::I32Le,
+            Self::U64(_) => FixedBinaryFieldType::U64Le,
+            Self::I64(_) => FixedBinaryFieldType::I64Le,
+        }
+    }
+
+    /// Number of decoded values in this field view.
+    pub fn len(&self) -> usize {
+        match self {
+            Self::U8(values) => values.len(),
+            Self::I8(values) => values.len(),
+            Self::U16(values) => values.len(),
+            Self::I16(values) => values.len(),
+            Self::U32(values) => values.len(),
+            Self::I32(values) => values.len(),
+            Self::U64(values) => values.len(),
+            Self::I64(values) => values.len(),
+        }
+    }
+
+    /// Whether this field view has no decoded values.
+    pub fn is_empty(&self) -> bool {
+        self.len() == 0
+    }
+
+    /// Borrow this field as `u8` values, or fail closed on a type mismatch.
+    pub fn as_u8(&self) -> Result<&'a [u8]> {
+        match self {
+            Self::U8(values) => Ok(values),
+            _ => Err(ArcadiaTioError::ocb_invalid_input(
+                "OCB fixed-binary projected field is not u8",
+            )),
+        }
+    }
+
+    /// Borrow this field as `i8` values, or fail closed on a type mismatch.
+    pub fn as_i8(&self) -> Result<&'a [i8]> {
+        match self {
+            Self::I8(values) => Ok(values),
+            _ => Err(ArcadiaTioError::ocb_invalid_input(
+                "OCB fixed-binary projected field is not i8",
+            )),
+        }
+    }
+
+    /// Borrow this field as `u16` values, or fail closed on a type mismatch.
+    pub fn as_u16(&self) -> Result<&'a [u16]> {
+        match self {
+            Self::U16(values) => Ok(values),
+            _ => Err(ArcadiaTioError::ocb_invalid_input(
+                "OCB fixed-binary projected field is not u16",
+            )),
+        }
+    }
+
+    /// Borrow this field as `i16` values, or fail closed on a type mismatch.
+    pub fn as_i16(&self) -> Result<&'a [i16]> {
+        match self {
+            Self::I16(values) => Ok(values),
+            _ => Err(ArcadiaTioError::ocb_invalid_input(
+                "OCB fixed-binary projected field is not i16",
+            )),
+        }
+    }
+
+    /// Borrow this field as `u32` values, or fail closed on a type mismatch.
+    pub fn as_u32(&self) -> Result<&'a [u32]> {
+        match self {
+            Self::U32(values) => Ok(values),
+            _ => Err(ArcadiaTioError::ocb_invalid_input(
+                "OCB fixed-binary projected field is not u32",
+            )),
+        }
+    }
+
+    /// Borrow this field as `i32` values, or fail closed on a type mismatch.
+    pub fn as_i32(&self) -> Result<&'a [i32]> {
+        match self {
+            Self::I32(values) => Ok(values),
+            _ => Err(ArcadiaTioError::ocb_invalid_input(
+                "OCB fixed-binary projected field is not i32",
+            )),
+        }
+    }
+
+    /// Borrow this field as `u64` values, or fail closed on a type mismatch.
+    pub fn as_u64(&self) -> Result<&'a [u64]> {
+        match self {
+            Self::U64(values) => Ok(values),
+            _ => Err(ArcadiaTioError::ocb_invalid_input(
+                "OCB fixed-binary projected field is not u64",
+            )),
+        }
+    }
+
+    /// Borrow this field as `i64` values, or fail closed on a type mismatch.
+    pub fn as_i64(&self) -> Result<&'a [i64]> {
+        match self {
+            Self::I64(values) => Ok(values),
+            _ => Err(ArcadiaTioError::ocb_invalid_input(
+                "OCB fixed-binary projected field is not i64",
+            )),
+        }
+    }
 }
 
 /// Owned reusable storage for one projected fixed-binary field.
@@ -1117,6 +1291,25 @@ impl FixedBinaryProjectedBatchView<'_> {
     /// Number of projected fields.
     pub fn field_count(&self) -> usize {
         self.fields.len()
+    }
+
+    /// Borrow one projected field by its caller-supplied name.
+    pub fn field_by_name(&self, name: &str) -> Result<FixedBinaryProjectedFieldView<'_>> {
+        let mut matched = None;
+        for (index, field) in self.fields.iter().enumerate() {
+            if field.name.as_deref() == Some(name) {
+                if matched.is_some() {
+                    return Err(ArcadiaTioError::ocb_invalid_input(
+                        "OCB fixed-binary projected field name is ambiguous",
+                    ));
+                }
+                matched = Some(index);
+            }
+        }
+        let index = matched.ok_or(ArcadiaTioError::ocb_invalid_input(
+            "OCB fixed-binary projected field name is unknown",
+        ))?;
+        self.field(index)
     }
 
     /// Borrow one projected field by projection index.
@@ -6630,6 +6823,11 @@ mod tests {
         assert_eq!(certification.selected_uncompressed_bytes, 6);
         assert!(certification.selected_compressed_bytes > 0);
         assert_eq!(certification.selected_chunk_fingerprint.len(), 8);
+        let reopened_certification = ColumnBundleFile::open(&path)
+            .expect("reopen certification fixture")
+            .read_plan_certification(&plan)
+            .expect("reopened plan certification");
+        assert_eq!(reopened_certification, certification);
 
         let full_plan = bundle
             .plan_read(&ColumnBundleReadRequest {
@@ -6638,24 +6836,9 @@ mod tests {
                 options: ColumnBundleReadOptions::parallel(2),
             })
             .expect("plan fixed-binary projection read");
-        let projection = FixedBinaryRecordProjection {
-            column_id: None,
-            column_name: Some("payload".to_string()),
-            expected_width: 2,
-            allow_nulls: false,
-            fields: vec![
-                FixedBinaryProjectedField {
-                    name: Some("first".to_string()),
-                    offset: 0,
-                    field_type: FixedBinaryFieldType::U8,
-                },
-                FixedBinaryProjectedField {
-                    name: Some("second".to_string()),
-                    offset: 1,
-                    field_type: FixedBinaryFieldType::U8,
-                },
-            ],
-        };
+        let projection = FixedBinaryRecordProjection::by_column_name("payload", 2)
+            .field(FixedBinaryProjectedField::new(0, FixedBinaryFieldType::U8).with_name("first"))
+            .field(FixedBinaryProjectedField::new(1, FixedBinaryFieldType::U8).with_name("second"));
         let mut reusable = bundle
             .reusable_buffer_pool_for_plan(&full_plan, 2, false)
             .expect("reusable pool");
@@ -6676,17 +6859,14 @@ mod tests {
                 &mut projection_buffer,
                 |batch, projected| {
                     assert_eq!(batch.row_count(), projected.row_count);
-                    let first = projected.field(0)?;
+                    let first = projected.field_by_name("first")?;
                     let second = projected.field(1)?;
-                    match (first.values, second.values) {
-                        (
-                            FixedBinaryFieldValuesRef::U8(first),
-                            FixedBinaryFieldValuesRef::U8(second),
-                        ) => {
-                            visited.push((projected.row_group_id, first.to_vec(), second.to_vec()));
-                        }
-                        _ => panic!("unexpected fixed-binary projection field types"),
-                    }
+                    assert_eq!(first.values.field_type(), FixedBinaryFieldType::U8);
+                    visited.push((
+                        projected.row_group_id,
+                        first.values.as_u8()?.to_vec(),
+                        second.values.as_u8()?.to_vec(),
+                    ));
                     Ok(ColumnBundleVisitControl::Continue)
                 },
             )
@@ -6699,6 +6879,69 @@ mod tests {
         assert_eq!(projected.cursor_report.max_in_flight_row_groups_observed, 2);
         assert_eq!(projected.attribution.selected_row_groups, 2);
         let _fixed_payload_decode_ns = projected.attribution.fixed_payload_decode_ns;
+        let _copy_materialization_ns = projected.attribution.copy_materialization_ns;
+
+        let missing_source_plan = bundle
+            .plan_read(&ColumnBundleReadRequest {
+                projection: ColumnProjection::names(["partition_key"]),
+                predicates: Vec::new(),
+                options: ColumnBundleReadOptions::serial(),
+            })
+            .expect("plan without fixed-binary source");
+        let missing_source_err = bundle
+            .fixed_binary_projection_buffer_for_plan(&missing_source_plan, &projection)
+            .expect_err("fixed-binary source must be part of the plan projection");
+        assert!(
+            missing_source_err
+                .to_string()
+                .contains("not in the read plan")
+        );
+
+        let wrong_width = FixedBinaryRecordProjection::by_column_name("payload", 3)
+            .field(FixedBinaryProjectedField::new(0, FixedBinaryFieldType::U8));
+        let wrong_width_err = bundle
+            .fixed_binary_projection_buffer_for_plan(&full_plan, &wrong_width)
+            .expect_err("wrong fixed-binary width rejected");
+        assert!(wrong_width_err.to_string().contains("expected_width"));
+
+        let field_overrun = FixedBinaryRecordProjection::by_column_name("payload", 2).field(
+            FixedBinaryProjectedField::new(1, FixedBinaryFieldType::U16Le),
+        );
+        let field_overrun_err = bundle
+            .fixed_binary_projection_buffer_for_plan(&full_plan, &field_overrun)
+            .expect_err("field overrun rejected before payload reads");
+        assert!(
+            field_overrun_err
+                .to_string()
+                .contains("extends past record width")
+        );
+
+        let mut bad_projection_buffer = projection_buffer.clone();
+        bad_projection_buffer.fields[0].offset = 99;
+        let mut bad_reusable = bundle
+            .reusable_buffer_pool_for_plan(&full_plan, 1, false)
+            .expect("bad reusable pool");
+        let mut callbacks = 0usize;
+        let bad_buffer_err = bundle
+            .visit_plan_row_groups_project_fixed_binary_with_attribution(
+                &full_plan,
+                &[0],
+                ColumnBundleReadCursorOptions::default(),
+                &mut bad_reusable,
+                &projection,
+                &mut bad_projection_buffer,
+                |_, _| {
+                    callbacks = callbacks.saturating_add(1);
+                    Ok(ColumnBundleVisitControl::Continue)
+                },
+            )
+            .expect_err("mismatched projected-field buffer rejected before callbacks");
+        assert_eq!(callbacks, 0);
+        assert!(
+            bad_buffer_err
+                .to_string()
+                .contains("buffer field does not match")
+        );
 
         cleanup(&path);
     }

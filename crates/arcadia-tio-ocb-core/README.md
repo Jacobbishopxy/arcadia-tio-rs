@@ -40,15 +40,29 @@ callback duration and are overwritten when the pool slot is reused.
 For packed fixed-width binary columns, `PrimitiveColumnValuesRef::fixed_binary_records`
 and `FixedBinaryRecordView::{project_fields, project_fields_with_report}` can
 decode little-endian primitive fields at caller-supplied byte offsets into
-caller-owned buffers with optional projection-wall attribution. For the bounded
-visitor path, `fixed_binary_projection_buffer_for_plan(...)` plus
+caller-owned buffers with optional projection-wall attribution. Builder helpers on
+`FixedBinaryRecordProjection` and `FixedBinaryProjectedField` keep caller layouts
+concise, and `FixedBinaryProjectedBatchView::field_by_name(...)` plus
+`FixedBinaryFieldValuesRef::as_*()` provide fail-closed typed extraction. For the
+bounded visitor path, `fixed_binary_projection_buffer_for_plan(...)` plus
 `visit_plan_row_groups_project_fixed_binary_with_attribution(...)` performs the
 same generic projection inside TIO before the callback and reports
-`fixed_payload_decode_ns`. These helpers do not add channel, BizIndex,
-fixed-ingress, order-book, replay, or market-data semantics to OCB.
+`fixed_payload_decode_ns`. The example
+`cargo run -p arcadia-tio-ocb-core --example project_fixed_binary -- <file> <column> <width>`
+shows this flow. These helpers do not add channel, BizIndex, fixed-ingress,
+order-book, replay, or market-data semantics to OCB.
 
 For fail-closed payload-only gates, `snapshot_fingerprint()` and
 `read_plan_certification(...)` expose deterministic generic metadata
 fingerprints, projected row-group/chunk summaries, selected payload byte totals,
-and selected chunk checksum fingerprints. These are certification substrates,
-not cryptographic file digests or application-semantic guarantees.
+and selected chunk checksum fingerprints. A downstream gate should persist and
+compare the snapshot `combined` fingerprint, the plan's row-group ids, selected
+row-group/chunk summaries, selected byte totals, and `selected_chunk_fingerprint`
+before enabling payload-only reads. These are certification substrates, not
+cryptographic file digests or application-semantic guarantees.
+
+Attribution fields distinguish summed TIO worker time from callback/handoff time:
+`primitive_decode_ns` covers typed primitive decode, `copy_materialization_ns`
+covers fixed-binary byte materialization into caller buffers,
+`fixed_payload_decode_ns` covers generic fixed-binary field projection, and
+`callback_wall_ns` covers time spent inside the caller visitor.

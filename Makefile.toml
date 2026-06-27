@@ -17,6 +17,7 @@ echo "  cargo make build              # build all crates with all features"
 echo "  cargo make check              # cargo check all crates with all features"
 echo "  cargo make test               # run all-feature workspace tests with the local native library"
 echo "  cargo make test-core-reader   # run C-ABI-free OCB core reader tests"
+echo "  cargo make test-core-reader-no-cabi # assert core reader has no C ABI dependency edge"
 echo "  cargo make test-matrix        # run default/no-default/optional/all-feature wrapper tests"
 echo "  cargo make test-default       # run safe wrapper tests with default features"
 echo "  cargo make test-no-default    # run safe wrapper tests with --no-default-features"
@@ -25,7 +26,7 @@ echo "  cargo make test-csv-parquet   # run safe wrapper tests with csv,parquet"
 echo "  cargo make test-ocb           # run OCB feature tests and examples"
 echo "  cargo make test-all-features  # run safe wrapper tests with --all-features"
 echo "  cargo make fmt                # verify rustfmt"
-echo "  cargo make ci                 # fmt + core-reader + all-feature check + feature test matrix"
+echo "  cargo make ci                 # fmt + core-reader + no-C-ABI guard + feature test matrix"
 echo "  cargo make native-info        # print detected native library path, size, and checksum"
 echo ""
 echo "Native library:"
@@ -162,6 +163,27 @@ description = "Print the C-ABI-free arcadia-tio-ocb-core dependency tree"
 command = "cargo"
 args = ["tree", "-p", "arcadia-tio-ocb-core", "--edges", "normal"]
 
+
+[tasks.test-core-reader-no-cabi]
+clear = true
+description = "Assert arcadia-tio-ocb-core does not depend on C ABI wrapper crates"
+script_runner = "@shell"
+script = '''
+set -e
+TREE="$(cargo tree -p arcadia-tio-ocb-core --edges normal)"
+printf '%s\n' "$TREE"
+for forbidden in arcadia-tio-rs arcadia-tio-sys arcadia-tio-capi; do
+  if printf '%s\n' "$TREE" | grep -q "${forbidden} v"; then
+    echo "forbidden dependency edge found in arcadia-tio-ocb-core tree: $forbidden" >&2
+    exit 1
+  fi
+done
+if ! printf '%s\n' "$TREE" | grep -q "zstd v"; then
+  echo "expected zstd dependency tail missing from arcadia-tio-ocb-core tree" >&2
+  exit 1
+fi
+'''
+
 [tasks.test-default]
 clear = true
 description = "Run arcadia-tio-rs tests with default features"
@@ -236,5 +258,5 @@ command = "cargo"
 args = ["fmt", "--all", "--", "--check"]
 
 [tasks.ci]
-description = "Run fmt, core-reader tests, all-feature check, and the feature test matrix"
-dependencies = ["fmt", "test-core-reader", "check", "test-matrix"]
+description = "Run fmt, core-reader tests, no-C-ABI guard, all-feature check, and the feature test matrix"
+dependencies = ["fmt", "test-core-reader", "test-core-reader-no-cabi", "check", "test-matrix"]
