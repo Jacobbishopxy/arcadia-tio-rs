@@ -18,7 +18,7 @@ use crate::format::{
     OcbChunkCodecV1, OcbColumnChunkDescV1, OcbColumnChunkObjectV1, OcbColumnStatsV1,
     OcbDictionaryValueKindV1, OcbDictionaryValuesV1, OcbLogicalKindV1, OcbNullOrderV1,
     OcbNullabilityV1, OcbOrderingDirectionV1, OcbPhysicalTypeV1, OcbRowGroupDescV1,
-    OcbStatScalarV1,
+    OcbStatScalarV1, crc32c,
 };
 use crate::read::{
     OcbMetadataV1, OcbOpenValidationMode, OcbReadObjectAttribution, read_column_chunk,
@@ -589,6 +589,61 @@ pub struct ColumnBundleMetadata {
     pub ordering_keys: Vec<BundleOrderingKey>,
 }
 
+/// Deterministic generic fingerprint algorithm for OCB certification summaries.
+pub const OCB_CERTIFICATION_FINGERPRINT_ALGORITHM: &str = "ocb.generic.crc32c.v1";
+
+/// Deterministic generic fingerprint over selected-snapshot OCB declarations.
+///
+/// This is a compatibility/certification aid, not a cryptographic file digest.
+/// It normalizes public metadata and row-group/chunk descriptor summaries into
+/// CRC32C hex strings without reading column payload bytes.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ColumnBundleSnapshotFingerprint {
+    /// Fingerprint algorithm label.
+    pub algorithm: &'static str,
+    /// Fingerprint over schema column declarations.
+    pub schema: String,
+    /// Fingerprint over dictionary declarations.
+    pub dictionaries: String,
+    /// Fingerprint over ordering declarations.
+    pub ordering: String,
+    /// Fingerprint over row-group/chunk/stat descriptor metadata.
+    pub row_groups: String,
+    /// Combined fingerprint over all components above.
+    pub combined: String,
+}
+
+/// Generic certification metadata for one read plan.
+///
+/// The summary is read-only metadata for fail-closed downstream gates. It does
+/// not certify application semantics, row-level filtering, payload equivalence,
+/// or production/default runtime readiness by itself.
+#[derive(Debug, Clone, PartialEq)]
+pub struct ColumnBundleReadPlanCertification {
+    /// Selected-snapshot declaration fingerprint.
+    pub snapshot_fingerprint: ColumnBundleSnapshotFingerprint,
+    /// OCB file length observed for the selected snapshot.
+    pub file_len: u64,
+    /// Selected root generation.
+    pub root_generation: u64,
+    /// Previous root generation, if any.
+    pub previous_root_generation: Option<u64>,
+    /// Total selected-snapshot row count.
+    pub row_count: u64,
+    /// Total selected-snapshot row-group count.
+    pub row_group_count: u32,
+    /// Plan report for the certified selected row groups/projection.
+    pub report: ColumnBundleReadReport,
+    /// Plan-order row-group summaries restricted to the plan projection.
+    pub row_groups: Vec<ColumnBundleRowGroupSummary>,
+    /// Sum of selected projected chunk compressed payload bytes.
+    pub selected_compressed_bytes: u64,
+    /// Sum of selected projected chunk uncompressed payload bytes.
+    pub selected_uncompressed_bytes: u64,
+    /// Fingerprint over selected projected chunk body refs and checksums.
+    pub selected_chunk_fingerprint: String,
+}
+
 /// Values for one decoded uncompressed column chunk.
 #[derive(Debug, Clone, PartialEq)]
 pub enum PrimitiveColumnValues {
@@ -629,7 +684,7 @@ pub enum PrimitiveColumnValuesRef<'a> {
     },
 }
 
-impl PrimitiveColumnValuesRef<'_> {
+impl<'a> PrimitiveColumnValuesRef<'a> {
     /// Physical type represented by this borrowed value view.
     pub fn physical_type(&self) -> ColumnPhysicalType {
         match self {
@@ -657,6 +712,325 @@ impl PrimitiveColumnValuesRef<'_> {
     pub fn is_empty(&self) -> bool {
         self.len() == 0
     }
+
+    /// Interpret this borrowed value view as fixed-width binary records.
+    pub fn fixed_binary_records(self) -> Result<FixedBinaryRecordView<'a>> {
+        match self {
+            Self::FixedBinary { width, bytes } => FixedBinaryRecordView::new(width, bytes),
+            _ => Err(ArcadiaTioError::ocb_invalid_input(
+                "OCB fixed-binary record projection requires a fixed-binary column",
+            )),
+        }
+    }
+}
+
+/// Little-endian primitive field type for generic fixed-binary record projection.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum FixedBinaryFieldType {
+    /// Unsigned 8-bit integer field.
+    U8,
+    /// Signed 8-bit integer field.
+    I8,
+    /// Unsigned 16-bit little-endian integer field.
+    U16Le,
+    /// Signed 16-bit little-endian integer field.
+    I16Le,
+    /// Unsigned 32-bit little-endian integer field.
+    U32Le,
+    /// Signed 32-bit little-endian integer field.
+    I32Le,
+    /// Unsigned 64-bit little-endian integer field.
+    U64Le,
+    /// Signed 64-bit little-endian integer field.
+    I64Le,
+}
+
+impl FixedBinaryFieldType {
+    /// Width of this field in bytes.
+    pub const fn byte_width(self) -> usize {
+        match self {
+            Self::U8 | Self::I8 => 1,
+            Self::U16Le | Self::I16Le => 2,
+            Self::U32Le | Self::I32Le => 4,
+            Self::U64Le | Self::I64Le => 8,
+        }
+    }
+}
+
+/// Caller-owned output buffers for fixed-binary record field projection.
+#[derive(Debug)]
+pub enum FixedBinaryFieldValuesMut<'a> {
+    /// Unsigned 8-bit integer output values.
+    U8(&'a mut [u8]),
+    /// Signed 8-bit integer output values.
+    I8(&'a mut [i8]),
+    /// Unsigned 16-bit integer output values.
+    U16(&'a mut [u16]),
+    /// Signed 16-bit integer output values.
+    I16(&'a mut [i16]),
+    /// Unsigned 32-bit integer output values.
+    U32(&'a mut [u32]),
+    /// Signed 32-bit integer output values.
+    I32(&'a mut [i32]),
+    /// Unsigned 64-bit integer output values.
+    U64(&'a mut [u64]),
+    /// Signed 64-bit integer output values.
+    I64(&'a mut [i64]),
+}
+
+impl FixedBinaryFieldValuesMut<'_> {
+    /// Field type represented by this output buffer.
+    pub fn field_type(&self) -> FixedBinaryFieldType {
+        match self {
+            Self::U8(_) => FixedBinaryFieldType::U8,
+            Self::I8(_) => FixedBinaryFieldType::I8,
+            Self::U16(_) => FixedBinaryFieldType::U16Le,
+            Self::I16(_) => FixedBinaryFieldType::I16Le,
+            Self::U32(_) => FixedBinaryFieldType::U32Le,
+            Self::I32(_) => FixedBinaryFieldType::I32Le,
+            Self::U64(_) => FixedBinaryFieldType::U64Le,
+            Self::I64(_) => FixedBinaryFieldType::I64Le,
+        }
+    }
+
+    /// Number of output values available in this buffer.
+    pub fn len(&self) -> usize {
+        match self {
+            Self::U8(values) => values.len(),
+            Self::I8(values) => values.len(),
+            Self::U16(values) => values.len(),
+            Self::I16(values) => values.len(),
+            Self::U32(values) => values.len(),
+            Self::I32(values) => values.len(),
+            Self::U64(values) => values.len(),
+            Self::I64(values) => values.len(),
+        }
+    }
+
+    /// Whether this output buffer has no values.
+    pub fn is_empty(&self) -> bool {
+        self.len() == 0
+    }
+}
+
+/// One fixed-binary field projection into caller-owned output storage.
+#[derive(Debug)]
+pub struct FixedBinaryFieldProjectionMut<'a> {
+    /// Byte offset of the field inside each fixed-width record.
+    pub offset: u32,
+    /// Caller-owned output storage. The active prefix after projection is the
+    /// projected record count returned by [`FixedBinaryRecordView::project_fields`].
+    pub values: FixedBinaryFieldValuesMut<'a>,
+}
+
+/// Diagnostic report for generic fixed-binary field projection.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct FixedBinaryProjectionReport {
+    /// Number of records projected.
+    pub rows_projected: usize,
+    /// Number of field projections completed.
+    pub fields_projected: usize,
+    /// Wall-clock nanoseconds spent in the projection helper.
+    pub projection_wall_ns: u64,
+}
+
+/// Borrowed fixed-width record view over one fixed-binary column.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct FixedBinaryRecordView<'a> {
+    /// Fixed byte width of each logical record.
+    pub width: u32,
+    /// Contiguous row-major record bytes. Length is `len() * width`.
+    pub bytes: &'a [u8],
+}
+
+impl<'a> FixedBinaryRecordView<'a> {
+    /// Create a fixed-width record view, failing closed on zero width or
+    /// unaligned byte length.
+    pub fn new(width: u32, bytes: &'a [u8]) -> Result<Self> {
+        let width_usize = usize::try_from(width).map_err(|_| {
+            ArcadiaTioError::ocb_invalid_input("OCB fixed-binary record width does not fit usize")
+        })?;
+        if width_usize == 0 {
+            return Err(ArcadiaTioError::ocb_invalid_input(
+                "OCB fixed-binary record width must be greater than zero",
+            ));
+        }
+        if !bytes.len().is_multiple_of(width_usize) {
+            return Err(ArcadiaTioError::ocb_invalid_input(
+                "OCB fixed-binary record bytes are not aligned to record width",
+            ));
+        }
+        Ok(Self { width, bytes })
+    }
+
+    /// Number of fixed-width records in this view.
+    pub fn len(&self) -> usize {
+        self.bytes.len() / self.width as usize
+    }
+
+    /// Whether this view has no records.
+    pub fn is_empty(&self) -> bool {
+        self.bytes.is_empty()
+    }
+
+    /// Borrow one record by row index.
+    pub fn row(&self, row: usize) -> Result<&'a [u8]> {
+        let width = self.width as usize;
+        let start = row
+            .checked_mul(width)
+            .ok_or(ArcadiaTioError::ocb_invalid_input(
+                "OCB fixed-binary row offset overflows",
+            ))?;
+        let end = start
+            .checked_add(width)
+            .ok_or(ArcadiaTioError::ocb_invalid_input(
+                "OCB fixed-binary row end offset overflows",
+            ))?;
+        self.bytes
+            .get(start..end)
+            .ok_or(ArcadiaTioError::ocb_invalid_input(
+                "OCB fixed-binary row index is out of bounds",
+            ))
+    }
+
+    /// Project little-endian fields from every record into caller-owned typed
+    /// output buffers.
+    ///
+    /// This is a generic fixed-width binary helper: it knows only byte offsets
+    /// and primitive little-endian field widths. It does not add market-data,
+    /// channel, BizIndex, replay, or fixed-ingress semantics to OCB.
+    pub fn project_fields(
+        &self,
+        fields: &mut [FixedBinaryFieldProjectionMut<'_>],
+    ) -> Result<usize> {
+        self.project_fields_inner(fields)
+    }
+
+    /// Project little-endian fields and return a small projection attribution report.
+    pub fn project_fields_with_report(
+        &self,
+        fields: &mut [FixedBinaryFieldProjectionMut<'_>],
+    ) -> Result<FixedBinaryProjectionReport> {
+        let started = Instant::now();
+        let fields_projected = fields.len();
+        let rows_projected = self.project_fields_inner(fields)?;
+        Ok(FixedBinaryProjectionReport {
+            rows_projected,
+            fields_projected,
+            projection_wall_ns: duration_to_ns(started.elapsed()),
+        })
+    }
+
+    fn project_fields_inner(
+        &self,
+        fields: &mut [FixedBinaryFieldProjectionMut<'_>],
+    ) -> Result<usize> {
+        let rows = self.len();
+        let width = self.width as usize;
+        for field in fields {
+            let field_type = field.values.field_type();
+            let offset = usize::try_from(field.offset).map_err(|_| {
+                ArcadiaTioError::ocb_invalid_input(
+                    "OCB fixed-binary field offset does not fit usize",
+                )
+            })?;
+            let end = offset.checked_add(field_type.byte_width()).ok_or(
+                ArcadiaTioError::ocb_invalid_input("OCB fixed-binary field end offset overflows"),
+            )?;
+            if end > width {
+                return Err(ArcadiaTioError::ocb_invalid_input(
+                    "OCB fixed-binary field extends past record width",
+                ));
+            }
+            if field.values.len() < rows {
+                return Err(ArcadiaTioError::ocb_invalid_input(
+                    "OCB fixed-binary field output buffer is too small",
+                ));
+            }
+            project_fixed_binary_field(self.bytes, width, offset, rows, &mut field.values)?;
+        }
+        Ok(rows)
+    }
+}
+
+fn project_fixed_binary_field(
+    bytes: &[u8],
+    width: usize,
+    offset: usize,
+    rows: usize,
+    values: &mut FixedBinaryFieldValuesMut<'_>,
+) -> Result<()> {
+    match values {
+        FixedBinaryFieldValuesMut::U8(out) => {
+            for (dst, row) in out[..rows].iter_mut().zip(bytes.chunks_exact(width)) {
+                *dst = row[offset];
+            }
+        }
+        FixedBinaryFieldValuesMut::I8(out) => {
+            for (dst, row) in out[..rows].iter_mut().zip(bytes.chunks_exact(width)) {
+                *dst = i8::from_le_bytes([row[offset]]);
+            }
+        }
+        FixedBinaryFieldValuesMut::U16(out) => {
+            for (dst, row) in out[..rows].iter_mut().zip(bytes.chunks_exact(width)) {
+                *dst = u16::from_le_bytes([row[offset], row[offset + 1]]);
+            }
+        }
+        FixedBinaryFieldValuesMut::I16(out) => {
+            for (dst, row) in out[..rows].iter_mut().zip(bytes.chunks_exact(width)) {
+                *dst = i16::from_le_bytes([row[offset], row[offset + 1]]);
+            }
+        }
+        FixedBinaryFieldValuesMut::U32(out) => {
+            for (dst, row) in out[..rows].iter_mut().zip(bytes.chunks_exact(width)) {
+                *dst = u32::from_le_bytes([
+                    row[offset],
+                    row[offset + 1],
+                    row[offset + 2],
+                    row[offset + 3],
+                ]);
+            }
+        }
+        FixedBinaryFieldValuesMut::I32(out) => {
+            for (dst, row) in out[..rows].iter_mut().zip(bytes.chunks_exact(width)) {
+                *dst = i32::from_le_bytes([
+                    row[offset],
+                    row[offset + 1],
+                    row[offset + 2],
+                    row[offset + 3],
+                ]);
+            }
+        }
+        FixedBinaryFieldValuesMut::U64(out) => {
+            for (dst, row) in out[..rows].iter_mut().zip(bytes.chunks_exact(width)) {
+                *dst = u64::from_le_bytes([
+                    row[offset],
+                    row[offset + 1],
+                    row[offset + 2],
+                    row[offset + 3],
+                    row[offset + 4],
+                    row[offset + 5],
+                    row[offset + 6],
+                    row[offset + 7],
+                ]);
+            }
+        }
+        FixedBinaryFieldValuesMut::I64(out) => {
+            for (dst, row) in out[..rows].iter_mut().zip(bytes.chunks_exact(width)) {
+                *dst = i64::from_le_bytes([
+                    row[offset],
+                    row[offset + 1],
+                    row[offset + 2],
+                    row[offset + 3],
+                    row[offset + 4],
+                    row[offset + 5],
+                    row[offset + 6],
+                    row[offset + 7],
+                ]);
+            }
+        }
+    }
+    Ok(())
 }
 
 /// Owned reusable primitive storage for lower-copy visitor reads.
@@ -1919,6 +2293,63 @@ impl ColumnBundleFile {
             plan.row_group_ids.iter().copied(),
             Some(&projected_column_ids),
         )
+    }
+
+    /// Compute deterministic generic selected-snapshot fingerprints.
+    ///
+    /// These fingerprints are intended for compatibility/certification gates.
+    /// They do not read payload bytes and are not cryptographic file digests.
+    pub fn snapshot_fingerprint(&self) -> Result<ColumnBundleSnapshotFingerprint> {
+        let metadata = self.metadata()?;
+        let row_groups = self.row_group_summaries()?;
+        Ok(snapshot_fingerprint_for_summaries(&metadata, &row_groups))
+    }
+
+    /// Return generic certification metadata for a previously validated read plan.
+    ///
+    /// This captures the selected snapshot fingerprint, plan report, plan-order
+    /// row-group summaries, selected chunk byte totals, and a selected-chunk
+    /// descriptor/checksum fingerprint. It is a fail-closed metadata substrate;
+    /// downstream remains responsible for application-specific payload
+    /// equivalence, channel/index continuity, and runtime readiness gates.
+    pub fn read_plan_certification(
+        &self,
+        plan: &ColumnBundleReadPlan,
+    ) -> Result<ColumnBundleReadPlanCertification> {
+        self.validate_read_plan(plan)?;
+        let metadata = self.metadata()?;
+        let snapshot_fingerprint = self.snapshot_fingerprint()?;
+        let row_groups = self.read_plan_row_group_summaries(plan)?;
+        let mut selected_compressed_bytes = 0u64;
+        let mut selected_uncompressed_bytes = 0u64;
+        for row_group in &row_groups {
+            for chunk in &row_group.chunks {
+                selected_compressed_bytes = selected_compressed_bytes
+                    .checked_add(chunk.compressed_bytes)
+                    .ok_or(ArcadiaTioError::ocb_corrupt_file(
+                        "OCB read plan certification compressed byte total overflows",
+                    ))?;
+                selected_uncompressed_bytes = selected_uncompressed_bytes
+                    .checked_add(chunk.uncompressed_bytes)
+                    .ok_or(ArcadiaTioError::ocb_corrupt_file(
+                        "OCB read plan certification uncompressed byte total overflows",
+                    ))?;
+            }
+        }
+        let selected_chunk_fingerprint = fingerprint_selected_chunks(&row_groups);
+        Ok(ColumnBundleReadPlanCertification {
+            snapshot_fingerprint,
+            file_len: self.metadata.file_len,
+            root_generation: metadata.root_generation,
+            previous_root_generation: metadata.previous_root_generation,
+            row_count: metadata.row_count,
+            row_group_count: metadata.row_group_count,
+            report: plan.report.clone(),
+            row_groups,
+            selected_compressed_bytes,
+            selected_uncompressed_bytes,
+            selected_chunk_fingerprint,
+        })
     }
 
     /// Decode one file-local dictionary on the explicit cold path.
@@ -3609,6 +4040,333 @@ fn checked_optional_body_ref_summary(
     checked_body_ref_summary(body_ref, expected_kind, file_len).map(Some)
 }
 
+fn snapshot_fingerprint_for_summaries(
+    metadata: &ColumnBundleMetadata,
+    row_groups: &[ColumnBundleRowGroupSummary],
+) -> ColumnBundleSnapshotFingerprint {
+    let schema = fingerprint_schema(metadata);
+    let dictionaries = fingerprint_dictionaries(metadata);
+    let ordering = fingerprint_ordering(metadata);
+    let row_groups_fp = fingerprint_row_group_summaries(row_groups);
+    let mut combined = Vec::new();
+    fp_str(&mut combined, OCB_CERTIFICATION_FINGERPRINT_ALGORITHM);
+    fp_str(&mut combined, &schema);
+    fp_str(&mut combined, &dictionaries);
+    fp_str(&mut combined, &ordering);
+    fp_str(&mut combined, &row_groups_fp);
+    ColumnBundleSnapshotFingerprint {
+        algorithm: OCB_CERTIFICATION_FINGERPRINT_ALGORITHM,
+        schema,
+        dictionaries,
+        ordering,
+        row_groups: row_groups_fp,
+        combined: fp_hex(&combined),
+    }
+}
+
+fn fingerprint_schema(metadata: &ColumnBundleMetadata) -> String {
+    let mut bytes = Vec::new();
+    fp_str(&mut bytes, "schema");
+    fp_str(&mut bytes, metadata.format_name);
+    fp_bool(&mut bytes, metadata.appendable);
+    fp_u64(&mut bytes, metadata.row_count);
+    fp_u32(&mut bytes, metadata.row_group_count);
+    fp_u32(&mut bytes, metadata.column_chunk_count);
+    fp_u32(&mut bytes, metadata.columns.len() as u32);
+    for column in &metadata.columns {
+        fp_u32(&mut bytes, column.id);
+        fp_str(&mut bytes, &column.name);
+        fp_column_physical_type(&mut bytes, column.physical_type);
+        fp_column_logical_kind(&mut bytes, column.logical_kind);
+        fp_option_u32(&mut bytes, column.dictionary_id);
+        fp_i32(&mut bytes, column.scale);
+        fp_bool(&mut bytes, column.nullable);
+    }
+    fp_hex(&bytes)
+}
+
+fn fingerprint_dictionaries(metadata: &ColumnBundleMetadata) -> String {
+    let mut bytes = Vec::new();
+    fp_str(&mut bytes, "dictionaries");
+    fp_u32(&mut bytes, metadata.dictionaries.len() as u32);
+    for dictionary in &metadata.dictionaries {
+        fp_u32(&mut bytes, dictionary.dictionary_id);
+        fp_str(&mut bytes, &dictionary.name);
+        fp_column_physical_type(&mut bytes, dictionary.code_physical_type);
+        fp_dictionary_value_kind(&mut bytes, dictionary.value_kind);
+        fp_u32(&mut bytes, dictionary.entry_count);
+    }
+    fp_hex(&bytes)
+}
+
+fn fingerprint_ordering(metadata: &ColumnBundleMetadata) -> String {
+    let mut bytes = Vec::new();
+    fp_str(&mut bytes, "ordering");
+    fp_u32(&mut bytes, metadata.ordering_keys.len() as u32);
+    for key in &metadata.ordering_keys {
+        fp_u32(&mut bytes, key.column_id);
+        fp_str(&mut bytes, &key.column_name);
+        fp_ordering_direction(&mut bytes, key.direction);
+        fp_null_order(&mut bytes, key.null_order);
+    }
+    fp_hex(&bytes)
+}
+
+fn fingerprint_row_group_summaries(row_groups: &[ColumnBundleRowGroupSummary]) -> String {
+    let mut bytes = Vec::new();
+    fp_str(&mut bytes, "row_groups");
+    fp_u32(&mut bytes, row_groups.len() as u32);
+    for row_group in row_groups {
+        fp_row_group_summary(&mut bytes, row_group);
+    }
+    fp_hex(&bytes)
+}
+
+fn fingerprint_selected_chunks(row_groups: &[ColumnBundleRowGroupSummary]) -> String {
+    let mut bytes = Vec::new();
+    fp_str(&mut bytes, "selected_chunks");
+    fp_u32(&mut bytes, row_groups.len() as u32);
+    for row_group in row_groups {
+        fp_u32(&mut bytes, row_group.row_group_id);
+        fp_u64(&mut bytes, row_group.base_row);
+        fp_u64(&mut bytes, row_group.row_count);
+        fp_u32(&mut bytes, row_group.chunks.len() as u32);
+        for chunk in &row_group.chunks {
+            fp_column_chunk_summary(&mut bytes, chunk);
+        }
+    }
+    fp_hex(&bytes)
+}
+
+fn fp_row_group_summary(bytes: &mut Vec<u8>, row_group: &ColumnBundleRowGroupSummary) {
+    fp_u32(bytes, row_group.row_group_id);
+    fp_u64(bytes, row_group.base_row);
+    fp_u64(bytes, row_group.row_count);
+    fp_option_body_ref_summary(bytes, row_group.first_key_tuple_ref);
+    fp_option_body_ref_summary(bytes, row_group.last_key_tuple_ref);
+    fp_u32(bytes, row_group.chunks.len() as u32);
+    for chunk in &row_group.chunks {
+        fp_column_chunk_summary(bytes, chunk);
+    }
+    fp_u32(bytes, row_group.stats.len() as u32);
+    for stat in &row_group.stats {
+        fp_column_stats_summary(bytes, stat);
+    }
+}
+
+fn fp_column_chunk_summary(bytes: &mut Vec<u8>, chunk: &ColumnBundleColumnChunkSummary) {
+    fp_u32(bytes, chunk.row_group_id);
+    fp_u32(bytes, chunk.column_id);
+    fp_str(bytes, &chunk.column_name);
+    fp_column_physical_type(bytes, chunk.physical_type);
+    fp_column_logical_kind(bytes, chunk.logical_kind);
+    fp_option_u32(bytes, chunk.fixed_binary_width);
+    fp_chunk_codec(bytes, chunk.codec);
+    fp_u64(bytes, chunk.row_count);
+    fp_u64(bytes, chunk.compressed_bytes);
+    fp_u64(bytes, chunk.uncompressed_bytes);
+    fp_body_ref_summary(bytes, chunk.value_ref);
+    fp_option_body_ref_summary(bytes, chunk.validity_ref);
+}
+
+fn fp_column_stats_summary(bytes: &mut Vec<u8>, stat: &ColumnBundleColumnStatsSummary) {
+    fp_u32(bytes, stat.row_group_id);
+    fp_u32(bytes, stat.column_id);
+    fp_str(bytes, &stat.column_name);
+    fp_column_physical_type(bytes, stat.physical_type);
+    fp_u32(bytes, stat.null_count);
+    fp_predicate_value(bytes, stat.min);
+    fp_predicate_value(bytes, stat.max);
+}
+
+fn fp_body_ref_summary(bytes: &mut Vec<u8>, body_ref: ColumnBundleBodyRefSummary) {
+    fp_u64(bytes, body_ref.offset);
+    fp_u64(bytes, body_ref.length);
+    fp_body_kind(bytes, body_ref.kind);
+    fp_u16(bytes, body_ref.flags);
+    fp_checksum_kind(bytes, body_ref.checksum_kind);
+    fp_u32(bytes, body_ref.checksum);
+}
+
+fn fp_option_body_ref_summary(bytes: &mut Vec<u8>, value: Option<ColumnBundleBodyRefSummary>) {
+    match value {
+        Some(value) => {
+            fp_u8(bytes, 1);
+            fp_body_ref_summary(bytes, value);
+        }
+        None => fp_u8(bytes, 0),
+    }
+}
+
+fn fp_column_physical_type(bytes: &mut Vec<u8>, value: ColumnPhysicalType) {
+    match value {
+        ColumnPhysicalType::I32 => fp_u8(bytes, 1),
+        ColumnPhysicalType::I64 => fp_u8(bytes, 2),
+        ColumnPhysicalType::F32 => fp_u8(bytes, 3),
+        ColumnPhysicalType::F64 => fp_u8(bytes, 4),
+        ColumnPhysicalType::FixedBinary { width } => {
+            fp_u8(bytes, 5);
+            fp_u32(bytes, width);
+        }
+    }
+}
+
+fn fp_column_logical_kind(bytes: &mut Vec<u8>, value: ColumnLogicalKind) {
+    fp_u8(
+        bytes,
+        match value {
+            ColumnLogicalKind::Plain => 0,
+            ColumnLogicalKind::TimestampNanosLike => 1,
+            ColumnLogicalKind::ScaledInteger => 2,
+            ColumnLogicalKind::DictionaryCode => 3,
+            ColumnLogicalKind::EnumCode => 4,
+            ColumnLogicalKind::OpaqueKey => 5,
+        },
+    );
+}
+
+fn fp_dictionary_value_kind(bytes: &mut Vec<u8>, value: DictionaryValueKind) {
+    fp_u8(
+        bytes,
+        match value {
+            DictionaryValueKind::Utf8 => 1,
+            DictionaryValueKind::Bytes => 2,
+            DictionaryValueKind::FixedBytes => 3,
+            DictionaryValueKind::EnumLabels => 4,
+        },
+    );
+}
+
+fn fp_ordering_direction(bytes: &mut Vec<u8>, value: BundleOrderingDirection) {
+    fp_u8(
+        bytes,
+        match value {
+            BundleOrderingDirection::Ascending => 1,
+            BundleOrderingDirection::Descending => 2,
+        },
+    );
+}
+
+fn fp_null_order(bytes: &mut Vec<u8>, value: BundleNullOrder) {
+    fp_u8(
+        bytes,
+        match value {
+            BundleNullOrder::NullsFirst => 1,
+            BundleNullOrder::NullsLast => 2,
+            BundleNullOrder::NoNulls => 3,
+        },
+    );
+}
+
+fn fp_chunk_codec(bytes: &mut Vec<u8>, value: ColumnBundleColumnChunkSummaryCodec) {
+    fp_u8(
+        bytes,
+        match value {
+            ColumnBundleColumnChunkSummaryCodec::None => 0,
+            ColumnBundleColumnChunkSummaryCodec::Zstd => 1,
+        },
+    );
+}
+
+fn fp_body_kind(bytes: &mut Vec<u8>, value: ColumnBundleBodyKind) {
+    fp_u8(
+        bytes,
+        match value {
+            ColumnBundleBodyKind::Unknown => 0,
+            ColumnBundleBodyKind::Root => 1,
+            ColumnBundleBodyKind::Schema => 2,
+            ColumnBundleBodyKind::DictionaryIndex => 3,
+            ColumnBundleBodyKind::DictionaryValues => 4,
+            ColumnBundleBodyKind::RowGroupIndex => 5,
+            ColumnBundleBodyKind::OrderingProof => 6,
+            ColumnBundleBodyKind::ColumnChunk => 7,
+            ColumnBundleBodyKind::StringTable => 8,
+            ColumnBundleBodyKind::DebugJsonMetadata => 9,
+            ColumnBundleBodyKind::ValidityBitmap => 10,
+            ColumnBundleBodyKind::KeyTuple => 11,
+            ColumnBundleBodyKind::RowGroupIndexDelta => 12,
+        },
+    );
+}
+
+fn fp_checksum_kind(bytes: &mut Vec<u8>, value: ColumnBundleChecksumKind) {
+    fp_u8(
+        bytes,
+        match value {
+            ColumnBundleChecksumKind::None => 0,
+            ColumnBundleChecksumKind::Crc32c => 1,
+        },
+    );
+}
+
+fn fp_predicate_value(bytes: &mut Vec<u8>, value: ColumnPredicateValue) {
+    match value {
+        ColumnPredicateValue::I32(value) => {
+            fp_u8(bytes, 1);
+            fp_i32(bytes, value);
+        }
+        ColumnPredicateValue::I64(value) => {
+            fp_u8(bytes, 2);
+            fp_i64(bytes, value);
+        }
+        ColumnPredicateValue::F32(value) => {
+            fp_u8(bytes, 3);
+            fp_u32(bytes, value.to_bits());
+        }
+        ColumnPredicateValue::F64(value) => {
+            fp_u8(bytes, 4);
+            fp_u64(bytes, value.to_bits());
+        }
+    }
+}
+
+fn fp_option_u32(bytes: &mut Vec<u8>, value: Option<u32>) {
+    match value {
+        Some(value) => {
+            fp_u8(bytes, 1);
+            fp_u32(bytes, value);
+        }
+        None => fp_u8(bytes, 0),
+    }
+}
+
+fn fp_str(bytes: &mut Vec<u8>, value: &str) {
+    fp_u64(bytes, value.len() as u64);
+    bytes.extend_from_slice(value.as_bytes());
+}
+
+fn fp_bool(bytes: &mut Vec<u8>, value: bool) {
+    fp_u8(bytes, u8::from(value));
+}
+
+fn fp_u8(bytes: &mut Vec<u8>, value: u8) {
+    bytes.push(value);
+}
+
+fn fp_u16(bytes: &mut Vec<u8>, value: u16) {
+    bytes.extend_from_slice(&value.to_le_bytes());
+}
+
+fn fp_u32(bytes: &mut Vec<u8>, value: u32) {
+    bytes.extend_from_slice(&value.to_le_bytes());
+}
+
+fn fp_i32(bytes: &mut Vec<u8>, value: i32) {
+    bytes.extend_from_slice(&value.to_le_bytes());
+}
+
+fn fp_u64(bytes: &mut Vec<u8>, value: u64) {
+    bytes.extend_from_slice(&value.to_le_bytes());
+}
+
+fn fp_i64(bytes: &mut Vec<u8>, value: i64) {
+    bytes.extend_from_slice(&value.to_le_bytes());
+}
+
+fn fp_hex(bytes: &[u8]) -> String {
+    format!("{:08x}", crc32c(bytes))
+}
+
 fn column_chunk_compressed_payload_bytes(value_ref: OcbBodyRefV2) -> Result<u64> {
     let object_overhead = u64::from(OCB_COLUMN_CHUNK_V1_HEADER_LEN) + 4;
     value_ref
@@ -5125,7 +5883,133 @@ mod tests {
         assert_eq!(plan_summaries[0].chunks[0].column_name, "payload");
         assert_eq!(plan_summaries[0].stats[0].column_name, "partition_key");
 
+        let fingerprint = bundle.snapshot_fingerprint().expect("snapshot fingerprint");
+        assert_eq!(
+            fingerprint.algorithm,
+            OCB_CERTIFICATION_FINGERPRINT_ALGORITHM
+        );
+        assert_eq!(fingerprint.schema.len(), 8);
+        assert_eq!(fingerprint.row_groups.len(), 8);
+        let reopened_fingerprint = ColumnBundleFile::open(&path)
+            .expect("reopen summary fixture")
+            .snapshot_fingerprint()
+            .expect("reopened snapshot fingerprint");
+        assert_eq!(fingerprint, reopened_fingerprint);
+
+        let certification = bundle
+            .read_plan_certification(&plan)
+            .expect("plan certification");
+        assert_eq!(certification.snapshot_fingerprint, fingerprint);
+        assert_eq!(certification.root_generation, 0);
+        assert_eq!(certification.row_count, 6);
+        assert_eq!(certification.row_group_count, 2);
+        assert_eq!(certification.report.selected_row_groups, 1);
+        assert_eq!(certification.row_groups.len(), 1);
+        assert_eq!(certification.row_groups[0].row_group_id, 1);
+        assert_eq!(certification.selected_uncompressed_bytes, 6);
+        assert!(certification.selected_compressed_bytes > 0);
+        assert_eq!(certification.selected_chunk_fingerprint.len(), 8);
+
         cleanup(&path);
+    }
+
+    #[test]
+    fn fixed_binary_record_projection_decodes_little_endian_fields() {
+        let width = 24usize;
+        let mut bytes = vec![0u8; width * 2];
+        for (row, (kind, side, key, sequence, ordinal)) in [
+            (7u8, -3i8, 1234i32, 10_000_000_001i64, 42u64),
+            (9u8, 4i8, -5678i32, -10_000_000_002i64, 43u64),
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            let base = row * width;
+            bytes[base] = kind;
+            bytes[base + 1] = side as u8;
+            bytes[base + 4..base + 8].copy_from_slice(&key.to_le_bytes());
+            bytes[base + 8..base + 16].copy_from_slice(&sequence.to_le_bytes());
+            bytes[base + 16..base + 24].copy_from_slice(&ordinal.to_le_bytes());
+        }
+
+        let primitive = PrimitiveColumnValuesRef::FixedBinary {
+            width: width as u32,
+            bytes: bytes.as_slice(),
+        };
+        let records = primitive
+            .fixed_binary_records()
+            .expect("fixed-binary record view");
+        assert_eq!(records.len(), 2);
+        assert_eq!(records.row(1).expect("second row")[0], 9);
+
+        let mut kinds = [0u8; 2];
+        let mut sides = [0i8; 2];
+        let mut keys = [0i32; 2];
+        let mut sequences = [0i64; 2];
+        let mut ordinals = [0u64; 2];
+        let projected = records
+            .project_fields(&mut [
+                FixedBinaryFieldProjectionMut {
+                    offset: 0,
+                    values: FixedBinaryFieldValuesMut::U8(&mut kinds),
+                },
+                FixedBinaryFieldProjectionMut {
+                    offset: 1,
+                    values: FixedBinaryFieldValuesMut::I8(&mut sides),
+                },
+                FixedBinaryFieldProjectionMut {
+                    offset: 4,
+                    values: FixedBinaryFieldValuesMut::I32(&mut keys),
+                },
+                FixedBinaryFieldProjectionMut {
+                    offset: 8,
+                    values: FixedBinaryFieldValuesMut::I64(&mut sequences),
+                },
+                FixedBinaryFieldProjectionMut {
+                    offset: 16,
+                    values: FixedBinaryFieldValuesMut::U64(&mut ordinals),
+                },
+            ])
+            .expect("project fixed-binary fields");
+        assert_eq!(projected, 2);
+        let mut reported_keys = [0i32; 2];
+        let projection_report = records
+            .project_fields_with_report(&mut [FixedBinaryFieldProjectionMut {
+                offset: 4,
+                values: FixedBinaryFieldValuesMut::I32(&mut reported_keys),
+            }])
+            .expect("project fixed-binary fields with report");
+        assert_eq!(projection_report.rows_projected, 2);
+        assert_eq!(projection_report.fields_projected, 1);
+        assert_eq!(reported_keys, [1234, -5678]);
+        let _projection_wall_ns = projection_report.projection_wall_ns;
+        assert_eq!(kinds, [7, 9]);
+        assert_eq!(sides, [-3, 4]);
+        assert_eq!(keys, [1234, -5678]);
+        assert_eq!(sequences, [10_000_000_001, -10_000_000_002]);
+        assert_eq!(ordinals, [42, 43]);
+
+        let err = FixedBinaryRecordView::new(3, &[1, 2, 3, 4])
+            .expect_err("unaligned record bytes rejected");
+        assert!(err.to_string().contains("not aligned"));
+
+        let mut too_small = [0i32; 1];
+        let err = records
+            .project_fields(&mut [FixedBinaryFieldProjectionMut {
+                offset: 4,
+                values: FixedBinaryFieldValuesMut::I32(&mut too_small),
+            }])
+            .expect_err("small output rejected");
+        assert!(err.to_string().contains("output buffer is too small"));
+
+        let mut out = [0i64; 2];
+        let err = records
+            .project_fields(&mut [FixedBinaryFieldProjectionMut {
+                offset: 20,
+                values: FixedBinaryFieldValuesMut::I64(&mut out),
+            }])
+            .expect_err("field overrun rejected");
+        assert!(err.to_string().contains("extends past record width"));
     }
 
     #[test]

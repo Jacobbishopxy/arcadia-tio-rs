@@ -2,7 +2,8 @@
 //!
 //! This crate exposes the generic OCB selected-snapshot reader, read planner,
 //! projected/predicate batch reads, explicit row-group visitors, reusable-buffer
-//! lower-copy visitors, and diagnostic attribution without depending on the native C ABI wrapper path. It does not
+//! lower-copy visitors, generic fixed-binary record field projection helpers,
+//! and diagnostic attribution without depending on the native C ABI wrapper path. It does not
 //! expose OCB writer APIs, C/Python bindings, `TensorFile`, market-data/L2
 //! semantics, native compact-L2 decode, or release/performance claims.
 
@@ -21,14 +22,17 @@ pub use crate::column_bundle::{
     ColumnBundleOrderingKeyRange, ColumnBundleReadAttributedCursorReport,
     ColumnBundleReadAttributedOutcome, ColumnBundleReadAttribution, ColumnBundleReadCursorOptions,
     ColumnBundleReadCursorReport, ColumnBundleReadFillOptions, ColumnBundleReadFillReport,
-    ColumnBundleReadOptions, ColumnBundleReadOutcome, ColumnBundleReadPlan, ColumnBundleReadReport,
-    ColumnBundleReadRequest, ColumnBundleReusableBatchView, ColumnBundleReusableBufferPool,
-    ColumnBundleReusableBuffers, ColumnBundleReusableColumnBuffer, ColumnBundleReusableColumnView,
-    ColumnBundleRowGroupSummary, ColumnBundleStrictReadPlanningOptions, ColumnBundleVisitControl,
-    ColumnLogicalKind, ColumnPhysicalType, ColumnPredicateValue, ColumnProjection,
-    DictionaryValueKind, DictionaryValues, OCB_READ_PLAN_SUBSET_DUPLICATE_ROW_GROUP_ERROR,
-    OCB_READ_PLAN_SUBSET_UNKNOWN_ROW_GROUP_ERROR, OcbErrorKind, PrimitiveColumnValues,
-    PrimitiveColumnValuesMut, PrimitiveColumnValuesRef, ReusablePrimitiveColumnValues,
-    RowGroupPredicate, ValidityBitmap, ValidityBitmapRef,
+    ColumnBundleReadOptions, ColumnBundleReadOutcome, ColumnBundleReadPlan,
+    ColumnBundleReadPlanCertification, ColumnBundleReadReport, ColumnBundleReadRequest,
+    ColumnBundleReusableBatchView, ColumnBundleReusableBufferPool, ColumnBundleReusableBuffers,
+    ColumnBundleReusableColumnBuffer, ColumnBundleReusableColumnView, ColumnBundleRowGroupSummary,
+    ColumnBundleSnapshotFingerprint, ColumnBundleStrictReadPlanningOptions,
+    ColumnBundleVisitControl, ColumnLogicalKind, ColumnPhysicalType, ColumnPredicateValue,
+    ColumnProjection, DictionaryValueKind, DictionaryValues, FixedBinaryFieldProjectionMut,
+    FixedBinaryFieldType, FixedBinaryFieldValuesMut, FixedBinaryProjectionReport,
+    FixedBinaryRecordView, OCB_CERTIFICATION_FINGERPRINT_ALGORITHM,
+    OCB_READ_PLAN_SUBSET_DUPLICATE_ROW_GROUP_ERROR, OCB_READ_PLAN_SUBSET_UNKNOWN_ROW_GROUP_ERROR,
+    OcbErrorKind, PrimitiveColumnValues, PrimitiveColumnValuesMut, PrimitiveColumnValuesRef,
+    ReusablePrimitiveColumnValues, RowGroupPredicate, ValidityBitmap, ValidityBitmapRef,
 };
 pub use crate::error::{ArcadiaTioError, ArcadiaTioErrorCode, OcbFailureCause, Result};
