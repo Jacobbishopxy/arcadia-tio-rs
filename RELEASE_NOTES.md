@@ -2,7 +2,7 @@
 
 ## 0.2.0 — public Rust wrapper source release
 
-Tag: `0.2.0`  
+Tag: `0.2.0`
 Commit: `3071a41`
 
 ### Scope
