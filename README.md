@@ -23,7 +23,8 @@ fixed-payload projection attribution, callback-wall attribution, observed
 max-in-flight reporting, and stable duplicate/unknown row-group subset error
 constants. It does not depend on
 `arcadia-tio-sys`, `arcadia-tio-capi`, a native library, or native-link build
-scripts.
+scripts. See [`RELEASE_NOTES.md`](RELEASE_NOTES.md) for the current public
+source-release notes.
 
 ## 0.2.0 release boundary
 
