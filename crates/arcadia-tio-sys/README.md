@@ -9,7 +9,10 @@ not provide safe high-level TensorFile behavior. With the optional
 `format-ocb` feature enabled, the crate exposes raw appendable OCB C ABI
 constants, `repr(C)` metadata/read/write structs, opaque file handles,
 init/free helpers, and open/create/append/read/dictionary/cleanup declarations;
-callers must still uphold the C header ownership and lifetime contract.
+callers must still uphold the C header ownership and lifetime contract. The raw
+sys surface also includes the copy-only `arcadia_tio_tensor_*` structural tensor
+operations over borrowed `ArcadiaTioTensor` inputs and native-owned tensor
+outputs freed with `arcadia_tio_tensor_free`.
 Fixed-binary OCB columns reuse reserved ABI fields through the documented
 `arcadia_tio_ocb_*fixed_binary_width` helpers; primitive `len` is row count,
 while fixed-binary fill-buffer `values_len` is byte capacity. The linked native

@@ -121,7 +121,9 @@ immediately free the C allocation. `read_values_arrow` is the exception: it
 returns an `ArrowCData` RAII owner for the Arrow C Data release callbacks;
 borrowed Arrow pointers are valid only while that owner is alive and are
 released exactly once when it is dropped. The public `ops` namespace provides
-owned-copy in-memory helpers over dense `TensorData`; `TypedTensor<T>` and the
+owned-copy in-memory helpers over dense `TensorData`; its structural core mirrors
+the copy-only native C ABI tensor-ops family while preserving Rust-owned tensor
+semantics. `TypedTensor<T>` and the
 `typed_ops` namespace provide dtype-checked owned wrappers over that same public
 `Tensor` model without depending on private core typed tensors; optional
 conversion features are also owned-copy only. This slice still does not expose
@@ -215,8 +217,8 @@ ratio, storage-efficiency, or compressed-byte accounting claims.
 The `ops` module works entirely over Rust-owned `Tensor`/`TensorData` values and
 is independent of the native C ABI after data has been read or constructed.
 It supports dense `f32`, `f64`, `i32`, and `i64` payloads for row-major shape
-helpers (`reshape`, `flatten`, `expand_dims`, `squeeze`, `permute_axes`,
-`swap_axes`, `transpose`, `move_axis`, and `broadcast_to`), axis indexing
+helpers (`to_contiguous`, `reshape`, `flatten`, `expand_dims`, `squeeze`,
+`permute_axes`, `swap_axes`, `transpose`, `move_axis`, and `broadcast_to`), axis indexing
 (`slice_axis`, `slice_axis_step`, `take_axis`, and `index_axis`), owned assembly
 and reordering (`concat`, `stack`, `split`, `unstack`, `repeat`, `tile`, `flip`,
 and `roll`), exact-dtype scalar/binary arithmetic with binary broadcasting

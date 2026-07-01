@@ -2029,7 +2029,8 @@ fn ndarray_err<E: std::fmt::Display>(err: E) -> TioError {
 /// - reductions for sum/mean/min/max over selected axes where the owned dense dtype can represent
 ///   the result.
 ///
-/// Shape functions materialize output rather than promising zero-copy views; `*_view` aliases keep
+/// Shape functions materialize output rather than promising zero-copy views; `to_contiguous` is a
+/// validation-plus-clone boundary for this already-owned row-major tensor model. `*_view` aliases keep
 /// parity with private/C++ naming while preserving the same owned-copy behavior. The supported
 /// payload dtypes are the public dense [`TensorData`] variants (`f32`, `f64`, `i32`, and `i64`).
 /// Dense read masks remain on [`DenseTensor`]; these helpers operate on the owned payload only and
@@ -2039,6 +2040,12 @@ pub mod ops {
         DType, Result, Scalar, Tensor, TensorData, TioError, shape_element_len,
         validate_tensor_parts,
     };
+
+    /// Validate and clone an already-owned row-major tensor.
+    pub fn to_contiguous(tensor: &Tensor) -> Result<Tensor> {
+        tensor.validate()?;
+        Ok(tensor.clone())
+    }
 
     /// Reshape a tensor in row-major order, preserving dtype and payload order.
     pub fn reshape(tensor: &Tensor, shape: Vec<u64>) -> Result<Tensor> {
@@ -4217,6 +4224,11 @@ pub mod typed_ops {
             refs.push(tensor.as_tensor());
         }
         refs
+    }
+
+    /// Validate and clone an already-owned row-major typed tensor.
+    pub fn to_contiguous<T: TensorElement>(tensor: &TypedTensor<T>) -> Result<TypedTensor<T>> {
+        typed_from_result(ops::to_contiguous(tensor.as_tensor()))
     }
 
     /// Reshape a typed tensor in row-major order.
@@ -18587,6 +18599,9 @@ mod tests {
     fn tensor_ops_shape_index_and_broadcast_success() {
         let tensor = Tensor::from_dense_f32(vec![2, 3], vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0])
             .expect("input tensor");
+
+        let contiguous = ops::to_contiguous(&tensor).expect("to contiguous");
+        assert_eq!(contiguous, tensor);
 
         let reshaped = ops::reshape(&tensor, vec![3, 2]).expect("reshape");
         assert_eq!(reshaped.shape, vec![3, 2]);

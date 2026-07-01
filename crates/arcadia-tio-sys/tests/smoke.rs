@@ -61,6 +61,49 @@ fn linked_native_library_can_roundtrip_tiny_f64_tensor() {
         let got = slice::from_raw_parts(out.data.cast::<f64>(), values.len());
         assert_eq!(got, values);
 
+        let reshape_shape = [1_u64, 3];
+        let mut reshaped = ArcadiaTioTensor::default();
+        let reshape_status = arcadia_tio_tensor_reshape(
+            &out,
+            reshape_shape.as_ptr(),
+            reshape_shape.len(),
+            &mut reshaped,
+        );
+        assert_eq!(
+            reshape_status,
+            ARCADIA_TIO_ERROR_OK,
+            "reshape failed: {}",
+            last_error()
+        );
+        assert_eq!(reshaped.dtype, ARCADIA_TIO_DTYPE_F64);
+        assert_eq!(reshaped.rank, 2);
+        assert_eq!(
+            slice::from_raw_parts(reshaped.shape, reshaped.rank),
+            reshape_shape
+        );
+        assert_eq!(
+            slice::from_raw_parts(reshaped.data.cast::<f64>(), values.len()),
+            values
+        );
+        arcadia_tio_tensor_free(&mut reshaped);
+
+        let mut indexed = ArcadiaTioTensor::default();
+        let index_status = arcadia_tio_tensor_index_axis(&out, 0, 1, &mut indexed);
+        assert_eq!(
+            index_status,
+            ARCADIA_TIO_ERROR_OK,
+            "index_axis failed: {}",
+            last_error()
+        );
+        assert_eq!(indexed.dtype, ARCADIA_TIO_DTYPE_F64);
+        assert_eq!(indexed.rank, 1);
+        assert_eq!(slice::from_raw_parts(indexed.shape, indexed.rank), [1_u64]);
+        assert_eq!(
+            slice::from_raw_parts(indexed.data.cast::<f64>(), 1),
+            [values[1]]
+        );
+        arcadia_tio_tensor_free(&mut indexed);
+
         arcadia_tio_tensor_free(&mut out);
         arcadia_tio_close(handle);
     }

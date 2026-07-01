@@ -3799,6 +3799,84 @@ unsafe extern "C" {
     pub fn arcadia_tio_tensor_free(tensor: *mut ArcadiaTioTensor);
     /// Frees native-owned mask buffers.
     pub fn arcadia_tio_mask_free(mask: *mut ArcadiaTioMask);
+    /// Materializes a copy-only contiguous tensor.
+    pub fn arcadia_tio_tensor_to_contiguous(
+        input: *const ArcadiaTioTensor,
+        out_tensor: *mut ArcadiaTioTensor,
+    ) -> c_int;
+    /// Reshapes a tensor in row-major order.
+    pub fn arcadia_tio_tensor_reshape(
+        input: *const ArcadiaTioTensor,
+        shape: *const u64,
+        rank: usize,
+        out_tensor: *mut ArcadiaTioTensor,
+    ) -> c_int;
+    /// Flattens a tensor to shape `[numel]`.
+    pub fn arcadia_tio_tensor_flatten(
+        input: *const ArcadiaTioTensor,
+        out_tensor: *mut ArcadiaTioTensor,
+    ) -> c_int;
+    /// Inserts a length-1 axis.
+    pub fn arcadia_tio_tensor_expand_dims(
+        input: *const ArcadiaTioTensor,
+        axis: i64,
+        out_tensor: *mut ArcadiaTioTensor,
+    ) -> c_int;
+    /// Removes all length-1 axes.
+    pub fn arcadia_tio_tensor_squeeze(
+        input: *const ArcadiaTioTensor,
+        out_tensor: *mut ArcadiaTioTensor,
+    ) -> c_int;
+    /// Removes one length-1 axis.
+    pub fn arcadia_tio_tensor_squeeze_axis(
+        input: *const ArcadiaTioTensor,
+        axis: i64,
+        out_tensor: *mut ArcadiaTioTensor,
+    ) -> c_int;
+    /// Permutes axes and materializes row-major output.
+    pub fn arcadia_tio_tensor_permute_axes(
+        input: *const ArcadiaTioTensor,
+        axes: *const i64,
+        axes_len: usize,
+        out_tensor: *mut ArcadiaTioTensor,
+    ) -> c_int;
+    /// Reverses axis order and materializes row-major output.
+    pub fn arcadia_tio_tensor_transpose(
+        input: *const ArcadiaTioTensor,
+        out_tensor: *mut ArcadiaTioTensor,
+    ) -> c_int;
+    /// Slices one axis using `[start, end)`.
+    pub fn arcadia_tio_tensor_slice_axis(
+        input: *const ArcadiaTioTensor,
+        axis: i64,
+        start: u64,
+        end: u64,
+        out_tensor: *mut ArcadiaTioTensor,
+    ) -> c_int;
+    /// Slices one axis with a non-zero step.
+    pub fn arcadia_tio_tensor_slice_axis_step(
+        input: *const ArcadiaTioTensor,
+        axis: i64,
+        start: i64,
+        end: i64,
+        step: i64,
+        out_tensor: *mut ArcadiaTioTensor,
+    ) -> c_int;
+    /// Takes explicit indices on one axis.
+    pub fn arcadia_tio_tensor_take_axis(
+        input: *const ArcadiaTioTensor,
+        axis: i64,
+        indices: *const u64,
+        indices_len: usize,
+        out_tensor: *mut ArcadiaTioTensor,
+    ) -> c_int;
+    /// Selects one index on an axis while preserving rank with axis length 1.
+    pub fn arcadia_tio_tensor_index_axis(
+        input: *const ArcadiaTioTensor,
+        axis: i64,
+        index: u64,
+        out_tensor: *mut ArcadiaTioTensor,
+    ) -> c_int;
 
     /// Appends f32 payload data.
     pub fn arcadia_tio_append_f32(
