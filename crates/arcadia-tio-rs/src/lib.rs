@@ -5755,6 +5755,15 @@ pub struct ReadIndexResult {
     pub report: ReadIndexReport,
 }
 
+/// Current dense read-index value with validity mask and lowering metadata.
+#[derive(Debug, Clone, PartialEq)]
+pub struct ReadIndexDenseResult {
+    /// Dense read value and optional validity mask.
+    pub value: DenseTensor,
+    /// Lowering metadata.
+    pub report: ReadIndexReport,
+}
+
 /// RAII owner for an Arrow C Data array/schema pair returned by native full-value export.
 ///
 /// The pointers exposed by [`ArrowCData::array`] and [`ArrowCData::schema`] are borrowed and remain
@@ -12502,6 +12511,57 @@ impl TensorFile {
         }
         Ok(ReadIndexResult {
             value: tensor?,
+            report: report?,
+        })
+    }
+
+    /// Reads current data through the native basic read-index API with dense fill materialization.
+    pub fn read_index_dense(
+        &self,
+        items: &[ReadIndexItem],
+        fill_value: f64,
+    ) -> Result<ReadIndexDenseResult> {
+        let prepared_items = PreparedReadIndexItems::new(items, self.rank()?)?;
+        let mut raw_tensor = sys::ArcadiaTioTensor::default();
+        let mut raw_mask = sys::ArcadiaTioMask::default();
+        let mut raw_report = new_read_index_report();
+        // SAFETY: Prepared read-index items outlive the call; outputs are initialized and valid.
+        let status = unsafe {
+            sys::arcadia_tio_read_index_dense(
+                self.raw.as_ptr(),
+                prepared_items.ptr(),
+                prepared_items.len(),
+                fill_value,
+                &mut raw_tensor,
+                &mut raw_mask,
+                &mut raw_report,
+            )
+        };
+        if status != sys::ARCADIA_TIO_ERROR_OK {
+            // SAFETY: Outputs were initialized by this wrapper and may be partially populated.
+            unsafe {
+                sys::arcadia_tio_tensor_free(&mut raw_tensor);
+                sys::arcadia_tio_mask_free(&mut raw_mask);
+                sys::arcadia_tio_read_index_report_free(&mut raw_report);
+            }
+            return Err(TioError::from_last_error(
+                "failed to read dense tensor with read_index",
+            ));
+        }
+        let tensor = copy_tensor(&raw_tensor);
+        let mask = copy_mask(&raw_mask);
+        let report = copy_read_index_report(&raw_report);
+        // SAFETY: Native-owned outputs are freed exactly once after copying.
+        unsafe {
+            sys::arcadia_tio_tensor_free(&mut raw_tensor);
+            sys::arcadia_tio_mask_free(&mut raw_mask);
+            sys::arcadia_tio_read_index_report_free(&mut raw_report);
+        }
+        Ok(ReadIndexDenseResult {
+            value: DenseTensor {
+                tensor: tensor?,
+                mask,
+            },
             report: report?,
         })
     }

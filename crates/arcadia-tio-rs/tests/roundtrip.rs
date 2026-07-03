@@ -1269,6 +1269,27 @@ fn safe_wrapper_read_index_matches_basic_native_semantics() {
     assert_eq!(sliced.value.shape, vec![2, 2]);
     assert_eq!(sliced.value.data, TensorData::F64(vec![1.0, 2.0, 5.0, 6.0]));
 
+    let dense_sliced = file
+        .read_index_dense(
+            &[
+                ReadIndexItem::slice(Some(0), Some(3), 2).expect("valid slice"),
+                ReadIndexItem::all(),
+            ],
+            -1.0,
+        )
+        .expect("dense slice read_index");
+    assert_eq!(
+        dense_sliced.report.lowering_kind,
+        ReadIndexLoweringKind::SelectorRead
+    );
+    assert!(!dense_sliced.report.used_full_tensor_fallback);
+    assert_eq!(dense_sliced.value.tensor.shape, vec![2, 2]);
+    assert_eq!(
+        dense_sliced.value.tensor.data,
+        TensorData::F64(vec![1.0, 2.0, 5.0, 6.0])
+    );
+    assert_eq!(dense_sliced.value.mask.as_deref(), Some(&[1, 1, 1, 1][..]));
+
     let postprocessed = file
         .read_index(&[
             ReadIndexItem::index(1),
@@ -1283,6 +1304,27 @@ fn safe_wrapper_read_index_matches_basic_native_semantics() {
     assert_eq!(postprocessed.value.shape, vec![1, 2]);
     assert_eq!(postprocessed.value.data, TensorData::F64(vec![3.0, 4.0]));
 
+    let dense_postprocessed = file
+        .read_index_dense(
+            &[
+                ReadIndexItem::index(1),
+                ReadIndexItem::new_axis(),
+                ReadIndexItem::ellipsis(),
+            ],
+            -1.0,
+        )
+        .expect("dense index/newaxis read_index");
+    assert_eq!(
+        dense_postprocessed.report.lowering_kind,
+        ReadIndexLoweringKind::SelectorReadWithShapePostprocess
+    );
+    assert_eq!(dense_postprocessed.value.tensor.shape, vec![1, 2]);
+    assert_eq!(
+        dense_postprocessed.value.tensor.data,
+        TensorData::F64(vec![3.0, 4.0])
+    );
+    assert_eq!(dense_postprocessed.value.mask.as_deref(), Some(&[1, 1][..]));
+
     let err = ReadIndexItem::slice(None, None, 0).expect_err("zero step rejects");
     assert_eq!(err.code(), ErrorCode::InvalidArgument);
     let err = file
@@ -1292,6 +1334,10 @@ fn safe_wrapper_read_index_matches_basic_native_semantics() {
     let err = file
         .read_index(&[ReadIndexItem::index(0), ReadIndexItem::index(1)])
         .expect_err("scalar output rejects before FFI");
+    assert_eq!(err.code(), ErrorCode::InvalidArgument);
+    let err = file
+        .read_index_dense(&[ReadIndexItem::index(0), ReadIndexItem::index(1)], -1.0)
+        .expect_err("dense scalar output rejects before FFI");
     assert_eq!(err.code(), ErrorCode::InvalidArgument);
 
     drop(file);

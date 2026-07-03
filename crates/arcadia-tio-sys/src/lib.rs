@@ -4599,6 +4599,16 @@ unsafe extern "C" {
         out_tensor: *mut ArcadiaTioTensor,
         out_report: *mut ArcadiaTioReadIndexReport,
     ) -> c_int;
+    /// Reads data through low-level read-index items into a dense tensor and optional mask.
+    pub fn arcadia_tio_read_index_dense(
+        handle: *mut ArcadiaTioHandle,
+        items: *const ArcadiaTioReadIndexItem,
+        items_len: usize,
+        fill_value: c_double,
+        out_tensor: *mut ArcadiaTioTensor,
+        out_mask: *mut ArcadiaTioMask,
+        out_report: *mut ArcadiaTioReadIndexReport,
+    ) -> c_int;
     /// Reads current selector data with execution options into an owned tensor.
     pub fn arcadia_tio_read_with_options(
         handle: *mut ArcadiaTioHandle,
